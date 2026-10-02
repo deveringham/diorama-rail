@@ -75,6 +75,7 @@ function rebuild(json: unknown, preStep: number): boolean {
   dscene?.dispose();
   world = next;
   sim = new Sim(world);
+  if (sim.unplaced.length) console.warn(`no room to place trains: ${sim.unplaced.join(", ")}`);
   for (let i = 0; i < Math.round(preStep / DT); i++) sim.step();
   snap.trains.length = 0;
   sim.snapshot(snap);

@@ -4,7 +4,7 @@
 
 import type { World } from "../model/build";
 import { buildWorld } from "../model/build";
-import { type Issue, error } from "../model/validate";
+import { type Issue, error, warning } from "../model/validate";
 import type { Report } from "../model/validate";
 import { locate } from "../model/routes";
 import { pointAt, headingAt } from "../model/geometry";
@@ -47,6 +47,8 @@ export class Sim {
   readonly blocks: Blocks;
   readonly plans: Plan[];
   readonly trains: Train[] = [];
+  /** Trains the spawner could not place anywhere on their route. */
+  readonly unplaced: string[] = [];
   events: SimEvent[] = [];
   deadlock: Issue | null = null;
   private state: World4Trains;
@@ -65,6 +67,7 @@ export class Sim {
       for (let k = 0; k < plan.svc.count; k++) {
         const t = spawn(this.state, plan, k, pi, `${plan.svc.id}-${k + 1}`, this.trains.length);
         if (t) this.trains.push(t);
+        else this.unplaced.push(`${plan.svc.id}-${k + 1}`);
       }
     });
   }
@@ -178,7 +181,12 @@ export function simulate(json: unknown, seconds: number): SimReport {
       maxWait: trains.reduce((a, t) => Math.max(a, t.maxWait), 0),
     };
   });
-  if (!sim.deadlock) return { report, events: sim.events, perService };
-  const withDeadlock = { ...report, ok: false, issues: [...report.issues, sim.deadlock] };
-  return { report: withDeadlock, events: sim.events, perService, deadlock: sim.deadlock };
+  const issues = [...report.issues];
+  for (const id of sim.unplaced) {
+    const svc = world.layout.services.findIndex((s) => id.startsWith(`${s.id}-`));
+    issues.push(warning("CAPACITY", `train ${id} could not be placed on its route at start (every spot was blocked); reduce count or lengthen the route`, `services[${svc}].count`));
+  }
+  if (sim.deadlock) issues.push(sim.deadlock);
+  const full = { ...report, ok: report.ok && !sim.deadlock, issues };
+  return { report: full, events: sim.events, perService, ...(sim.deadlock ? { deadlock: sim.deadlock } : {}) };
 }

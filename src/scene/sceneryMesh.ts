@@ -35,7 +35,7 @@ function blob(radius: number, z: number, detail: 0 | 1, squash: number): THREE.B
 
 function crownGeometry(v: TreeVariant): THREE.BufferGeometry {
   if (v === "deciduous") return blob(3.2, 5.6, 0, 0.85);
-  if (v === "bare") return blob(2.6, 5.8, 0, 1.2);
+  if (v === "bare") return blob(1.9, 6.4, 0, 1.7);   // slim, tall and grey: reads as bare twigs
   const g = new GeoBuilder();
   const snowy = v === "conifer-snow";
   cone(g, 1.6, 7.6, 2.7, snowy ? PALETTE.trees.winter.conifer[0] : 0xffffff);
