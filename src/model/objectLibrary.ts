@@ -96,16 +96,66 @@ const LIBRARY: Record<string, ObjectInput> = {
     ],
   },
 
-  road: {
-    description: "10 m of 6 m wide road along x, a slab 0.2 m proud of the ground; lay segments end to end on gentle ground",
+  paving: {
+    description: "10 × 10 m paved square, 0.2 m proud of the ground (lay several for a town square; roads are a layout's `roads`, not objects)",
+    parts: [{ shape: "box", at: [0, 0, -0.8], size: [10, 10, 1], color: "#b9b2a3", winter: "#dfe2e4" }],
+  },
+
+  // --- vehicles (driven by road traffic; front faces +x, origin at the centre) ---
+  car: {
+    description: "Small car, 4.2 m long; headlights glow at night",
+    tint: ["#b8473a", "#4f6f9a", "#e6e2da", "#3a3a3c", "#8d9196", "#5f8a4e", "#d9a441"],
     parts: [
-      { shape: "box", at: [0, 0, -0.8], size: [10, 6, 1], color: "#8f8b84", winter: "#d9dde0" },
-      { shape: "box", at: [0, 0, -0.8], size: [4, 0.25, 1.02], color: "#d8d2c0" },
+      { shape: "box", at: [0, 0, 0.28], size: [4.2, 1.8, 0.72] },
+      { shape: "box", at: [-0.35, 0, 1], size: [2.3, 1.66, 0.52], taper: [0.78, 0.9] },
+      { shape: "box", at: [-0.35, 0, 1.5], size: [1.8, 1.5, 0.03] },
+      { shape: "panel", at: [0.79, 0, 1.02], size: [0.05, 1.5, 0.44], rotate: [0, -24, 0], color: "#33404c" },
+      { shape: "panel", at: [-0.35, 0.84, 1.03], size: [0.05, 1.9, 0.4], rotate: [0, 0, 90], color: "#33404c", mirror: "y" },
+      { shape: "cylinder", at: [1.3, 0.92, 0.32], size: [0.64, 0.64, 0.24], rotate: [90, 0, 0], sides: 8, color: "dark", grid: [2, 1, 1], step: [-2.6, 0, 0], mirror: "y" },
+      { shape: "panel", at: [2.11, 0.58, 0.68], size: [0.05, 0.34, 0.16], color: "lamp", mirror: "y" },
+      { shape: "panel", at: [-2.11, 0.62, 0.7], size: [0.05, 0.3, 0.16], rotate: [0, 0, 180], color: "#c0302a", glow: true, mirror: "y" },
     ],
   },
-  paving: {
-    description: "10 × 10 m paved square, 0.2 m proud of the ground (lay several for a town square)",
-    parts: [{ shape: "box", at: [0, 0, -0.8], size: [10, 10, 1], color: "#b9b2a3", winter: "#dfe2e4" }],
+  van: {
+    description: "Delivery van, 5 m long",
+    tint: ["#f4f2ee", "#d9d4c8", "#5a7fa8", "#b8473a", "#e2b33c"],
+    parts: [
+      { shape: "box", at: [-0.3, 0, 0.32], size: [4.4, 1.95, 2.05] },
+      { shape: "box", at: [2.15, 0, 0.32], size: [0.6, 1.95, 1.0] },
+      { shape: "panel", at: [1.93, 0, 1.42], size: [0.05, 1.75, 0.8], rotate: [0, -20, 0], color: "#33404c" },
+      { shape: "panel", at: [1.3, 0.985, 1.45], size: [0.05, 0.9, 0.7], rotate: [0, 0, 90], color: "#33404c", mirror: "y" },
+      { shape: "cylinder", at: [1.5, 0.98, 0.34], size: [0.68, 0.68, 0.26], rotate: [90, 0, 0], sides: 8, color: "dark", grid: [2, 1, 1], step: [-3.1, 0, 0], mirror: "y" },
+      { shape: "panel", at: [2.46, 0.66, 0.85], size: [0.05, 0.34, 0.18], color: "lamp", mirror: "y" },
+      { shape: "panel", at: [-2.51, 0.78, 0.8], size: [0.05, 0.22, 0.3], rotate: [0, 0, 180], color: "#c0302a", glow: true, mirror: "y" },
+    ],
+  },
+  bus: {
+    description: "Single-deck bus, 11 m long; windows lit at night",
+    tint: ["#e2b33c", "#c8553d", "#4f6f9a", "#5f8a4e", "#e6e2da"],
+    parts: [
+      { shape: "box", at: [0, 0, 0.35], size: [11, 2.5, 2.75] },
+      { shape: "box", at: [0, 0, 3.1], size: [10.6, 2.3, 0.2], color: "#e6e2da" },
+      { shape: "panel", at: [-0.4, 1.255, 1.45], size: [0.05, 9.2, 1.05], rotate: [0, 0, 90], color: "window", mirror: "y" },
+      { shape: "panel", at: [5.505, 0, 1.25], size: [0.05, 2.2, 1.55], color: "#33404c" },
+      { shape: "panel", at: [5.505, 0, 2.9], size: [0.05, 1.6, 0.3], color: "lamp" },
+      { shape: "cylinder", at: [3.6, 1.26, 0.5], size: [1, 1, 0.3], rotate: [90, 0, 0], sides: 8, color: "dark", grid: [2, 1, 1], step: [-6.8, 0, 0], mirror: "y" },
+      { shape: "panel", at: [5.505, 0.9, 0.7], size: [0.05, 0.4, 0.2], color: "lamp", mirror: "y" },
+      { shape: "panel", at: [-5.505, 1, 0.75], size: [0.05, 0.3, 0.3], rotate: [0, 0, 180], color: "#c0302a", glow: true, mirror: "y" },
+    ],
+  },
+  truck: {
+    description: "Box lorry, 8 m long",
+    tint: ["#f4f2ee", "#cfc9bd", "#7d8288", "#4f6f9a"],
+    parts: [
+      { shape: "box", at: [0, 0, 0.45], size: [8, 2.1, 0.4], color: "dark" },
+      { shape: "box", at: [3.05, 0, 0.6], size: [1.9, 2.4, 2.4], color: "#b8473a" },
+      { shape: "panel", at: [4.005, 0, 1.75], size: [0.05, 2.1, 1.0], color: "#33404c" },
+      { shape: "box", at: [-1.05, 0, 0.85], size: [5.9, 2.5, 2.75] },
+      { shape: "cylinder", at: [3, 1.1, 0.5], size: [1, 1, 0.3], rotate: [90, 0, 0], sides: 8, color: "dark", mirror: "y" },
+      { shape: "cylinder", at: [-1.6, 1.1, 0.5], size: [1, 1, 0.3], rotate: [90, 0, 0], sides: 8, color: "dark", grid: [2, 1, 1], step: [-1.15, 0, 0], mirror: "y" },
+      { shape: "panel", at: [4.005, 0.85, 0.85], size: [0.05, 0.36, 0.2], color: "lamp", mirror: "y" },
+      { shape: "panel", at: [-4.005, 0.95, 0.6], size: [0.05, 0.3, 0.2], rotate: [0, 0, 180], color: "#c0302a", glow: true, mirror: "y" },
+    ],
   },
 
   // --- nature ----------------------------------------------------------------

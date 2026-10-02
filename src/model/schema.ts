@@ -47,6 +47,34 @@ const Track = z
     }
   });
 
+const RoadEnd = z.strictObject({
+  road: Id.describe("Road this one starts (from) or ends (to) on, forming a T-junction"),
+  at: z.union([z.number(), z.enum(["start", "end"])])
+    .describe('Arc length s on that road (m), or "start" / "end" to join at one of its ends (a corner)'),
+});
+
+const Road = z
+  .strictObject({
+    id: Id,
+    kind: z.enum(["line", "loop"]).default("line"),
+    points: z.array(Waypoint).min(1).describe("Waypoints like a track's; corners are rounded with `minRadius`"),
+    width: z.number().min(3).max(14).default(6).describe("Carriageway width (m); two-way traffic, drive on the right"),
+    minRadius: z.number().positive().default(10),
+    maxGrade: z.number().positive().max(0.25).default(0.08),
+    speed: z.number().positive().max(40).default(13).describe("Speed limit (m/s); 13 ≈ 50 km/h"),
+    from: RoadEnd.optional(),
+    to: RoadEnd.optional(),
+  })
+  .superRefine((r, ctx) => {
+    const need = r.kind === "loop" ? 3 : r.from || r.to ? 1 : 2;
+    if (r.points.length < need) {
+      ctx.addIssue({ code: "custom", path: ["points"], message: `a ${r.kind} road${r.kind === "line" && need === 1 ? " with from/to" : ""} needs at least ${need} points, got ${r.points.length}` });
+    }
+    if (r.kind === "loop" && (r.from || r.to)) {
+      ctx.addIssue({ code: "custom", path: [r.from ? "from" : "to"], message: "from/to are only allowed on line roads" });
+    }
+  });
+
 const Station = z.strictObject({
   id: Id,
   name: z.string(),
@@ -83,8 +111,8 @@ const SceneryEntry = z
     radius: z.number().positive().optional().describe("scatter: circle radius (m)"),
     spacing: z.number().min(1.5).optional().describe("scatter: minimum distance between items (m)"),
     rotation: z.number().optional().describe("object: degrees counter-clockwise from east that the object's front (+x) faces; default 0"),
-    face: z.union([z.literal("track"), Vec2]).optional()
-      .describe('object: turn the front toward the nearest track ("track") or toward a point [x, y]; overrides rotation'),
+    face: z.union([z.enum(["track", "road"]), Vec2]).optional()
+      .describe('object: turn the front toward the nearest track ("track"), the nearest road ("road") or a point [x, y]; overrides rotation'),
     scale: z.union([z.number().positive(), z.tuple([z.number().positive(), z.number().positive()])]).optional()
       .describe("object: size factor (default 1). scatter: [min, max] range (default [0.8, 1.2])"),
     z: z.number().optional().describe("object: absolute base height (m); default the ground (or the platform top on a platform)"),
@@ -124,6 +152,12 @@ export const LayoutSchema = z.strictObject({
   tracks: z.array(Track).min(1),
   stations: z.array(Station).default([]),
   services: z.array(Service).default([]),
+  roads: z.array(Road).default([]).describe("Road network: crossroads form automatically, level crossings where a road meets a track at grade"),
+  traffic: z.strictObject({
+    cars: z.int().min(0).max(400).optional().describe("Number of vehicles; default about one per 70 m of road"),
+    vehicles: z.array(Id).min(1).default(["car", "car", "car", "van", "bus", "truck"])
+      .describe("Object ids to drive, picked at random (repeat an id to make it more common)"),
+  }).prefault({}),
   objects: z.record(Id, ObjectSchema).default({})
     .describe("Custom scenery objects for this layout, by id; they may also redefine built-in ids"),
   scenery: z.array(SceneryEntry).default([]).describe("Placed objects and scattered groups"),
@@ -142,6 +176,7 @@ export type WaypointSpec = TrackSpec["points"][number];
 export type StationSpec = Layout["stations"][number];
 export type ServiceSpec = Layout["services"][number];
 export type SceneryEntrySpec = Layout["scenery"][number];
+export type RoadSpec = Layout["roads"][number];
 
 /** Normalises a waypoint to { at, z?, radius? }. */
 export function waypoint(w: WaypointSpec): { at: [number, number]; z?: number; radius?: number } {

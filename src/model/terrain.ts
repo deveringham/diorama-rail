@@ -25,8 +25,11 @@ export type Terrain = {
   seaLevel: number | null;
 };
 
-/** A track point used for shaping: position, rail height, and whether it is on plain ground. */
-export type ShapePoint = { x: number; y: number; z: number; ground: boolean };
+/**
+ * A track or road point used for shaping: position, surface height, whether it is
+ * on plain ground, and optionally its flat half-width and bed depth (track defaults).
+ */
+export type ShapePoint = { x: number; y: number; z: number; ground: boolean; flat?: number; depth?: number };
 
 export function buildTerrain(layout: Layout): Terrain {
   const { size, cell, baseHeight, features, noise, seaLevel } = layout.terrain;
@@ -89,8 +92,13 @@ export function slopeAt(t: Terrain, x: number, y: number): number {
  * The grid itself is the spatial index: every track point "splats" its candidate
  * distance into the vertices around it, keeping the nearest. Tunnel and bridge
  * points still win "nearest" but never shape, so the hill stays over a tunnel.
+ *
+ * Roads are shaped in a second pass over the result (`keep` = the first pass's
+ * return value), so a track bridge does not stop the road beneath it being shaped,
+ * and the road never disturbs the flat bed of a track.
+ * Returns the vertices this pass flattened completely.
  */
-export function shapeCorridor(t: Terrain, points: ShapePoint[]): void {
+export function shapeCorridor(t: Terrain, points: ShapePoint[], keep?: Uint8Array): Uint8Array {
   const w = t.nx + 1;
   const count = w * (t.ny + 1);
   const bestD = new Float32Array(count).fill(Infinity);
@@ -111,14 +119,19 @@ export function shapeCorridor(t: Terrain, points: ShapePoint[]): void {
       }
     }
   });
+  const flattened = new Uint8Array(count);
   for (let v = 0; v < count; v++) {
     const p = points[bestP[v]];
-    if (!p || !p.ground) continue;
-    const target = p.z - BED_DEPTH;
-    const reach = FLAT_HALF_WIDTH + SIDE_SLOPE * Math.abs(t.base[v] - target);
+    if (!p || !p.ground || keep?.[v]) continue;
+    const from = keep ? t.shaped[v] : t.base[v];
+    const flat = p.flat ?? FLAT_HALF_WIDTH;
+    const target = p.z - (p.depth ?? BED_DEPTH);
+    const reach = flat + SIDE_SLOPE * Math.abs(from - target);
     const d = bestD[v];
     if (d >= reach) continue;
-    const weight = d <= FLAT_HALF_WIDTH ? 1 : 1 - (d - FLAT_HALF_WIDTH) / (reach - FLAT_HALF_WIDTH);
-    t.shaped[v] = lerp(t.base[v], target, weight);
+    const weight = d <= flat ? 1 : 1 - (d - flat) / (reach - flat);
+    t.shaped[v] = lerp(from, target, weight);
+    if (d <= flat) flattened[v] = 1;
   }
+  return flattened;
 }

@@ -47,6 +47,8 @@ export type World4Trains = {
   owner: Int32Array;           // block -> train index, or -1
   switchStates: SwitchState[];
   rng: Rng;
+  /** Distance ahead the train must stop by for level crossings that are not closed. */
+  gateStop?: (t: Train) => number;
 };
 
 // -- entry index helpers (global index K = lap·E + i on loops) --------------
@@ -235,11 +237,13 @@ export function stepTrain(w: World4Trains, t: Train, self: number, dt: number): 
   extend(w, t, self);
   const atPathEnd = !route.closed && (t.dir > 0 ? t.hi === E(plan) - 1 : t.lo === 0);
   const resEnd = t.dir > 0 ? r1(plan, t.hi) : r0(plan, t.lo);
-  const limit = (resEnd - t.r) * t.dir - (atPathEnd ? 0 : SAFETY);
+  const resLimit = (resEnd - t.r) * t.dir - (atPathEnd ? 0 : SAFETY);
+  const gate = w.gateStop ? w.gateStop(t) : Infinity;
+  const limit = Math.min(resLimit, gate);
   const stop = nextStop(t);
   const toStop = stop && stop.dist <= limit;
   const dist = Math.max(0, toStop ? stop.dist : limit);
-  const terminal = toStop || atPathEnd;
+  const terminal = toStop || (atPathEnd && gate >= resLimit);
 
   let vStop = Math.sqrt(2 * type.decel * dist);
   if (dist > ARRIVE && vStop < CREEP) vStop = CREEP;

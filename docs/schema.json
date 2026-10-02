@@ -388,6 +388,205 @@
         "additionalProperties": false
       }
     },
+    "roads": {
+      "default": [],
+      "description": "Road network: crossroads form automatically, level crossings where a road meets a track at grade",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$"
+          },
+          "kind": {
+            "default": "line",
+            "type": "string",
+            "enum": [
+              "line",
+              "loop"
+            ]
+          },
+          "points": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "prefixItems": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "items": false,
+                  "minItems": 2,
+                  "maxItems": 2,
+                  "description": "[x, y] in metres; x = east, y = north"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "at": {
+                      "type": "array",
+                      "prefixItems": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ],
+                      "items": false,
+                      "minItems": 2,
+                      "maxItems": 2,
+                      "description": "[x, y] in metres; x = east, y = north"
+                    },
+                    "z": {
+                      "description": "Fixed track height (m) at this waypoint; a hard constraint",
+                      "type": "number"
+                    },
+                    "radius": {
+                      "description": "Curve radius at this corner; overrides track.minRadius",
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    }
+                  },
+                  "required": [
+                    "at"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "description": "Waypoints like a track's; corners are rounded with `minRadius`"
+          },
+          "width": {
+            "default": 6,
+            "description": "Carriageway width (m); two-way traffic, drive on the right",
+            "type": "number",
+            "minimum": 3,
+            "maximum": 14
+          },
+          "minRadius": {
+            "default": 10,
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "maxGrade": {
+            "default": 0.08,
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 0.25
+          },
+          "speed": {
+            "default": 13,
+            "description": "Speed limit (m/s); 13 ≈ 50 km/h",
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 40
+          },
+          "from": {
+            "type": "object",
+            "properties": {
+              "road": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]*$",
+                "description": "Road this one starts (from) or ends (to) on, forming a T-junction"
+              },
+              "at": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "string",
+                    "enum": [
+                      "start",
+                      "end"
+                    ]
+                  }
+                ],
+                "description": "Arc length s on that road (m), or \"start\" / \"end\" to join at one of its ends (a corner)"
+              }
+            },
+            "required": [
+              "road",
+              "at"
+            ],
+            "additionalProperties": false
+          },
+          "to": {
+            "type": "object",
+            "properties": {
+              "road": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]*$",
+                "description": "Road this one starts (from) or ends (to) on, forming a T-junction"
+              },
+              "at": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "string",
+                    "enum": [
+                      "start",
+                      "end"
+                    ]
+                  }
+                ],
+                "description": "Arc length s on that road (m), or \"start\" / \"end\" to join at one of its ends (a corner)"
+              }
+            },
+            "required": [
+              "road",
+              "at"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "points"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "traffic": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "cars": {
+          "description": "Number of vehicles; default about one per 70 m of road",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 400
+        },
+        "vehicles": {
+          "default": [
+            "car",
+            "car",
+            "car",
+            "van",
+            "bus",
+            "truck"
+          ],
+          "description": "Object ids to drive, picked at random (repeat an id to make it more common)",
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "objects": {
       "default": {},
       "description": "Custom scenery objects for this layout, by id; they may also redefine built-in ids",
@@ -859,11 +1058,14 @@
             "type": "number"
           },
           "face": {
-            "description": "object: turn the front toward the nearest track (\"track\") or toward a point [x, y]; overrides rotation",
+            "description": "object: turn the front toward the nearest track (\"track\"), the nearest road (\"road\") or a point [x, y]; overrides rotation",
             "anyOf": [
               {
                 "type": "string",
-                "const": "track"
+                "enum": [
+                  "track",
+                  "road"
+                ]
               },
               {
                 "type": "array",

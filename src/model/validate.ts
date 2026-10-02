@@ -60,12 +60,13 @@ export function checkReferences(layout: Layout): Issue[] {
   const seen = new Map<string, string>();
   const note = (id: string, path: string) => {
     const prev = seen.get(id);
-    if (prev) issues.push(error("DUPLICATE_ID", `id '${id}' is used twice (also at ${prev}); ids must be unique across tracks, stations and services`, path));
+    if (prev) issues.push(error("DUPLICATE_ID", `id '${id}' is used twice (also at ${prev}); ids must be unique across tracks, roads, stations and services`, path));
     else seen.set(id, path);
   };
   layout.tracks.forEach((t, i) => note(t.id, `tracks[${i}].id`));
   layout.stations.forEach((s, i) => note(s.id, `stations[${i}].id`));
   layout.services.forEach((s, i) => note(s.id, `services[${i}].id`));
+  layout.roads.forEach((r, i) => note(r.id, `roads[${i}].id`));
 
   const trackIds = new Set(layout.tracks.map((t) => t.id));
   const stationIds = new Set(layout.stations.map((s) => s.id));
@@ -95,6 +96,15 @@ export function checkReferences(layout: Layout): Issue[] {
     if (e.object && !objectIds.has(e.object)) unknown("object", e.object, `scenery[${i}].object`, known());
     e.scatter?.forEach((id, k) => { if (!objectIds.has(id)) unknown("object", id, `scenery[${i}].scatter[${k}]`, known()); });
   });
+  const roadIds = new Set(layout.roads.map((r) => r.id));
+  layout.roads.forEach((r, i) => {
+    for (const w of ["from", "to"] as const) {
+      const end = r[w];
+      if (end && !roadIds.has(end.road)) unknown("road", end.road, `roads[${i}].${w}.road`, roadIds);
+      if (end && end.road === r.id) issues.push(error("TRACK_REF_CYCLE", `road '${r.id}' cannot branch from itself`, `roads[${i}].${w}.road`));
+    }
+  });
+  layout.traffic.vehicles.forEach((id, k) => { if (!objectIds.has(id)) unknown("object", id, `traffic.vehicles[${k}]`, known()); });
   return issues;
 }
 

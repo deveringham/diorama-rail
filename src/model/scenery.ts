@@ -6,6 +6,7 @@
 import type { Layout } from "./schema";
 import type { TrackGeom } from "./trackGraph";
 import type { TrackPoint, Issue } from "./validate";
+import type { RoadPoint } from "./roads";
 import { error, warning } from "./validate";
 import { type Terrain, groundZ, slopeAt } from "./terrain";
 import { type Profile, profileZ } from "./heights";
@@ -24,6 +25,9 @@ export const PLATFORM_TOP = 0.9;        // platform surface above track z
 const STATION_GAP = 1.5;                // m between platform and station building
 const TRACK_GAP = 2;                    // placed objects keep this far from track centres (loading gauge)
 const SCATTER_TRACK_GAP = 6;            // scattered items keep further away
+const ROAD_GAP = 0.3;                   // placed objects keep this far outside a road's edge
+const SCATTER_ROAD_GAP = 3;             // scattered items keep further away
+const ROAD_DZ = 5;                      // m; a road this far above or below an object (bridge, tunnel) does not count
 const WATER_MARGIN = 0.5;
 const MAX_SCATTERED = 20000;
 const FACE_TRACK_SEARCH = 400;          // m to look for the nearest track when facing "track"
@@ -107,6 +111,7 @@ type Context = {
   profiles: Map<string, Profile>;
   terrain: Terrain;
   trackHash: SpatialHash<TrackPoint>;
+  roadHash: SpatialHash<RoadPoint>;
   stations: StationGeom[];
   objects: Map<string, ObjectInfo>;
 };
@@ -139,8 +144,14 @@ export function placeScenery(ctx: Context): { placements: Placement[]; issues: I
       const sd = sides[0];
       const p = at(st.at, sd * (PLATFORM_OFFSET + PLATFORM_WIDTH / 2 + STATION_GAP + building.mesh.max[0]));
       const rot = p.h - sd * (Math.PI / 2);
-      add(st.building!, p.x, p.y, groundZ(terrain, p.x, p.y), rot, 1, tintFor(building, r), false);
-      solids.push({ box: boxOf(building, p.x, p.y, rot, 1), path: `stations[${i}].building`, object: st.building!, flat: false });
+      const z = groundZ(terrain, p.x, p.y);
+      const box = boxOf(building, p.x, p.y, rot, 1);
+      const road = nearestRoad(ctx.roadHash, box, z);
+      if (road && road.d < ROAD_GAP) {
+        issues.push(error("SCENERY_ON_ROAD", `the building of station '${st.id}' stands on road '${road.road}'; move the road away from the platform side, or set "building": null`, `stations[${i}].building`, [p.x, p.y]));
+      }
+      add(st.building!, p.x, p.y, z, rot, 1, tintFor(building, r), false);
+      solids.push({ box, path: `stations[${i}].building`, object: st.building!, flat: false });
     }
     const bench = objects.get("bench");
     for (const sd of bench ? sides : []) {
@@ -176,6 +187,13 @@ export function placeScenery(ctx: Context): { placements: Placement[]; issues: I
     }
     const onPlatform = platforms.find(x, y);
     const z = e.z ?? (onPlatform ?? groundZ(terrain, x, y));
+    const road = nearestRoad(ctx.roadHash, box, z);
+    if (road && road.d < ROAD_GAP) {
+      issues.push(error("SCENERY_ON_ROAD",
+        `${e.object} at (${x}, ${y}) ${road.d <= -road.half ? "stands in the middle of" : "reaches onto"} road '${road.road}' (keep ${ROAD_GAP} m outside its ${(2 * road.half).toFixed(0)} m carriageway); move it about ${(ROAD_GAP - road.d + 0.5).toFixed(0)} m further from the road centre or turn it`,
+        `${path}.at`, [x, y]));
+      return;
+    }
     const smoke = info.mesh.chimneys.length > 0 && (e.smoke ?? r() < info.def.smoke);
     add(e.object, x, y, z, rotation, scale, tintFor(info, r, e.color), smoke);
     const flat = info.mesh.max[2] * scale < FLAT;
@@ -219,6 +237,8 @@ export function placeScenery(ctx: Context): { placements: Placement[]; issues: I
       if (slopeAt(terrain, x, y) > (info.def.maxSlope * Math.PI) / 180) continue;
       const hit = nearestTrack(trackHash, box);
       if (hit && hit.d < SCATTER_TRACK_GAP + reach * 0.5) continue;
+      const road = nearestRoad(ctx.roadHash, box, z);
+      if (road && road.d < SCATTER_ROAD_GAP + reach * 0.5) continue;
       if (solids.some((sol) => boxDistance(sol.box, x, y) < reach + (sol.flat ? 0 : GARDEN))) continue;
       add(id, x, y, z, rotation, scale, tintFor(info, r), info.mesh.chimneys.length > 0 && r() < info.def.smoke);
       scattered++;
@@ -227,18 +247,34 @@ export function placeScenery(ctx: Context): { placements: Placement[]; issues: I
   return { placements: out, issues };
 }
 
-/** Rotation for `face`: toward the nearest track or a point; undefined to use `rotation`. */
-function facing(ctx: Context, face: "track" | [number, number] | undefined, x: number, y: number): number | undefined {
+/** Rotation for `face`: toward the nearest track, road or a point; undefined to use `rotation`. */
+function facing(ctx: Context, face: "track" | "road" | [number, number] | undefined, x: number, y: number): number | undefined {
   if (!face) return undefined;
   let target: [number, number] | null = Array.isArray(face) ? face : null;
-  if (face === "track") {
+  if (face === "track" || face === "road") {
     let best = Infinity;
-    ctx.trackHash.near(x, y, FACE_TRACK_SEARCH, (p) => {
+    const hash: SpatialHash<{ x: number; y: number }> = face === "track" ? ctx.trackHash : ctx.roadHash;
+    hash.near(x, y, FACE_TRACK_SEARCH, (p) => {
       const d = Math.hypot(p.x - x, p.y - y);
       if (d < best) { best = d; target = [p.x, p.y]; }
     });
   }
   return target ? Math.atan2(target[1] - y, target[0] - x) : undefined;
+}
+
+/**
+ * Nearest road to a footprint at height z: distance from the rectangle's edge to the
+ * carriageway edge (negative when it reaches onto the road), ignoring bridges and
+ * tunnels well above or below.
+ */
+function nearestRoad(hash: SpatialHash<RoadPoint>, box: Box, z: number): { d: number; half: number; road: string } | null {
+  let best: { d: number; half: number; road: string } | null = null;
+  hash.near(box.cx, box.cy, boxRadius(box) + SCATTER_ROAD_GAP + 20, (p) => {
+    if (Math.abs(p.z - z) > ROAD_DZ) return;
+    const d = boxDistance(box, p.x, p.y) - p.width / 2;
+    if (!best || d < best.d) best = { d, half: p.width / 2, road: p.road };
+  });
+  return best;
 }
 
 /** Nearest track point to a footprint, measured to the rectangle's edge. */

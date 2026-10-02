@@ -9,7 +9,8 @@ import type { TriList } from "../model/objects";
 import { PALETTE } from "./palette";
 import { GeoBuilder, flatMaterial, toThree } from "./geo";
 
-function geometry(list: TriList): THREE.BufferGeometry | null {
+/** A mesher triangle list as a vertex-coloured geometry, or null if empty. */
+export function geometry(list: TriList): THREE.BufferGeometry | null {
   if (list.color.length === 0) return null;
   const g = new GeoBuilder();
   const p = list.pos;

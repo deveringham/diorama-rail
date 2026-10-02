@@ -41,6 +41,24 @@ export function query(world: World) {
       }
       return b;
     },
+    /** Nearest road point within `radius` metres of (x, y), or null. */
+    roadAt(x: number, y: number, radius = 10): { road: string; s: number; dist: number } | null {
+      let best: { road: string; s: number; dist: number } | null = null;
+      world.roads.hash.near(x, y, radius, (p) => {
+        const d = Math.hypot(p.x - x, p.y - y);
+        if (d <= radius && (!best || d < best.dist)) best = { road: p.road, s: p.s, dist: d };
+      });
+      if (!best) return null;
+      const b: { road: string; s: number; dist: number } = best;
+      const path = world.roads.roads.get(b.road)!.path;
+      for (let ds = -2; ds <= 2; ds += 0.05) {
+        const s = path.closed ? (b.s + ds + path.length) % path.length : Math.min(Math.max(b.s + ds, 0), path.length);
+        const [px, py] = pointAt(path, s);
+        const d = Math.hypot(px - x, py - y);
+        if (d < b.dist) Object.assign(b, { s, dist: d });
+      }
+      return b;
+    },
     pointAt(id: string, s: number) {
       const t = track(id);
       const [x, y] = pointAt(t.path, s);
@@ -82,6 +100,22 @@ export function query(world: World) {
           const r = world.routes.get(s.id);
           out.push(`  ${s.id} ${s.train}×${s.count} ${s.mode} route [${s.route.join(", ")}] stops [${s.stops.join(", ")}] path ${r ? f0(r.length) : "?"} m`);
         }
+      }
+      const net = world.roads;
+      if (net.roads.size) {
+        out.push("Roads:");
+        for (const id of net.order) {
+          const r = net.roads.get(id)!;
+          const z = net.profiles.get(id)!.z;
+          const ends = (["from", "to"] as const).map((w) => (r.spec[w] ? `${w} ${r.spec[w]!.road}@${r.spec[w]!.at}` : "")).filter(Boolean);
+          const spans = net.spans.get(id)!.filter((s) => s.kind !== "ground").map((s) => `${s.kind} ${f0(s.s0)}–${f0(s.s1)}`);
+          const junctions = net.stops.get(id)!.filter((x) => net.nodes[x.node].legs.length >= 3).map((x) => f0(x.s));
+          out.push(`  ${id} ${r.spec.kind} ${f0(r.path.length)} m, ${r.spec.width} m wide; z ${Math.min(...z).toFixed(1)}..${Math.max(...z).toFixed(1)}`
+            + (ends.length ? `; ${ends.join(", ")}` : "") + (junctions.length ? `; junctions at s=${junctions.join(", ")}` : "") + (spans.length ? `; ${spans.join(", ")}` : ""));
+        }
+        for (const c of net.crossings) out.push(`  level crossing ${c.id}: ${c.road} s=${f0(c.roadS)} × ${c.track} s=${f0(c.trackS)} at (${f0(c.at[0])}, ${f0(c.at[1])}), ${f0(c.angle)}°`);
+        const cars = L.traffic.cars;
+        out.push(`  traffic: ${cars ?? "auto"} vehicles of [${[...new Set(L.traffic.vehicles)].join(", ")}]`);
       }
       const counts = new Map<string, number>();
       for (const p of world.scenery) counts.set(p.object, (counts.get(p.object) ?? 0) + 1);

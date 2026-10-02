@@ -30,3 +30,19 @@ export function withBranch(): Fixture {
   L.tracks.push({ id: "spur", kind: "line", minRadius: 60, from: { track: "main", at: 350 }, points: [[700, 110], [850, 50]] });
   return L;
 }
+
+/**
+ * Base plus roads: one crossing the loop's bottom and top straights at level
+ * crossings, a cross street meeting it at a crossroads, and a lane joining that
+ * street at a T-junction.
+ */
+export function withRoads(): Fixture {
+  const L = base();
+  L.roads = [
+    { id: "north-south", points: [[680, 60], [680, 740]] },
+    { id: "cross", points: [[300, 400], [740, 400]] },
+    { id: "lane", from: { road: "cross", at: 120 }, points: [[420, 520]] },
+  ];
+  L.traffic = { cars: 16 };
+  return L;
+}

@@ -56,7 +56,7 @@ if (shot) {
 let world: World | null = null;
 let sim: Sim | null = null;
 let dscene: DioramaScene | null = null;
-const snap: SimSnapshot = { time: 0, trains: [], switches: [], blocks: [] };
+const snap: SimSnapshot = { time: 0, trains: [], switches: [], blocks: [], vehicles: [], gates: [] };
 let paused = false;
 let speed = 1;
 let shadows = true;
@@ -126,6 +126,8 @@ function rebuild(json: unknown, preStep: number): boolean {
   if (sim.unplaced.length) console.warn(`no room to place trains: ${sim.unplaced.join(", ")}`);
   for (let i = 0; i < Math.round(preStep / DT); i++) sim.step();
   snap.trains.length = 0;
+  snap.vehicles.length = 0;
+  snap.gates.length = 0;
   sim.snapshot(snap);
   dscene = buildScene(world, snap);
   dscene.lighting.setShadows(shadows);
