@@ -6,7 +6,7 @@ export type Season = "summer" | "autumn" | "winter";
 
 export const PALETTE = {
   terrain: {
-    summer: { grass: [0x93b36b, 0x8aad66, 0x9cba72], grassDark: [0x759a57, 0x6e9152], field: 0xb9b878 },
+    summer: { grass: [0x93b36b, 0x8aad66, 0x9cba72], grassDark: [0x759a57, 0x6e9152], field: 0xadb673 },
     autumn: { grass: [0xa5ad6a, 0x9fa565, 0xaeb26f], grassDark: [0x87905a, 0x7f8854], field: 0xc7a96a },
     winter: { grass: [0xe9edf0, 0xe2e8ec, 0xdde4e8], grassDark: [0xc9d3d8, 0xc2ccd2], field: 0xeef1f3 },
     rock: [0x9c968a, 0x8f897e],
@@ -59,14 +59,14 @@ export const PALETTE = {
 
 /** Sky, fog and light keyframes over the day, interpolated by hour. */
 export const DAY_KEYS = [
-  { hour: 0, sky: 0x101a2c, sun: 0x8ea2d6, sunI: 0.35, hemiSky: 0x34466a, hemiGround: 0x15181c, hemiI: 0.45, windows: 1 },
-  { hour: 5, sky: 0x1c2640, sun: 0x8ea2d6, sunI: 0.35, hemiSky: 0x3c4c70, hemiGround: 0x1a1d22, hemiI: 0.5, windows: 1 },
+  { hour: 0, sky: 0x16223a, sun: 0x9fb2e6, sunI: 0.7, hemiSky: 0x40547e, hemiGround: 0x1c2026, hemiI: 0.8, windows: 1 },
+  { hour: 5, sky: 0x1e2a46, sun: 0x9fb2e6, sunI: 0.7, hemiSky: 0x46587e, hemiGround: 0x1e2228, hemiI: 0.85, windows: 1 },
   { hour: 6.5, sky: 0xe7b394, sun: 0xffb27f, sunI: 1.4, hemiSky: 0xd6c6c0, hemiGround: 0x5a4e46, hemiI: 0.9, windows: 0.6 },
   { hour: 8.5, sky: 0xbcd3e3, sun: 0xfff0da, sunI: 2.9, hemiSky: 0xcfe0ec, hemiGround: 0x6d6250, hemiI: 1.0, windows: 0 },
   { hour: 16, sky: 0xc3d6e2, sun: 0xffeccf, sunI: 2.9, hemiSky: 0xd3e1ea, hemiGround: 0x6e6150, hemiI: 1.0, windows: 0 },
   { hour: 18.5, sky: 0xeeb48c, sun: 0xffa66a, sunI: 1.5, hemiSky: 0xdcc2b4, hemiGround: 0x5d4c42, hemiI: 0.95, windows: 0.5 },
-  { hour: 20, sky: 0x3c4466, sun: 0x9aa8d8, sunI: 0.45, hemiSky: 0x46527a, hemiGround: 0x1e2026, hemiI: 0.55, windows: 1 },
-  { hour: 24, sky: 0x101a2c, sun: 0x8ea2d6, sunI: 0.35, hemiSky: 0x34466a, hemiGround: 0x15181c, hemiI: 0.45, windows: 1 },
+  { hour: 20, sky: 0x3c4466, sun: 0x9fb2e6, sunI: 0.75, hemiSky: 0x4c5a84, hemiGround: 0x20232a, hemiI: 0.85, windows: 1 },
+  { hour: 24, sky: 0x16223a, sun: 0x9fb2e6, sunI: 0.7, hemiSky: 0x40547e, hemiGround: 0x1c2026, hemiI: 0.8, windows: 1 },
 ] as const;
 
 export const LIGHT = {

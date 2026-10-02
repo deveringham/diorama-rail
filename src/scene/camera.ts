@@ -76,6 +76,13 @@ export class CameraRig {
     this.camera.lookAt(this.center);
   }
 
+  /** Eye and target in model coordinates: [x, y, z, tx, ty, tz]. */
+  lookFrom(v: number[]): void {
+    toThree(v[0], v[1], v[2], this.camera.position);
+    toThree(v[3], v[4], v[5], this.controls.target);
+    this.controls.update();
+  }
+
   getPose(): Pose {
     return { position: this.camera.position.clone(), target: this.controls.target.clone() };
   }

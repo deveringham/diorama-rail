@@ -4,12 +4,12 @@
 import { describe, it, expect } from "vitest";
 import { validate } from "../src/model/build";
 import { simulate } from "../src/sim/sim";
-import { base, withBranch, example } from "./fixtures";
+import { base, withBranch, example, type Fixture } from "./fixtures";
 
-type Case = [code: string, severity: "error" | "warning", make: () => Record<string, any>];
+type Case = [code: string, severity: "error" | "warning", make: () => Fixture];
 
 const cases: Case[] = [
-  ["SCHEMA", "error", () => { const L = base(); L.tracks[0].colour = "red"; return L; }],
+  ["SCHEMA", "error", () => { const L = base(); Object.assign(L.tracks[0], { colour: "red" }); return L; }],
   ["DUPLICATE_ID", "error", () => { const L = base(); L.stations[0].id = "main"; return L; }],
   ["UNKNOWN_REF", "error", () => { const L = base(); L.stations[0].track = "nowhere"; return L; }],
   ["TRACK_REF_CYCLE", "error", () => {
@@ -28,7 +28,7 @@ const cases: Case[] = [
     return L;
   }],
   ["JUNCTION_UNREACHABLE", "error", () => { const L = withBranch(); L.tracks[1].points = [[630, 180], [850, 50]]; return L; }],
-  ["JUNCTION_POSITION", "error", () => { const L = withBranch(); L.tracks[1].from.at = 520; return L; }],
+  ["JUNCTION_POSITION", "error", () => { const L = withBranch(); L.tracks[1].from!.at = 520; return L; }],
   ["GRADE_EXCEEDED", "error", () => {
     const L = base();
     L.tracks[0].points = [{ at: [200, 200], z: 0 }, { at: [800, 200], z: 40 }, [800, 600], [200, 600]];
@@ -48,7 +48,7 @@ const cases: Case[] = [
   ["STATION_STRUCTURE", "warning", () => {
     const L = base();
     L.terrain.features = [{ at: [510, 200], radius: 120, height: -18 }];
-    L.tracks[0].points = L.tracks[0].points.map((p: [number, number]) => ({ at: p, z: 0 }));
+    L.tracks[0].points = L.tracks[0].points.map((p) => ({ at: Array.isArray(p) ? p : p.at, z: 0 }));
     return L;
   }],
   ["ROUTE_DISCONNECTED", "error", () => {
@@ -106,7 +106,7 @@ describe("validation codes", () => {
 
   it("explains schema problems with JSON paths", () => {
     const L = base();
-    delete L.tracks[0].kind;
+    Reflect.deleteProperty(L.tracks[0], "kind");
     L.tracks[0].points[1] = { at: [800, 200], radius: -5 };
     const paths = validate(L).issues.map((i) => i.path);
     expect(paths).toContain("tracks[0].kind");

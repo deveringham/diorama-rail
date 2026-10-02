@@ -24,7 +24,7 @@ function cone(g: GeoBuilder, z0: number, z1: number, radius: number, color: numb
 
 /** Low-poly blob: an icosahedron, squashed a little, for deciduous crowns. */
 function blob(radius: number, z: number, detail: 0 | 1, squash: number): THREE.BufferGeometry {
-  const g = new THREE.IcosahedronGeometry(radius, detail).toNonIndexed();
+  const g = new THREE.IcosahedronGeometry(radius, detail);
   g.scale(1, squash, 1);
   g.translate(0, z, 0);
   const n = g.getAttribute("position").count;

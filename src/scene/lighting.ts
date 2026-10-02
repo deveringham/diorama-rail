@@ -47,6 +47,10 @@ export class Lighting {
     this.sun.castShadow = on;
   }
 
+  private mix(out: THREE.Color, c0: number, c1: number, f: number): void {
+    out.lerpColors(this.a.setHex(c0), this.b.setHex(c1), f);
+  }
+
   /** Apply the time of day (hours, wraps at 24). */
   setHour(hour: number): void {
     const h = ((hour % 24) + 24) % 24;
@@ -55,12 +59,11 @@ export class Lighting {
     const k0 = DAY_KEYS[k];
     const k1 = DAY_KEYS[k + 1];
     const f = (h - k0.hour) / (k1.hour - k0.hour);
-    const mix = (out: THREE.Color, c0: number, c1: number) => out.lerpColors(this.a.setHex(c0), this.b.setHex(c1), f);
-    mix(this.sky, k0.sky, k1.sky);
+    this.mix(this.sky, k0.sky, k1.sky, f);
     this.fog.color.copy(this.sky);
-    mix(this.sun.color, k0.sun, k1.sun);
-    mix(this.hemi.color, k0.hemiSky, k1.hemiSky);
-    mix(this.hemi.groundColor, k0.hemiGround, k1.hemiGround);
+    this.mix(this.sun.color, k0.sun, k1.sun, f);
+    this.mix(this.hemi.color, k0.hemiSky, k1.hemiSky, f);
+    this.mix(this.hemi.groundColor, k0.hemiGround, k1.hemiGround, f);
     this.sun.intensity = k0.sunI + (k1.sunI - k0.sunI) * f;
     this.hemi.intensity = k0.hemiI + (k1.hemiI - k0.hemiI) * f;
     this.windows = k0.windows + (k1.windows - k0.windows) * f;

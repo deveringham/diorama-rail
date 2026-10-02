@@ -2,6 +2,7 @@
 // pipeline sees fully-populated objects. Unknown keys are errors, to catch typos.
 
 import { z } from "zod";
+import { TRAIN_CATALOG } from "./catalog";
 
 const Vec2 = z.tuple([z.number(), z.number()]).describe("[x, y] in metres; x = east, y = north");
 const Id = z.string().regex(/^[a-z][a-z0-9-]*$/, "ids must match /^[a-z][a-z0-9-]*$/ (lowercase, digits, dashes)");
@@ -56,7 +57,7 @@ const Station = z.strictObject({
 
 const Service = z.strictObject({
   id: Id,
-  train: z.string().describe("Train type: regional-3, express-6, freight-10 or tram-2"),
+  train: z.string().describe(`Train type id: ${Object.keys(TRAIN_CATALOG).join(", ")}`),
   color: z.string().regex(/^#[0-9a-fA-F]{6}$/, "color must be a hex string like #c8553d").optional(),
   route: z.array(Id).min(1).describe("Ordered track ids; consecutive ids must share a junction"),
   mode: z.enum(["loop", "shuttle"]),

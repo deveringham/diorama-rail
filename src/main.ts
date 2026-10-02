@@ -1,6 +1,7 @@
 // Browser entry: loads the layout named in the URL, builds world + sim + scene,
 // runs the fixed-step loop, handles keys, HUD, hot reload and screenshot mode.
 // URL: ?layout=valley-loop&seed=N&t=SECONDS&view=overview|top|follow&shot=1
+//      &cam=x,y,z,tx,ty,tz (optional eye and target in model metres, for close-up shots)
 
 import * as THREE from "three";
 import * as api from "./api";
@@ -19,6 +20,7 @@ declare global {
     dr: unknown;
     __drReady?: boolean;
     __drError?: unknown;
+    __drStats?: { calls: number; triangles: number };
   }
 }
 
@@ -28,6 +30,7 @@ const layoutUrl = /[/.]/.test(layoutName) ? layoutName : `layouts/${layoutName}.
 const shot = params.get("shot") === "1";
 const view = params.get("view") ?? "overview";
 const startAt = Number(params.get("t") ?? 0);
+const cam = params.get("cam")?.split(",").map(Number);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance", preserveDrawingBuffer: shot });
 renderer.setPixelRatio(shot ? 1 : Math.min(devicePixelRatio, 1.5));
@@ -168,10 +171,12 @@ async function start(): Promise<void> {
   if (shot) {
     if (view === "top") rig.top(world!);
     if (view === "follow") rig.cycleFollow(snap.trains.length);
+    if (cam?.length === 6 && cam.every(Number.isFinite)) rig.lookFrom(cam);
     rig.update(0, snap, true);
     // Two frames so shadow maps and instance buffers are settled before the capture.
     frame(performance.now());
     frame(performance.now());
+    window.__drStats = { calls: renderer.info.render.calls, triangles: renderer.info.render.triangles };
     requestAnimationFrame(() => { window.__drReady = true; });
   } else {
     requestAnimationFrame(frame);

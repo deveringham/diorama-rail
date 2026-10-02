@@ -79,7 +79,7 @@ export class Life {
       this.group.add(this.peopleMesh);
     }
     if (chimneys.length) {
-      const geo = new THREE.IcosahedronGeometry(0.9, 0).toNonIndexed();
+      const geo = new THREE.IcosahedronGeometry(0.9, 0);
       const n = geo.getAttribute("position").count;
       geo.setAttribute("color", new THREE.Float32BufferAttribute(new Array(n * 3).fill(1), 3));
       geo.computeVertexNormals();

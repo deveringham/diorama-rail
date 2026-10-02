@@ -324,7 +324,7 @@
           },
           "train": {
             "type": "string",
-            "description": "Train type: regional-3, express-6, freight-10 or tram-2"
+            "description": "Train type id: regional-3, express-6, freight-10, tram-2"
           },
           "color": {
             "type": "string",

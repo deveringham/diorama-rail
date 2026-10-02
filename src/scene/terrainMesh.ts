@@ -90,7 +90,7 @@ export function terrainMeshes(world: World): THREE.Object3D[] {
   const ground = new THREE.Mesh(g.build(), flatMaterial());
   ground.name = "terrain";
   ground.receiveShadow = true;
-  ground.castShadow = true;
+  ground.castShadow = false;     // 175k triangles; flat shading already shows the relief
   const out: THREE.Object3D[] = [ground];
   if (sea !== null && minZ < sea) out.push(waterMesh(world, sea));
   return out;

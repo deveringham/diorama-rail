@@ -1,5 +1,5 @@
 // npm run screenshot -- layouts/x.json [--out shot.png] [--t 120] [--view overview|top|follow]
-//                      [--size 1600x1000] [--url http://localhost:5173]
+//                      [--size 1600x1000] [--url http://localhost:5173] [--cam x,y,z,tx,ty,tz]
 // Builds and previews the app on a free port (or reuses a running server via --url),
 // renders the layout in headless Chromium (SwiftShader WebGL) and saves a PNG.
 
@@ -21,6 +21,7 @@ const { values, positionals } = parseArgs({
     view: { type: "string", default: "overview" },
     size: { type: "string", default: "1600x1000" },
     url: { type: "string" },
+    cam: { type: "string" },
   },
 });
 
@@ -64,7 +65,7 @@ async function main(): Promise<number> {
     const page = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: 1 });
     page.on("console", (m) => { if (m.type() === "error") console.error("[page]", m.text()); });
     page.on("pageerror", (e) => console.error("[page]", e.message));
-    const q = new URLSearchParams({ layout: layoutParam, t: values.t, view: values.view, shot: "1" });
+    const q = new URLSearchParams({ layout: layoutParam, t: values.t, view: values.view, shot: "1", ...(values.cam ? { cam: values.cam } : {}) });
     await page.goto(`${base.replace(/\/$/, "")}/?${q}`);
     await page.waitForFunction(() => window.__drReady === true, undefined, { timeout: READY_TIMEOUT, polling: 250 });
     const err = await page.evaluate(() => window.__drError);
@@ -73,7 +74,8 @@ async function main(): Promise<number> {
       return 1;
     }
     await page.screenshot({ path: values.out });
-    console.log(`wrote ${values.out}`);
+    const stats = await page.evaluate(() => window.__drStats);
+    console.log(`wrote ${values.out}${stats ? ` (${stats.calls} draw calls, ${(stats.triangles / 1000).toFixed(0)}k triangles)` : ""}`);
     return 0;
   } finally {
     await browser.close();
