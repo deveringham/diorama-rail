@@ -11,6 +11,7 @@ export { buildWorld, validate, type World } from "./model/build";
 export type { Issue, Report } from "./model/validate";
 export { Sim, simulate, type SimReport, type SimSnapshot, type SimEvent } from "./sim/sim";
 export { TRAIN_CATALOG } from "./model/catalog";
+export { OBJECT_LIBRARY } from "./model/objectLibrary";
 
 const f0 = (x: number) => x.toFixed(0);
 
@@ -82,6 +83,11 @@ export function query(world: World) {
           out.push(`  ${s.id} ${s.train}×${s.count} ${s.mode} route [${s.route.join(", ")}] stops [${s.stops.join(", ")}] path ${r ? f0(r.length) : "?"} m`);
         }
       }
+      const counts = new Map<string, number>();
+      for (const p of world.scenery) counts.set(p.object, (counts.get(p.object) ?? 0) + 1);
+      out.push(`Scenery: ${[...counts].sort((a, b) => b[1] - a[1]).map(([id, n]) => `${id}×${n}`).join(", ") || "none"}`);
+      const custom = Object.keys(L.objects);
+      out.push(`Objects available: ${[...world.objects.keys()].sort().join(", ")}${custom.length ? ` (defined by this layout: ${custom.join(", ")})` : ""}`);
       const st = world.stats;
       out.push(`Stats: ${Object.entries(st).map(([k, v]) => `${k} ${v}`).join(", ")}`);
       return out.join("\n");

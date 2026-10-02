@@ -21,7 +21,6 @@ export function base(): Fixture {
     tracks: [{ id: "main", kind: "loop", minRadius: 60, points: [[200, 200], [800, 200], [800, 600], [200, 600]] }],
     stations: [{ id: "a", name: "A", track: "main", at: 250, length: 120 }],
     services: [{ id: "s", train: "regional-3", route: ["main"], mode: "loop", stops: ["a"] }],
-    scenery: { scatterTrees: 0 },
   };
 }
 

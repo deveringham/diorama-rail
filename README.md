@@ -1,10 +1,11 @@
 # Diorama Rail
 
-A model railway to watch in the browser: low-poly terrain, track, stations, towns
-and forests on a diorama block, with trains running on their own. A layout is one
-JSON file; everything visible is derived from it plus a seed. Layouts can be
-validated, simulated and screenshotted from the command line, so an LLM (or you)
-can write and repair them in a loop.
+A model railway to watch in the browser: low-poly terrain, track, stations,
+buildings and trees on a diorama block, with trains running on their own. A
+layout is one JSON file; everything visible is derived from it plus a seed —
+including its scenery objects, which are themselves small JSON models built from
+primitives. Layouts and objects can be validated, simulated and screenshotted
+from the command line, so an LLM (or you) can write and repair them in a loop.
 
 ![](docs/valley-loop.png)
 
@@ -22,7 +23,9 @@ Layout errors appear in a red panel.
 
 URL parameters: `layout=<name>` (file in `layouts/`), `seed=N` (override the
 seed), `t=SECONDS` (pre-run the simulation), `view=overview|top|follow`, `shot=1`
-(screenshot mode), `cam=x,y,z,tx,ty,tz` (eye and target in model metres).
+(screenshot mode), `cam=x,y,z,tx,ty,tz` (eye and target in model metres),
+`object=<id>[,<id>…]` or `object=*` (preview scenery objects alone, with
+`season=summer|autumn|winter`).
 
 ### Controls
 
@@ -48,6 +51,8 @@ In the browser console, `dr` holds the API plus `world`, `sim`, `scene` and
 npm run check -- layouts/valley-loop.json [--json]          # validate; exit 1 on errors
 npm run simulate -- layouts/valley-loop.json --minutes 30   # per-service stops, speed, waits; exit 1 on deadlock
 npm run screenshot -- layouts/valley-loop.json --out shot.png --t 120 --view top --size 1600x1000
+npm run screenshot -- layouts/valley-loop.json --object windmill --out mill.png     # one object alone
+npm run screenshot -- layouts/valley-loop.json --object all --season winter         # every object
 npm run schema                                              # writes docs/schema.json
 npm test                                                    # vitest: geometry, validation, sim invariants
 npm run typecheck
@@ -56,10 +61,13 @@ npm run typecheck
 `screenshot` builds the app, serves it with `vite preview` on a free port (or
 uses `--url http://localhost:5173` to reuse a running dev server), renders in
 headless Chromium with SwiftShader WebGL and prints draw calls and triangles.
-Layout files outside `layouts/` work too.
+Layout files outside `layouts/` work too. With `--object` it renders just those
+scenery objects (built-in and the layout's own) on a small plinth, labelled.
+The same preview is live in the browser at `?layout=valley-loop&object=*`.
 
 Writing layouts: read [docs/LAYOUT_GUIDE.md](docs/LAYOUT_GUIDE.md) — coordinates,
-rules of thumb, every validation code with a fix, and the authoring loop.
+placing scenery, designing objects, rules of thumb, every validation code with a
+fix, and the authoring loop.
 
 ## How it fits together
 
@@ -88,20 +96,25 @@ Use it as a service's `train`. Meshes come from `shape` (`multiple-unit`,
 `loco-hauled`, `tram`, `freight`); `locoLength` sets a different first vehicle.
 Run `npm run schema` so the schema description lists it.
 
-**A new building variant** —
-1. `src/model/catalog.ts`: add the name to `HOUSE_VARIANTS` and its footprint
-   radius and triangle estimate to `HOUSE_INFO`.
-2. `src/scene/palette.ts`: add its roof colour to `PALETTE.roofs`.
-3. `src/scene/sceneryMesh.ts`: add a `case` to `houseGeometry()` building walls
-   (white, tinted per house), roof and windows with `GeoBuilder`.
-4. `src/model/scenery.ts`: add it to a town `wish` list in `placeScenery()`.
+**A new building, tree or other object** — describe it as parts in the layout's
+`objects` and place it in `scenery`; no code changes:
+
+```jsonc
+"objects": { "kiosk": { "tint": ["#3d7d8c"], "parts": [
+  { "shape": "box", "size": [3, 2, 2.4] },
+  { "shape": "pyramid", "at": [0, 0, 2.4], "size": [3.6, 2.6, 0.8], "color": "roof" } ] } },
+"scenery": [ { "object": "kiosk", "at": [700, 215], "face": "track" } ]
+```
+
+Preview it with `npm run screenshot -- my.json --object kiosk`. To make it
+available to every layout, add the same entry to `src/model/objectLibrary.ts`.
 
 **A new validation rule** —
 1. `src/model/validate.ts`: write `checkSomething(...)` returning `Issue[]` built
    with `error(code, message, path, at?)` or `warning(...)`.
 2. `src/model/build.ts`: call it where its inputs exist, e.g.
    `issues.push(...checkSomething(layout, tracks));`.
-3. Add the code to `docs/LAYOUT_GUIDE.md` §4 and a failing fixture to
+3. Add the code to `docs/LAYOUT_GUIDE.md` §6 and a failing fixture to
    `test/validate.test.ts`.
 
 ## Notes on v0.1
@@ -121,7 +134,17 @@ The spec's layout did not validate as written, so it was adjusted minimally:
 
 The intent is kept: an oval round a valley, a branch climbing to a hill village
 through a tunnel (and, as a bonus, crossing the main line on a viaduct), three
-services and two towns.
+services and two towns. Bergdorf's platform is on the west (`left`) side, where
+the hillside is level with the track.
+
+### Scenery: objects instead of towns and forests
+The spec's procedural `towns`, `forests` and `scatterTrees` are replaced by
+explicit scenery: every building and tree is an object (a JSON model of
+primitive parts), placed one by one or scattered over an area. Built-in objects
+live in `src/model/objectLibrary.ts`; a layout can add or override objects in
+its `objects` section. Both example layouts now lay out their towns street by
+street and define a few objects of their own (windmill, hay bale, lighthouse,
+fishing boat, jetty).
 
 ### Interpretations and limitations
 - **Fixed routes.** A service follows one path through the graph. Two shuttles
@@ -145,5 +168,7 @@ services and two towns.
 - The terrain mesh receives but does not cast shadows (it would double its
   175k-triangle cost); trees, buildings, structures and trains cast them.
 - The renderer's triangle count includes the shadow pass. Both examples render
-  in about 30 draw calls and ~400k triangles (shadow pass included).
+  in about 75 draw calls and ~420k triangles (shadow pass included). Each object
+  type in use costs 2–3 instanced draw calls (fixed colours, tinted parts,
+  glowing windows), however many times it is placed.
 - Turnouts are drawn as overlapping track; no signals, sound or timetables.

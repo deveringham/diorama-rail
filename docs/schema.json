@@ -301,6 +301,19 @@
               "right",
               "both"
             ]
+          },
+          "building": {
+            "default": "station-building",
+            "description": "Object drawn as the station building beside the platform, or null for none",
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -375,65 +388,484 @@
         "additionalProperties": false
       }
     },
-    "scenery": {
+    "objects": {
       "default": {},
+      "description": "Custom scenery objects for this layout, by id; they may also redefine built-in ids",
       "type": "object",
-      "properties": {
-        "towns": {
-          "default": [],
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "near": {
-                "anyOf": [
-                  {
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9-]*$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "description": "What it is, for people and LLMs reading the layout",
+            "type": "string"
+          },
+          "parts": {
+            "minItems": 1,
+            "maxItems": 300,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "shape": {
+                  "type": "string",
+                  "enum": [
+                    "box",
+                    "pyramid",
+                    "gable",
+                    "cylinder",
+                    "cone",
+                    "sphere",
+                    "panel"
+                  ],
+                  "description": "box | pyramid (a box narrowing to a point) | gable (triangular roof prism, ridge along x) | cylinder | cone | sphere | panel (only the box's front (+x) face, one-sided: windows, doors, signs)"
+                },
+                "at": {
+                  "default": [
+                    0,
+                    0,
+                    0
+                  ],
+                  "description": "Bottom centre of the part in the object frame [x front, y left, z up] (m); negative z sinks it into the ground",
+                  "type": "array",
+                  "prefixItems": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "items": false,
+                  "minItems": 3,
+                  "maxItems": 3
+                },
+                "size": {
+                  "type": "array",
+                  "prefixItems": [
+                    {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    }
+                  ],
+                  "items": false,
+                  "minItems": 3,
+                  "maxItems": 3,
+                  "description": "Extent [along x, along y, height] in metres, before rotation"
+                },
+                "rotate": {
+                  "default": [
+                    0,
+                    0,
+                    0
+                  ],
+                  "description": "Degrees about x, then y, then z (right-handed), pivoting on `at`",
+                  "type": "array",
+                  "prefixItems": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "items": false,
+                  "minItems": 3,
+                  "maxItems": 3
+                },
+                "color": {
+                  "default": "tint",
+                  "description": "\"#rrggbb\", a named colour, or \"tint\": the per-placement colour picked from the object's `tint`",
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^#[0-9a-fA-F]{6}$"
+                    },
+                    {
+                      "type": "string",
+                      "enum": [
+                        "wall",
+                        "plaster",
+                        "brick",
+                        "stone",
+                        "concrete",
+                        "wood",
+                        "timber",
+                        "metal",
+                        "dark",
+                        "white",
+                        "red",
+                        "yellow",
+                        "blue",
+                        "green",
+                        "roof",
+                        "roof-slate",
+                        "roof-dark",
+                        "roof-grey",
+                        "chimney",
+                        "trunk",
+                        "window",
+                        "lamp",
+                        "snow",
+                        "sand",
+                        "water",
+                        "grass",
+                        "foliage",
+                        "needles"
+                      ]
+                    },
+                    {
+                      "type": "string",
+                      "const": "tint"
+                    }
+                  ]
+                },
+                "winter": {
+                  "description": "Colour used in winter instead, e.g. \"snow\" on a roof",
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^#[0-9a-fA-F]{6}$"
+                    },
+                    {
+                      "type": "string",
+                      "enum": [
+                        "wall",
+                        "plaster",
+                        "brick",
+                        "stone",
+                        "concrete",
+                        "wood",
+                        "timber",
+                        "metal",
+                        "dark",
+                        "white",
+                        "red",
+                        "yellow",
+                        "blue",
+                        "green",
+                        "roof",
+                        "roof-slate",
+                        "roof-dark",
+                        "roof-grey",
+                        "chimney",
+                        "trunk",
+                        "window",
+                        "lamp",
+                        "snow",
+                        "sand",
+                        "water",
+                        "grass",
+                        "foliage",
+                        "needles"
+                      ]
+                    },
+                    {
+                      "type": "string",
+                      "const": "tint"
+                    }
+                  ]
+                },
+                "seasons": {
+                  "description": "Only draw this part in these seasons",
+                  "minItems": 1,
+                  "type": "array",
+                  "items": {
                     "type": "string",
-                    "pattern": "^[a-z][a-z0-9-]*$"
-                  },
-                  {
-                    "type": "array",
-                    "prefixItems": [
-                      {
-                        "type": "number"
-                      },
-                      {
-                        "type": "number"
-                      }
-                    ],
-                    "items": false,
-                    "minItems": 2,
-                    "maxItems": 2,
-                    "description": "[x, y] in metres; x = east, y = north"
+                    "enum": [
+                      "summer",
+                      "autumn",
+                      "winter"
+                    ]
                   }
-                ],
-                "description": "Station id or [x, y]"
+                },
+                "sides": {
+                  "description": "cylinder / cone: number of sides (default 8 / 6)",
+                  "type": "integer",
+                  "minimum": 3,
+                  "maximum": 32
+                },
+                "taper": {
+                  "description": "box, pyramid, cylinder, cone: top size as a fraction of the bottom, one number or [x, y]. Defaults: box and cylinder 1, pyramid and cone 0",
+                  "anyOf": [
+                    {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    },
+                    {
+                      "type": "array",
+                      "prefixItems": [
+                        {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 1
+                        },
+                        {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 1
+                        }
+                      ],
+                      "items": false,
+                      "minItems": 2,
+                      "maxItems": 2
+                    }
+                  ]
+                },
+                "ridge": {
+                  "description": "gable: where the ridge sits across the width, 0..1 (0.5 centred; 0 or 1 makes a lean-to)",
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "detail": {
+                  "description": "sphere: 0 = 20 faces (default), 1 = 80 faces",
+                  "anyOf": [
+                    {
+                      "type": "number",
+                      "const": 0
+                    },
+                    {
+                      "type": "number",
+                      "const": 1
+                    }
+                  ]
+                },
+                "glow": {
+                  "description": "Glows warmly at night (default: true for colours \"window\" and \"lamp\")",
+                  "type": "boolean"
+                },
+                "smoke": {
+                  "description": "A chimney: smoke rises from the top of this part when the placement smokes",
+                  "type": "boolean"
+                },
+                "grid": {
+                  "default": [
+                    1,
+                    1,
+                    1
+                  ],
+                  "description": "Number of copies along x, y and z (windows, posts, columns)",
+                  "type": "array",
+                  "prefixItems": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 50
+                    },
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 50
+                    },
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 50
+                    }
+                  ],
+                  "items": false,
+                  "minItems": 3,
+                  "maxItems": 3
+                },
+                "step": {
+                  "default": [
+                    0,
+                    0,
+                    0
+                  ],
+                  "description": "Spacing between grid copies [x, y, z] (m)",
+                  "type": "array",
+                  "prefixItems": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "items": false,
+                  "minItems": 3,
+                  "maxItems": 3
+                },
+                "mirror": {
+                  "description": "Also draw mirror images: x flips front↔back (x → −x), y flips left↔right (y → −y), xy both",
+                  "type": "string",
+                  "enum": [
+                    "x",
+                    "y",
+                    "xy"
+                  ]
+                }
               },
-              "radius": {
-                "type": "number",
-                "exclusiveMinimum": 0
+              "required": [
+                "shape",
+                "size"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "tint": {
+            "default": "walls",
+            "description": "Colours for parts coloured \"tint\": one is picked per placement. A palette list (walls, roofs, foliage, needles, people; foliage and needles follow the season) or an array of colours",
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "walls",
+                  "roofs",
+                  "foliage",
+                  "needles",
+                  "people"
+                ]
               },
-              "density": {
-                "type": "number",
-                "minimum": 0,
-                "maximum": 1
+              {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^#[0-9a-fA-F]{6}$"
+                    },
+                    {
+                      "type": "string",
+                      "enum": [
+                        "wall",
+                        "plaster",
+                        "brick",
+                        "stone",
+                        "concrete",
+                        "wood",
+                        "timber",
+                        "metal",
+                        "dark",
+                        "white",
+                        "red",
+                        "yellow",
+                        "blue",
+                        "green",
+                        "roof",
+                        "roof-slate",
+                        "roof-dark",
+                        "roof-grey",
+                        "chimney",
+                        "trunk",
+                        "window",
+                        "lamp",
+                        "snow",
+                        "sand",
+                        "water",
+                        "grass",
+                        "foliage",
+                        "needles"
+                      ]
+                    }
+                  ]
+                }
               }
-            },
-            "required": [
-              "near",
-              "radius",
-              "density"
-            ],
-            "additionalProperties": false
+            ]
+          },
+          "smoke": {
+            "default": 0,
+            "description": "Share of placements whose chimney parts smoke (a placement's `smoke` overrides)",
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "maxSlope": {
+            "default": 30,
+            "description": "Steepest ground (degrees) a scatter will put this object on",
+            "type": "number",
+            "minimum": 0,
+            "maximum": 90
           }
         },
-        "forests": {
-          "default": [],
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "at": {
+        "required": [
+          "parts"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "scenery": {
+      "default": [],
+      "description": "Placed objects and scattered groups",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "object": {
+            "description": "Place one object (built-in or from `objects`) at `at`",
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$"
+          },
+          "scatter": {
+            "description": "Scatter many objects, picked at random from these ids (repeat an id to make it more common)",
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]*$"
+            }
+          },
+          "at": {
+            "description": "object: where it stands. scatter: circle centre (omit with radius for the whole map)",
+            "type": "array",
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "items": false,
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "radius": {
+            "description": "scatter: circle radius (m)",
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "spacing": {
+            "description": "scatter: minimum distance between items (m)",
+            "type": "number",
+            "minimum": 1.5
+          },
+          "rotation": {
+            "description": "object: degrees counter-clockwise from east that the object's front (+x) faces; default 0",
+            "type": "number"
+          },
+          "face": {
+            "description": "object: turn the front toward the nearest track (\"track\") or toward a point [x, y]; overrides rotation",
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "track"
+              },
+              {
                 "type": "array",
                 "prefixItems": [
                   {
@@ -447,33 +879,87 @@
                 "minItems": 2,
                 "maxItems": 2,
                 "description": "[x, y] in metres; x = east, y = north"
-              },
-              "radius": {
+              }
+            ]
+          },
+          "scale": {
+            "description": "object: size factor (default 1). scatter: [min, max] range (default [0.8, 1.2])",
+            "anyOf": [
+              {
                 "type": "number",
                 "exclusiveMinimum": 0
               },
-              "density": {
-                "type": "number",
-                "minimum": 0,
-                "maximum": 1
+              {
+                "type": "array",
+                "prefixItems": [
+                  {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  }
+                ],
+                "items": false,
+                "minItems": 2,
+                "maxItems": 2
               }
-            },
-            "required": [
-              "at",
-              "radius",
-              "density"
-            ],
-            "additionalProperties": false
+            ]
+          },
+          "z": {
+            "description": "object: absolute base height (m); default the ground (or the platform top on a platform)",
+            "type": "number"
+          },
+          "color": {
+            "description": "object: colour for its \"tint\" parts; default one picked from the object's tint list",
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^#[0-9a-fA-F]{6}$"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "wall",
+                  "plaster",
+                  "brick",
+                  "stone",
+                  "concrete",
+                  "wood",
+                  "timber",
+                  "metal",
+                  "dark",
+                  "white",
+                  "red",
+                  "yellow",
+                  "blue",
+                  "green",
+                  "roof",
+                  "roof-slate",
+                  "roof-dark",
+                  "roof-grey",
+                  "chimney",
+                  "trunk",
+                  "window",
+                  "lamp",
+                  "snow",
+                  "sand",
+                  "water",
+                  "grass",
+                  "foliage",
+                  "needles"
+                ]
+              }
+            ]
+          },
+          "smoke": {
+            "description": "object: whether its chimneys smoke; default by the object's smoke share",
+            "type": "boolean"
           }
         },
-        "scatterTrees": {
-          "default": 0.15,
-          "type": "number",
-          "minimum": 0,
-          "maximum": 1
-        }
-      },
-      "additionalProperties": false
+        "additionalProperties": false
+      }
     },
     "style": {
       "default": {},

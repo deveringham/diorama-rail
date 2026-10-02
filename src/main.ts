@@ -2,6 +2,7 @@
 // runs the fixed-step loop, handles keys, HUD, hot reload and screenshot mode.
 // URL: ?layout=valley-loop&seed=N&t=SECONDS&view=overview|top|follow&shot=1
 //      &cam=x,y,z,tx,ty,tz (optional eye and target in model metres, for close-up shots)
+//      &object=id[,id...]|* (preview scenery objects alone; &season=summer|autumn|winter)
 
 import * as THREE from "three";
 import * as api from "./api";
@@ -10,7 +11,11 @@ import { Sim, DT, type SimSnapshot } from "./sim/sim";
 import { buildScene, type DioramaScene } from "./scene/buildScene";
 import { CameraRig } from "./scene/camera";
 import { Hud } from "./scene/hud";
-import { LIGHT } from "./scene/palette";
+import { LIGHT, type Season } from "./scene/palette";
+import { buildPreview } from "./scene/objectPreview";
+import { LayoutSchema } from "./model/schema";
+import { objectCatalog } from "./model/scenery";
+import { type Issue, error, zodIssues } from "./model/validate";
 
 const MAX_STEPS_PER_FRAME = 8;
 const SPEEDS = { Digit1: 1, Digit2: 2, Digit3: 4 } as const;
@@ -31,6 +36,7 @@ const shot = params.get("shot") === "1";
 const view = params.get("view") ?? "overview";
 const startAt = Number(params.get("t") ?? 0);
 const cam = params.get("cam")?.split(",").map(Number);
+const objectParam = params.get("object");
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance", preserveDrawingBuffer: shot });
 renderer.setPixelRatio(shot ? 1 : Math.min(devicePixelRatio, 1.5));
@@ -227,4 +233,66 @@ async function start(): Promise<void> {
     requestAnimationFrame(frame);
   }
 }
-void start();
+// --- object preview ------------------------------------------------------------
+const LABEL_CSS = "position:fixed;transform:translate(-50%,-100%);padding:1px 6px;border-radius:4px;"
+  + "background:rgba(24,26,30,.7);color:#eef0f2;font:12px ui-monospace,Menlo,Consolas,monospace;pointer-events:none;white-space:nowrap";
+
+function failPreview(issues: Issue[]): void {
+  hud.showIssues(issues);
+  window.__drError = issues.map((i) => `${i.code} ${i.path}: ${i.message}`).join("\n");
+  window.__drReady = shot;
+}
+
+/** Renders scenery objects alone: the layout's own objects plus the built-in library. */
+async function startPreview(which: string): Promise<void> {
+  hud.hideAll();
+  let json: Record<string, unknown> = {};
+  try {
+    json = (await fetchLayout()) as Record<string, unknown>;
+  } catch {
+    // No layout: built-in objects only.
+  }
+  const parsed = LayoutSchema.shape.objects.safeParse(json.objects ?? {});
+  if (!parsed.success) return failPreview(zodIssues(parsed.error, ["objects"]));
+  const style = (json.style ?? {}) as { season?: string };
+  const season = (params.get("season") ?? style.season ?? "summer") as Season;
+  if (!["summer", "autumn", "winter"].includes(season)) return failPreview([error("SCHEMA", `unknown season '${season}'`, "season")]);
+  const objects = objectCatalog(parsed.data, season);
+  const ids = which === "*" ? [...objects.keys()].sort() : which.split(",").map((id) => id.trim());
+  const missing = ids.find((id) => !objects.has(id));
+  if (missing) return failPreview([error("UNKNOWN_REF", `unknown object '${missing}'; known: ${[...objects.keys()].sort().join(", ")}`, "object")]);
+
+  const preview = buildPreview(objects, ids, season);
+  rig.controls.target.copy(preview.frame(rig.camera));
+  rig.controls.autoRotate = !shot;
+  rig.controls.update();
+  const labels = preview.labels.map((l) => {
+    const el = document.createElement("div");
+    el.textContent = l.id;
+    el.style.cssText = LABEL_CSS;
+    document.body.append(el);
+    return { el, at: l.at };
+  });
+  const v = new THREE.Vector3();
+  const draw = () => {
+    rig.controls.update();
+    renderer.render(preview.scene, rig.camera);
+    for (const l of labels) {
+      v.copy(l.at).project(rig.camera);
+      l.el.style.left = `${((v.x + 1) / 2) * innerWidth}px`;
+      l.el.style.top = `${((1 - v.y) / 2) * innerHeight}px`;
+      l.el.style.display = ids.length > 1 && v.z < 1 ? "block" : "none";
+    }
+  };
+  if (shot) {
+    draw();
+    draw();
+    window.__drStats = { calls: renderer.info.render.calls, triangles: renderer.info.render.triangles };
+    requestAnimationFrame(() => { window.__drReady = true; });
+  } else {
+    const loop = () => { requestAnimationFrame(loop); draw(); };
+    loop();
+  }
+}
+
+void (objectParam ? startPreview(objectParam) : start());

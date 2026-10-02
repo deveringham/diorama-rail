@@ -7,13 +7,13 @@ import { type TrackGeom, type Junction, type Graph, trackOrder, buildTrack, junc
 import { type Profile, type Span, buildProfile, classify, profileZ, structureAt } from "./heights";
 import { type Terrain, buildTerrain, baseZ, shapeCorridor } from "./terrain";
 import { type RoutePath, buildRoute } from "./routes";
-import { type StationGeom, type Placement, buildStations, placeScenery } from "./scenery";
+import { type StationGeom, type Placement, type ObjectInfo, buildStations, placeScenery, objectCatalog } from "./scenery";
 import {
   type Issue, type Report, type TrackPoint, error, makeReport, zodIssues, checkReferences, checkJunctionPosition,
   checkBounds, checkConflicts, checkStations, checkServices,
 } from "./validate";
 import { pointAt, sampleS } from "./geometry";
-import { HOUSE_INFO, TREE_TRIS, TRAIN_CATALOG, isTrainType, trainLength, type HouseVariant } from "./catalog";
+import { TRAIN_CATALOG, isTrainType, trainLength } from "./catalog";
 import { SpatialHash } from "../util/spatial";
 
 const POINT_STEP = 2;      // m between dense track points (conflicts, shaping, queries)
@@ -31,6 +31,7 @@ export type World = {
   pointHash: SpatialHash<TrackPoint>;
   stations: StationGeom[];
   routes: Map<string, RoutePath>;
+  objects: Map<string, ObjectInfo>;   // every usable object definition, meshed for the season
   scenery: Placement[];
   stats: Record<string, number>;
 };
@@ -109,12 +110,15 @@ export function buildWorld(json: unknown): { world: World | null; report: Report
     if (res.route) routes.set(svc.id, res.route);
   });
   issues.push(...checkServices(layout, routes));
-  if (hasErrors(issues)) return { world: null, report: makeReport(issues) };
 
-  const stations = buildStations(layout, tracks, terrain);
-  const scenery = placeScenery(layout, tracks, terrain, pointHash, stations);
+  const stations = buildStations(layout);
+  const objects = objectCatalog(layout.objects, layout.style.season);
+  const placed = placeScenery({ layout, tracks, profiles, terrain, trackHash: pointHash, stations, objects });
+  issues.push(...placed.issues);
+  if (hasErrors(issues)) return { world: null, report: makeReport(issues) };
   const world: World = {
-    layout, tracks, order, junctions, graph, profiles, spans, terrain, points, pointHash, stations, routes, scenery, stats: {},
+    layout, tracks, order, junctions, graph, profiles, spans, terrain, points, pointHash, stations, routes, objects,
+    scenery: placed.placements, stats: {},
   };
   world.stats = computeStats(world);
   return { world, report: makeReport(issues, world.stats) };
@@ -131,19 +135,19 @@ function computeStats(w: World): Record<string, number> {
       if (sp.kind === "tunnel") tunnelLength += sp.s1 - sp.s0;
     }
   }
-  const trees = w.scenery.filter((p) => p.kind === "tree").length;
-  const houses = w.scenery.filter((p) => p.kind === "house");
+  const isTree = (id: string) => ["foliage", "needles"].includes(String(w.objects.get(id)!.def.tint));
+  const trees = w.scenery.filter((p) => isTree(p.object)).length;
+  const objectTris = w.scenery.reduce((a, p) => a + w.objects.get(p.object)!.mesh.triangles, 0);
   const trains = w.layout.services.reduce((a, s) => a + s.count, 0);
   const cars = w.layout.services.reduce((a, s) => a + s.count * (isTrainType(s.train) ? TRAIN_CATALOG[s.train].cars : 0), 0);
-  // Rough triangle budget: terrain grid + skirt, trees, houses, track (sleepers, rails, ballast), trains.
-  const triangles = 2 * w.terrain.nx * w.terrain.ny + 4 * (w.terrain.nx + w.terrain.ny)
-    + trees * TREE_TRIS + houses.reduce((a, h) => a + HOUSE_INFO[h.variant as HouseVariant].tris, 0)
-    + Math.round(trackLength / 0.65) * 10 + Math.round(trackLength / 2) * 22 + cars * 60 + w.stations.length * 400;
+  // Triangle budget: terrain grid + skirt, scenery objects, track (sleepers, rails, ballast), trains, platforms.
+  const triangles = 2 * w.terrain.nx * w.terrain.ny + 4 * (w.terrain.nx + w.terrain.ny) + objectTris
+    + Math.round(trackLength / 0.65) * 10 + Math.round(trackLength / 2) * 22 + cars * 60 + w.stations.length * 300;
   const r1 = (x: number) => Math.round(x);
   return {
     trackLength: r1(trackLength), tracks: w.tracks.size, junctions: w.junctions.length,
     bridgeLength: r1(bridgeLength), tunnelLength: r1(tunnelLength), stations: w.stations.length,
-    services: w.layout.services.length, trains, trees, houses: houses.length, triangles,
+    services: w.layout.services.length, trains, objects: w.scenery.length, trees, triangles,
   };
 }
 

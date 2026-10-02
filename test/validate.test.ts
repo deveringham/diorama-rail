@@ -2,7 +2,8 @@
 // passing cleanly. Each fixture starts from a valid base layout and breaks one thing.
 
 import { describe, it, expect } from "vitest";
-import { validate } from "../src/model/build";
+import { validate, buildWorld } from "../src/model/build";
+import { query } from "../src/api";
 import { simulate } from "../src/sim/sim";
 import { base, withBranch, example, type Fixture } from "./fixtures";
 
@@ -70,6 +71,12 @@ const cases: Case[] = [
   }],
   ["TRAIN_TOO_LONG", "warning", () => { const L = base(); L.services[0].train = "express-6"; return L; }],
   ["CAPACITY", "warning", () => { const L = base(); L.services[0].count = 12; return L; }],
+  ["SCENERY_ON_TRACK", "error", () => { const L = base(); L.scenery = [{ object: "house", at: [400, 203] }]; return L; }],
+  ["SCENERY_OVERLAP", "warning", () => {
+    const L = base();
+    L.scenery = [{ object: "house", at: [400, 300] }, { object: "barn", at: [402, 302] }];
+    return L;
+  }],
 ];
 
 describe("validation codes", () => {
@@ -120,5 +127,52 @@ describe.each(["valley-loop", "harbour-town"])("example %s", (name) => {
     expect(report.issues).toEqual([]);
     expect(report.ok).toBe(true);
     expect(report.stats.triangles).toBeLessThan(600_000);
+  });
+});
+
+describe("scenery placement", () => {
+  const world = (scenery: Fixture["scenery"], tweak: (L: Fixture) => void = () => {}) => {
+    const L = base();
+    L.scenery = scenery;
+    tweak(L);
+    return buildWorld(L);
+  };
+
+  it("reports unknown objects, positions off the board and malformed entries", () => {
+    const unknown = world([{ object: "spaceship", at: [400, 300] }]).report.issues;
+    expect(unknown.find((i) => i.code === "UNKNOWN_REF")?.path).toBe("scenery[0].object");
+    const schema = world([{ object: "house", scatter: ["conifer"], at: [400, 300] }]).report.issues;
+    expect(schema.filter((i) => i.code === "SCHEMA").map((i) => i.path)).toContain("scenery[0].scatter");
+    const bounds = world([{ object: "house", at: [1200, 300] }]).report.issues;
+    expect(bounds.find((i) => i.code === "OUT_OF_BOUNDS")?.path).toBe("scenery[0].at");
+  });
+
+  it("turns objects to face the track or a point", () => {
+    const { world: w } = world([{ object: "house", at: [400, 260], face: "track" }, { object: "house", at: [400, 400], face: [500, 400] }]);
+    const houses = w!.scenery.filter((p) => p.object === "house");
+    expect(houses[0].rotation).toBeCloseTo(-Math.PI / 2, 1);
+    expect(houses[1].rotation).toBeCloseTo(0, 6);
+  });
+
+  it("stands objects placed on a platform on its surface", () => {
+    const { world: w } = world([{ object: "lamp-post", at: [510, 196.3] }]);
+    const lamp = w!.scenery.find((p) => p.object === "lamp-post")!;
+    expect(lamp.z).toBeCloseTo(query(w!).pointAt("main", 250).z + 0.9, 1);
+  });
+
+  it("builds a station building unless it is set to null", () => {
+    expect(world([]).world!.scenery.some((p) => p.object === "station-building")).toBe(true);
+    expect(world([], (L) => { L.stations[0].building = null; }).world!.scenery.some((p) => p.object === "station-building")).toBe(false);
+  });
+
+  it("keeps scattered items off the track and uses custom objects", () => {
+    const { world: w, report } = world(
+      [{ scatter: ["conifer", "kiosk"], spacing: 15 }, { object: "kiosk", at: [500, 400], rotation: 45 }],
+      (L) => { L.objects = { kiosk: { parts: [{ shape: "box", size: [3, 2, 2.5] }, { shape: "pyramid", at: [0, 0, 2.5], size: [3.4, 2.4, 1], color: "roof" }] } }; },
+    );
+    expect(report.ok).toBe(true);
+    expect(w!.scenery.filter((p) => p.object === "kiosk").length).toBeGreaterThan(10);
+    const q = query(w!);
+    for (const p of w!.scenery.filter((s) => s.object === "conifer")) expect(q.trackAt(p.x, p.y, 6)).toBeNull();
   });
 });

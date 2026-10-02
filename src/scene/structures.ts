@@ -1,11 +1,11 @@
 // Structures (§8.3): bridge decks with piers and parapets, tunnel portals at
-// every ground↔tunnel transition, and station platforms, canopies, buildings
-// and benches. All merged into one static mesh.
+// every ground↔tunnel transition, and station platforms and canopies. All merged
+// into one static mesh. (Station buildings and benches are scenery objects.)
 
 import * as THREE from "three";
 import type { World } from "../model/build";
 import { groundZ, baseZ } from "../model/terrain";
-import { PLATFORM_OFFSET, PLATFORM_WIDTH } from "../model/scenery";
+import { PLATFORM_OFFSET, PLATFORM_WIDTH, PLATFORM_TOP } from "../model/scenery";
 import { PALETTE } from "./palette";
 import { GeoBuilder, flatMaterial } from "./geo";
 import { type Frame, frameAt, side } from "./trackMesh";
@@ -15,7 +15,6 @@ const DECK_HALF = 2.8;
 const DECK_TOP = -0.7;            // deck top relative to track z (under the ballast)
 const DECK_THICK = 1.1;
 const PIER_SPACING = 25;
-const PLATFORM_TOP = 0.9;         // above track z
 const CANOPY_HEIGHT = 4.2;        // above platform top
 
 export function structureMeshes(world: World): THREE.Object3D[] {
@@ -124,12 +123,4 @@ function station(world: World, g: GeoBuilder, st: World["stations"][number]): vo
       g.box(x, y, z, (c1 - c0) / m + 0.05, PLATFORM_WIDTH + 0.4, 0.3, f.h, PALETTE.canopy);
     }
   }
-  for (const b of st.benches) {
-    const [x, y, z] = side(frameAt(world, st.track, b.s), b.side * (PLATFORM_OFFSET + 1.1), PLATFORM_TOP);
-    g.box(x, y, z, 1.8, 0.6, 0.5, frameAt(world, st.track, b.s).h, PALETTE.bench);
-  }
-  // Station building: a long two-storey house with a hipped-look gable roof.
-  const bd = st.building;
-  g.box(bd.x, bd.y, bd.z - 3, 9, 16, 9.5, bd.rotation, PALETTE.stationWall);
-  g.gable(bd.x, bd.y, bd.z + 6.5, 16, 9, 3.6, bd.rotation + Math.PI / 2, PALETTE.stationRoof);
 }

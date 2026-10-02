@@ -9,6 +9,7 @@ import type { Span } from "./heights";
 import type { RoutePath } from "./routes";
 import { radiusAt, pointAt } from "./geometry";
 import { isTrainType, TRAIN_CATALOG, trainLength } from "./catalog";
+import { OBJECT_LIBRARY } from "./objectLibrary";
 import { SpatialHash } from "../util/spatial";
 import { mod, round } from "../util/vec";
 
@@ -42,9 +43,10 @@ export function jsonPath(parts: ReadonlyArray<PropertyKey>): string {
   return parts.reduce<string>((acc, p) => (typeof p === "number" ? `${acc}[${p}]` : acc ? `${acc}.${String(p)}` : String(p)), "");
 }
 
-export function zodIssues(err: ZodError): Issue[] {
+/** Zod issues as SCHEMA errors; `prefix` places a sub-schema's paths inside the layout. */
+export function zodIssues(err: ZodError, prefix: PropertyKey[] = []): Issue[] {
   return err.issues.map((i) => {
-    const where = jsonPath(i.path) || "(root)";
+    const where = jsonPath([...prefix, ...i.path]) || "(root)";
     let msg = i.message;
     if (i.code === "unrecognized_keys") msg = `unknown key${i.keys.length > 1 ? "s" : ""} ${i.keys.map((k) => `"${k}"`).join(", ")}; check spelling against docs/schema.json`;
     else if (i.code === "invalid_type" && i.input === undefined) msg = `missing required field (expected ${i.expected})`;
@@ -84,8 +86,14 @@ export function checkReferences(layout: Layout): Issue[] {
     s.route.forEach((r, k) => { if (!trackIds.has(r)) unknown("track", r, `services[${i}].route[${k}]`, trackIds); });
     s.stops.forEach((r, k) => { if (!stationIds.has(r)) unknown("station", r, `services[${i}].stops[${k}]`, stationIds); });
   });
-  layout.scenery.towns.forEach((t, i) => {
-    if (typeof t.near === "string" && !stationIds.has(t.near)) unknown("station", t.near, `scenery.towns[${i}].near`, stationIds);
+  const objectIds = new Set([...Object.keys(OBJECT_LIBRARY), ...Object.keys(layout.objects)]);
+  const known = () => new Set([...objectIds].sort());
+  layout.stations.forEach((s, i) => {
+    if (s.building && !objectIds.has(s.building)) unknown("object", s.building, `stations[${i}].building`, known());
+  });
+  layout.scenery.forEach((e, i) => {
+    if (e.object && !objectIds.has(e.object)) unknown("object", e.object, `scenery[${i}].object`, known());
+    e.scatter?.forEach((id, k) => { if (!objectIds.has(id)) unknown("object", id, `scenery[${i}].scatter[${k}]`, known()); });
   });
   return issues;
 }

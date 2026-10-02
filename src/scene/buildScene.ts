@@ -26,7 +26,7 @@ export function buildScene(world: World, snap: SimSnapshot): DioramaScene {
   const scene = new THREE.Scene();
   const statics = [...terrainMeshes(world), ...trackMeshes(world), ...structureMeshes(world)];
   scene.add(...statics);
-  const scenery = new SceneryMeshes(world);
+  const scenery = new SceneryMeshes(world.objects, world.scenery);
   const trains = new TrainMeshes(world, snap);
   const life = new Life(world, scenery.chimneys);
   scene.add(scenery.group, trains.group, life.group);
