@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "name": "Harbour Town",
+  "seed": 11,
+  "terrain": {
+    "size": [1600, 1000],
+    "cell": 4,
+    "baseHeight": -6,
+    "seaLevel": 0,
+    "features": [
+      { "at": [200, 1250], "radius": 1100, "height": 38 },
+      { "at": [1400, 1250], "radius": 1100, "height": 38 },
+      { "at": [800, 1350], "radius": 1000, "height": 20 },
+      { "at": [830, 370], "radius": 170, "height": -13 },
+      { "at": [1250, 820], "radius": 260, "height": 25 }
+    ],
+    "noise": { "amplitude": 2.5, "scale": 160 }
+  },
+  "tracks": [
+    {
+      "id": "coast",
+      "kind": "line",
+      "minRadius": 300,
+      "points": [{ "at": [120, 450], "z": 3.5 }, [700, 430], [1000, 440], { "at": [1480, 500], "z": 4.5 }]
+    },
+    {
+      "id": "passing",
+      "kind": "line",
+      "minRadius": 150,
+      "from": { "track": "coast", "at": 500, "heading": "backward" },
+      "points": [{ "at": [565, 440.7], "z": 3.7 }, { "at": [365, 447.6], "z": 3.7 }],
+      "to": { "track": "coast", "at": 190, "heading": "backward" }
+    }
+  ],
+  "stations": [
+    { "id": "westhafen", "name": "Westhafen", "track": "coast", "at": 90, "length": 120, "side": "right" },
+    { "id": "ostkap", "name": "Ostkap", "track": "coast", "at": 1270, "length": 120, "side": "left" }
+  ],
+  "services": [
+    { "id": "east-west", "train": "regional-3", "route": ["coast"], "mode": "shuttle", "stops": ["westhafen", "ostkap"] },
+    { "id": "west-east", "train": "regional-3", "color": "#3d7d8c", "route": ["coast", "passing", "coast"], "mode": "shuttle", "stops": ["ostkap", "westhafen"] }
+  ],
+  "scenery": {
+    "towns": [
+      { "near": "westhafen", "radius": 160, "density": 0.75 },
+      { "near": "ostkap", "radius": 120, "density": 0.6 },
+      { "near": [560, 620], "radius": 70, "density": 0.4 }
+    ],
+    "forests": [
+      { "at": [1250, 820], "radius": 210, "density": 0.75 },
+      { "at": [380, 860], "radius": 220, "density": 0.5 }
+    ],
+    "scatterTrees": 0.12
+  },
+  "style": { "season": "autumn", "timeOfDay": 16.5, "dayLengthSeconds": 600 }
+}

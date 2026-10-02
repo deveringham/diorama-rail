@@ -1,0 +1,520 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "number",
+      "const": 1
+    },
+    "name": {
+      "type": "string"
+    },
+    "seed": {
+      "default": 1,
+      "type": "integer",
+      "minimum": -9007199254740991,
+      "maximum": 9007199254740991
+    },
+    "terrain": {
+      "type": "object",
+      "properties": {
+        "size": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "items": false,
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "[width, height] in metres; origin at (0,0) bottom-left"
+        },
+        "cell": {
+          "default": 4,
+          "type": "number",
+          "minimum": 1,
+          "maximum": 50
+        },
+        "baseHeight": {
+          "default": 0,
+          "type": "number"
+        },
+        "seaLevel": {
+          "default": null,
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "features": {
+          "default": [],
+          "description": "Smooth bumps (height > 0) or basins (height < 0), ~5% of height left at `radius`",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "at": {
+                "type": "array",
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "items": false,
+                "minItems": 2,
+                "maxItems": 2,
+                "description": "[x, y] in metres; x = east, y = north"
+              },
+              "radius": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "height": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "at",
+              "radius",
+              "height"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "noise": {
+          "default": {
+            "amplitude": 2,
+            "scale": 120
+          },
+          "type": "object",
+          "properties": {
+            "amplitude": {
+              "type": "number",
+              "minimum": 0
+            },
+            "scale": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          },
+          "required": [
+            "amplitude",
+            "scale"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "size"
+      ],
+      "additionalProperties": false
+    },
+    "tracks": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "loop",
+              "line"
+            ]
+          },
+          "points": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "prefixItems": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "items": false,
+                  "minItems": 2,
+                  "maxItems": 2,
+                  "description": "[x, y] in metres; x = east, y = north"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "at": {
+                      "type": "array",
+                      "prefixItems": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ],
+                      "items": false,
+                      "minItems": 2,
+                      "maxItems": 2,
+                      "description": "[x, y] in metres; x = east, y = north"
+                    },
+                    "z": {
+                      "description": "Fixed track height (m) at this waypoint; a hard constraint",
+                      "type": "number"
+                    },
+                    "radius": {
+                      "description": "Curve radius at this corner; overrides track.minRadius",
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    }
+                  },
+                  "required": [
+                    "at"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "minRadius": {
+            "default": 40,
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "maxGrade": {
+            "default": 0.035,
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 0.2
+          },
+          "from": {
+            "description": "line only: starts at a junction on another track",
+            "type": "object",
+            "properties": {
+              "track": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]*$",
+                "description": "Parent track id"
+              },
+              "at": {
+                "type": "number",
+                "description": "Arc length s on the parent track (m)"
+              },
+              "heading": {
+                "default": "forward",
+                "description": "Which way along the parent the branch leaves (from) or arrives (to)",
+                "type": "string",
+                "enum": [
+                  "forward",
+                  "backward"
+                ]
+              }
+            },
+            "required": [
+              "track",
+              "at"
+            ],
+            "additionalProperties": false
+          },
+          "to": {
+            "description": "line only: ends at a junction on another track",
+            "type": "object",
+            "properties": {
+              "track": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]*$",
+                "description": "Parent track id"
+              },
+              "at": {
+                "type": "number",
+                "description": "Arc length s on the parent track (m)"
+              },
+              "heading": {
+                "default": "forward",
+                "description": "Which way along the parent the branch leaves (from) or arrives (to)",
+                "type": "string",
+                "enum": [
+                  "forward",
+                  "backward"
+                ]
+              }
+            },
+            "required": [
+              "track",
+              "at"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "points"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "stations": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$"
+          },
+          "name": {
+            "type": "string"
+          },
+          "track": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$"
+          },
+          "at": {
+            "type": "number",
+            "description": "s of the platform centre (m)"
+          },
+          "length": {
+            "default": 120,
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "side": {
+            "default": "right",
+            "type": "string",
+            "enum": [
+              "left",
+              "right",
+              "both"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "track",
+          "at"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "services": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$"
+          },
+          "train": {
+            "type": "string",
+            "description": "Train type: regional-3, express-6, freight-10 or tram-2"
+          },
+          "color": {
+            "type": "string",
+            "pattern": "^#[0-9a-fA-F]{6}$"
+          },
+          "route": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]*$"
+            },
+            "description": "Ordered track ids; consecutive ids must share a junction"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "loop",
+              "shuttle"
+            ]
+          },
+          "stops": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]*$"
+            }
+          },
+          "dwell": {
+            "default": 25,
+            "type": "number",
+            "minimum": 0
+          },
+          "count": {
+            "default": 1,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20
+          }
+        },
+        "required": [
+          "id",
+          "train",
+          "route",
+          "mode"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "scenery": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "towns": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "near": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9-]*$"
+                  },
+                  {
+                    "type": "array",
+                    "prefixItems": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ],
+                    "items": false,
+                    "minItems": 2,
+                    "maxItems": 2,
+                    "description": "[x, y] in metres; x = east, y = north"
+                  }
+                ],
+                "description": "Station id or [x, y]"
+              },
+              "radius": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "density": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              }
+            },
+            "required": [
+              "near",
+              "radius",
+              "density"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "forests": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "at": {
+                "type": "array",
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "items": false,
+                "minItems": 2,
+                "maxItems": 2,
+                "description": "[x, y] in metres; x = east, y = north"
+              },
+              "radius": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "density": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              }
+            },
+            "required": [
+              "at",
+              "radius",
+              "density"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "scatterTrees": {
+          "default": 0.15,
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "style": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "season": {
+          "default": "summer",
+          "type": "string",
+          "enum": [
+            "summer",
+            "autumn",
+            "winter"
+          ]
+        },
+        "timeOfDay": {
+          "default": 15,
+          "type": "number",
+          "minimum": 0,
+          "maximum": 24
+        },
+        "dayLengthSeconds": {
+          "default": null,
+          "anyOf": [
+            {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "version",
+    "name",
+    "terrain",
+    "tracks"
+  ],
+  "additionalProperties": false
+}
