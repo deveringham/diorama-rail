@@ -15,15 +15,19 @@ npm install
 npm run dev                      # http://localhost:5173/?layout=valley-loop
 ```
 
-Open `?layout=harbour-town` for the second example. Edit a file in `layouts/`
-while `npm run dev` is running and the page rebuilds the world in place (camera
-kept). Layout errors appear in a red panel.
+Open `?layout=harbour-town` for the second example (an unknown name lists the
+available layouts and suggests the closest one). Edit a file in `layouts/` while
+`npm run dev` is running and the page rebuilds the world in place (camera kept).
+Layout errors appear in a red panel.
 
 URL parameters: `layout=<name>` (file in `layouts/`), `seed=N` (override the
 seed), `t=SECONDS` (pre-run the simulation), `view=overview|top|follow`, `shot=1`
 (screenshot mode), `cam=x,y,z,tx,ty,tz` (eye and target in model metres).
 
 ### Controls
+
+The HUD in the bottom-left corner shows the layout, simulated time, fps, draw
+calls and triangles, and this list of controls with the current state of each.
 
 | Key | Action |
 |---|---|
@@ -32,7 +36,7 @@ seed), `t=SECONDS` (pre-run the simulation), `view=overview|top|follow`, `shot=1
 | `1` `2` `3` | time scale 1×, 2×, 4× |
 | `F` | follow the next train; `Esc` stops following |
 | `S` | shadows on/off |
-| `H` | HUD (time, fps, draw calls, triangles, followed train) |
+| `H` | hide / show the HUD (shown by default; hidden in screenshots) |
 | `R` | auto-rotate on/off |
 
 In the browser console, `dr` holds the API plus `world`, `sim`, `scene` and

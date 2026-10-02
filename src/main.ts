@@ -42,7 +42,10 @@ document.body.append(renderer.domElement);
 
 const rig = new CameraRig(renderer.domElement, innerWidth / innerHeight);
 const hud = new Hud(document.body);
-if (shot) rig.controls.autoRotate = false;
+if (shot) {
+  rig.controls.autoRotate = false;
+  hud.hideAll();
+}
 
 let world: World | null = null;
 let sim: Sim | null = null;
@@ -53,14 +56,53 @@ let speed = 1;
 let shadows = true;
 let follow = -1;            // followed train index, kept across hot reloads
 
+/** Loads the layout JSON. Errors carry a message written for the person reading the page. */
 async function fetchLayout(): Promise<unknown> {
   const res = await fetch(layoutUrl, { cache: "no-store" });
-  if (!res.ok) throw new Error(`could not load ${layoutUrl}: HTTP ${res.status}`);
-  const json = await res.json();
+  const text = await res.text();
+  // A missing file is a 404 from our dev/preview server, or an HTML page from a
+  // static host with an SPA fallback; either way, say which layouts do exist.
+  if (!res.ok || /^\s*</.test(text)) throw new Error(await notFound());
+  let json: unknown;
+  try {
+    json = JSON.parse(text);
+  } catch (err) {
+    throw new Error(`${layoutUrl} is not valid JSON: ${(err as Error).message}`);
+  }
   const seed = params.get("seed");
   if (seed !== null && json && typeof json === "object") (json as { seed?: number }).seed = Number(seed);
   return json;
 }
+
+async function notFound(): Promise<string> {
+  let names: unknown = [];
+  try {
+    names = await (await fetch("layouts/index.json", { cache: "no-store" })).json();
+  } catch {
+    // No index available (e.g. a plain static host): just report the path.
+  }
+  if (!Array.isArray(names) || names.length === 0 || layoutUrl === layoutName) return `no layout file at ${layoutUrl}`;
+  const guess = closest(layoutName, names.map(String));
+  return `no layout named '${layoutName}' (looked for ${layoutUrl}); available: ${names.join(", ")}${guess ? `. Did you mean '${guess}'?` : ""}`;
+}
+
+/** The option within a few typing edits of `name` (harbor → harbour), if any. */
+function closest(name: string, options: string[]): string | null {
+  const edits = (a: string, b: string) => {
+    let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+    for (let i = 1; i <= a.length; i++) {
+      const cur = [i];
+      for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = cur;
+    }
+    return prev[b.length];
+  };
+  const best = options.map((o) => ({ o, d: edits(name, o) })).sort((x, y) => x.d - y.d)[0];
+  return best && best.d <= Math.max(2, name.length / 3) ? best.o : null;
+}
+
+const loadIssue = (err: unknown) =>
+  ({ code: "LOAD", severity: "error" as const, message: err instanceof Error ? err.message : String(err), path: layoutUrl });
 
 /** Build everything from JSON. On errors keep whatever is showing and list the issues. */
 function rebuild(json: unknown, preStep: number): boolean {
@@ -120,7 +162,8 @@ function frame(now: number): void {
   fps += (1 / Math.max(dt, 1e-3) - fps) * 0.05;
   const tr = rig.follow !== null ? snap.trains[rig.follow] : undefined;
   hud.update({
-    name: world!.layout.name, time: sim.time, hour: hourNow(), speed, paused, fps,
+    name: world!.layout.name, time: sim.time, hour: hourNow(), speed, paused, shadows,
+    autoRotate: rig.controls.autoRotate, fps,
     calls: renderer.info.render.calls, triangles: renderer.info.render.triangles,
     follow: tr ? { service: tr.service, nextStop: tr.nextStop } : null,
   }, now);
@@ -149,7 +192,7 @@ if (import.meta.hot) {
     try {
       rebuild(await fetchLayout(), sim?.time ?? 0);
     } catch (err) {
-      console.error(err);
+      hud.showIssues([loadIssue(err)]);     // e.g. a half-saved file; keep the current scene
     }
   });
 }
@@ -164,8 +207,9 @@ async function start(): Promise<void> {
       return;
     }
   } catch (err) {
-    hud.showIssues([{ code: "LOAD", severity: "error", message: String(err), path: layoutUrl }]);
-    window.__drError = String(err);
+    const issue = loadIssue(err);
+    hud.showIssues([issue]);
+    window.__drError = issue.message;
     window.__drReady = shot;
     return;
   }
