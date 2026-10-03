@@ -55,8 +55,8 @@
   ],
   "style": { "season": "autumn", "timeOfDay": 16.5, "dayLengthSeconds": 600 },
   "roads": [
-    { "id": "harbour-front", "points": [[100, 400], [330, 400]] },
-    { "id": "upper-street", "points": [[100, 528], [330, 528]] },
+    { "id": "harbour-front", "points": [[100, 400], [330, 400]], "sidewalks": "both" },
+    { "id": "upper-street", "points": [[100, 528], [330, 528]], "sidewalks": "both" },
     {
       "id": "west-road",
       "from": { "road": "harbour-front", "at": "start" },
@@ -66,9 +66,15 @@
     {
       "id": "middle-street",
       "from": { "road": "west-road", "at": 75 },
-      "points": [[110, 474.345], [335, 466.5825]]
+      "points": [[110, 474.345], [335, 466.5825]],
+      "sidewalks": "both"
     },
-    { "id": "church-lane", "from": { "road": "middle-street", "at": 160 }, "points": [[220, 580]] },
+    {
+      "id": "church-lane",
+      "from": { "road": "middle-street", "at": 160 },
+      "points": [[220, 580]],
+      "sidewalks": "both"
+    },
     {
       "id": "inland-road",
       "from": { "road": "upper-street", "at": "end" },
@@ -83,8 +89,18 @@
         [1300, 509]
       ]
     },
-    { "id": "ostkap-street", "from": { "road": "inland-road", "at": "end" }, "points": [[1470, 530]] },
-    { "id": "ostkap-lane", "from": { "road": "ostkap-street", "at": 101 }, "points": [[1400, 610]] },
+    {
+      "id": "ostkap-street",
+      "from": { "road": "inland-road", "at": "end" },
+      "points": [[1470, 530]],
+      "sidewalks": "both"
+    },
+    {
+      "id": "ostkap-lane",
+      "from": { "road": "ostkap-street", "at": 101 },
+      "points": [[1400, 610]],
+      "sidewalks": "both"
+    },
     {
       "id": "lighthouse-lane",
       "width": 5,
@@ -94,6 +110,21 @@
     }
   ],
   "traffic": { "cars": 28 },
+  "paths": [
+    {
+      "id": "pier",
+      "width": 2.5,
+      "surface": "paved",
+      "from": { "road": "harbour-front", "at": 105 },
+      "points": [[205, 316]]
+    },
+    {
+      "id": "beach-path",
+      "from": { "road": "inland-road", "at": 355 },
+      "points": [[678, 520], { "at": [676, 434], "z": 4.1 }, [672, 398]]
+    }
+  ],
+  "pedestrians": { "count": 90 },
   "objects": {
     "lighthouse": {
       "description": "Red and white striped lighthouse with a glowing lantern, 24 m",
@@ -117,13 +148,6 @@
         { "shape": "panel", "at": [-0.05, 0, 2.1], "size": [0.1, 1.4, 0.6], "color": "window" },
         { "shape": "cylinder", "at": [1.5, 0, 1.2], "size": [0.15, 0.15, 5], "sides": 4, "color": "timber" }
       ]
-    },
-    "jetty": {
-      "description": "Wooden jetty 40 m long along x on posts; place its landward end at the shore with z at sea level",
-      "parts": [
-        { "shape": "box", "at": [20, 0, 1.3], "size": [40, 3, 0.3], "color": "wood", "winter": "snow" },
-        { "shape": "box", "at": [1, -1.3, -1.5], "size": [0.3, 0.3, 3], "color": "timber", "grid": [6, 2, 1], "step": [7.6, 2.6, 0] }
-      ]
     }
   },
   "scenery": [
@@ -144,11 +168,8 @@
     { "object": "terrace", "at": [136.3, 483.9], "rotation": 267 },
     { "object": "house", "at": [153.3, 483.4], "rotation": 269 },
     { "object": "house", "at": [170.3, 482.8], "rotation": 271 },
-    { "object": "flats", "at": [187.3, 482.2], "rotation": 266 },
-    { "object": "house", "at": [204.3, 481.6], "rotation": 268 },
     { "object": "house", "at": [238.3, 480.4], "rotation": 265 },
     { "object": "house", "at": [255.3, 479.8], "rotation": 267 },
-    { "object": "flats", "at": [272.3, 479.3], "rotation": 269 },
     { "object": "house", "at": [289.3, 478.7], "rotation": 271 },
     { "object": "terrace", "at": [306.2, 478.1], "rotation": 266 },
     { "object": "house", "at": [323.2, 477.5], "rotation": 268 },
@@ -190,7 +211,6 @@
     { "object": "lamp-post", "at": [230, 395.5], "rotation": 90 },
     { "object": "lamp-post", "at": [260, 395.5], "rotation": 90 },
     { "object": "lamp-post", "at": [290, 395.5], "rotation": 90 },
-    { "object": "jetty", "at": [205, 392], "rotation": 270, "z": 0 },
     { "object": "fishing-boat", "at": [196, 352], "rotation": 265, "z": 0 },
     { "object": "fishing-boat", "at": [214, 340], "rotation": 95, "z": 0 },
     { "object": "fishing-boat", "at": [196, 333], "rotation": 280, "z": 0 },
@@ -226,7 +246,6 @@
     { "object": "house", "at": [1389.5, 574.1], "rotation": 1 },
     { "object": "house", "at": [1389.5, 589.1], "rotation": 3 },
     { "object": "house", "at": [1410.5, 547.6], "rotation": 177 },
-    { "object": "barn", "at": [1410.5, 569.6], "rotation": 179 },
     { "object": "house", "at": [1410.5, 591.6], "rotation": 181 },
     { "object": "lighthouse", "at": [1482, 404] },
     { "object": "house", "at": [1462, 418], "rotation": 0 },

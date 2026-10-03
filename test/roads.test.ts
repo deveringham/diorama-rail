@@ -91,6 +91,28 @@ describe("road network", () => {
     expect(sim.traffic.stats().stuck).toBe(0);
   });
 
+  it.each(["none", "both"] as const)("never queues across a level crossing with little road before the next (sidewalks: %s)", (sidewalks) => {
+    // The road crosses the line twice, 46 m apart along it, at a shallow angle: a train
+    // over one crossing waits for the other, and on one sidewalk their zones overlap.
+    const L = base();
+    L.terrain.seaLevel = 0.38;
+    L.roads = [
+      { id: "twice", sidewalks, points: [[164.72, 535.33], [347.37, 679.78], [591.15, 778.29]] },
+      { id: "other", points: [[861.97, 53.2], [740.26, 87.9]] },
+    ];
+    L.traffic = { cars: 24 };
+    L.pedestrians = { count: 100 };
+    const { world: w, report: r } = buildWorld(L);
+    expect(r.issues.filter((i) => i.severity === "error")).toEqual([]);
+    expect(w!.roads.crossings.length).toBe(2);
+    expect(w!.roads.crossings[0].group).not.toBe(w!.roads.crossings[1].group);
+    const sim = new Sim(w!);
+    for (let i = 0; i < (20 * 60) / DT && !sim.deadlock; i++) sim.step();
+    expect(sim.deadlock).toBeNull();
+    expect(sim.traffic.stats().stuck).toBe(0);
+    expect(sim.walkers.stats().stuck).toBe(0);
+  });
+
   it("keeps roads above the sea", () => {
     const L = withRoads();
     L.terrain.seaLevel = 0.5;
@@ -130,7 +152,7 @@ describe.each([
 ])("%s traffic", (_, make) => {
   const { world } = buildWorld(make());
   const sim = new Sim(world!);
-  const snap: SimSnapshot = { time: 0, trains: [], switches: [], blocks: [], vehicles: [], gates: [] };
+  const snap: SimSnapshot = { time: 0, trains: [], switches: [], blocks: [], vehicles: [], gates: [], walkers: [] };
   let overlaps = 0;
   let unsafe = 0;
   const closedSeen = new Set<number>();
@@ -170,6 +192,7 @@ describe.each([
   it("does not hold up the trains", () => {
     const L = make();
     L.roads = [];
+    L.paths = [];
     const plain = new Sim(buildWorld(L).world!);
     for (let i = 0; i < (30 * 60) / DT; i++) plain.step();
     const run = (s: Sim) => s.trains.reduce((a, t) => a + t.odometer, 0);

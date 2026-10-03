@@ -489,6 +489,23 @@
             "exclusiveMinimum": 0,
             "maximum": 40
           },
+          "sidewalks": {
+            "default": "none",
+            "description": "Raised pavements beside the carriageway, left/right of the direction of increasing s; people walk on them",
+            "type": "string",
+            "enum": [
+              "none",
+              "both",
+              "left",
+              "right"
+            ]
+          },
+          "sidewalkWidth": {
+            "default": 2,
+            "type": "number",
+            "minimum": 1,
+            "maximum": 5
+          },
           "from": {
             "type": "object",
             "properties": {
@@ -556,6 +573,197 @@
         ],
         "additionalProperties": false
       }
+    },
+    "paths": {
+      "default": [],
+      "description": "Footpaths: junctions form automatically, zebra crossings where a path crosses a road, foot crossings over tracks",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$"
+          },
+          "kind": {
+            "default": "line",
+            "type": "string",
+            "enum": [
+              "line",
+              "loop"
+            ]
+          },
+          "points": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "prefixItems": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "items": false,
+                  "minItems": 2,
+                  "maxItems": 2,
+                  "description": "[x, y] in metres; x = east, y = north"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "at": {
+                      "type": "array",
+                      "prefixItems": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ],
+                      "items": false,
+                      "minItems": 2,
+                      "maxItems": 2,
+                      "description": "[x, y] in metres; x = east, y = north"
+                    },
+                    "z": {
+                      "description": "Fixed track height (m) at this waypoint; a hard constraint",
+                      "type": "number"
+                    },
+                    "radius": {
+                      "description": "Curve radius at this corner; overrides track.minRadius",
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    }
+                  },
+                  "required": [
+                    "at"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "description": "Waypoints like a road's; corners are rounded with `minRadius`"
+          },
+          "width": {
+            "default": 2,
+            "description": "Path width (m)",
+            "type": "number",
+            "minimum": 0.8,
+            "maximum": 6
+          },
+          "surface": {
+            "default": "gravel",
+            "type": "string",
+            "enum": [
+              "gravel",
+              "paved"
+            ]
+          },
+          "minRadius": {
+            "default": 3,
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "maxGrade": {
+            "default": 0.12,
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 0.3
+          },
+          "from": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "description": "Path this one starts (from) or ends (to) on, forming a T-junction",
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]*$"
+              },
+              "road": {
+                "description": "Road whose edge this path starts or ends at, joining its sidewalk on that side",
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]*$"
+              },
+              "at": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "string",
+                    "enum": [
+                      "start",
+                      "end"
+                    ]
+                  }
+                ],
+                "description": "Arc length s on that path or road (m), or \"start\" / \"end\""
+              }
+            },
+            "required": [
+              "at"
+            ],
+            "additionalProperties": false
+          },
+          "to": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "description": "Path this one starts (from) or ends (to) on, forming a T-junction",
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]*$"
+              },
+              "road": {
+                "description": "Road whose edge this path starts or ends at, joining its sidewalk on that side",
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]*$"
+              },
+              "at": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "string",
+                    "enum": [
+                      "start",
+                      "end"
+                    ]
+                  }
+                ],
+                "description": "Arc length s on that path or road (m), or \"start\" / \"end\""
+              }
+            },
+            "required": [
+              "at"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "points"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "pedestrians": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "count": {
+          "description": "People walking the paths and sidewalks; default about one per 25 m of walkway",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        }
+      },
+      "additionalProperties": false
     },
     "traffic": {
       "default": {},

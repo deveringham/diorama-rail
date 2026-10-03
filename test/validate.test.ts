@@ -81,6 +81,7 @@ const cases: Case[] = [
   ["ROAD_CONFLICT", "error", () => { const L = base(); L.roads = [{ id: "r", points: [[300, 204], [420, 204]] }]; return L; }],
   ["LEVEL_CROSSING_POSITION", "error", () => { const L = base(); L.roads = [{ id: "r", points: [[510, 100], [510, 300]] }]; return L; }],
   ["LEVEL_CROSSING_ANGLE", "warning", () => { const L = base(); L.roads = [{ id: "r", points: [[590, 160], [740, 215]] }]; return L; }],
+  ["LEVEL_CROSSING_ANGLE", "error", () => { const L = base(); L.roads = [{ id: "r", points: [[560, 185], [760, 215]] }]; return L; }],
 ];
 
 /** Road variants of codes that tracks also use. */

@@ -1,6 +1,6 @@
 // npm run simulate -- layouts/x.json [--minutes 30] [--json]
 // Validates, then runs the simulation headlessly and prints per-service stats,
-// road traffic stats and any deadlock. Exit 1 on validation errors or deadlock.
+// road traffic and pedestrian stats and any deadlock. Exit 1 on validation errors or deadlock.
 
 import { parseArgs } from "node:util";
 import { simulate, type SimReport } from "../sim/sim";
@@ -30,6 +30,10 @@ if (values.json) {
   if (tr) {
     console.log(`\nroad traffic: ${tr.cars} vehicles, avg ${tr.avgSpeed.toFixed(1)} m/s, longest wait ${tr.maxWait.toFixed(0)} s`
       + `${tr.stuck ? `, ${tr.stuck} stuck` : ""}; level crossings closed ${tr.closures} times, ${(tr.closedShare * 100).toFixed(0)}% of the time`);
+  }
+  const pd = res.pedestrians;
+  if (pd) {
+    console.log(`pedestrians: ${pd.people} people, avg ${pd.avgSpeed.toFixed(1)} m/s, longest wait ${pd.maxWait.toFixed(0)} s${pd.stuck ? `, ${pd.stuck} stuck` : ""}; ${pd.crossed} road crossings`);
   }
   if (res.deadlock) console.log(`\nDEADLOCK: ${res.deadlock.message}`);
 }

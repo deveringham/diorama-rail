@@ -1,9 +1,9 @@
 # Diorama Rail
 
 A model railway to watch in the browser: low-poly terrain, track, stations,
-roads, buildings and trees on a diorama block, with trains running on their own
-and cars, vans, buses and lorries driving the roads, waiting at level crossings
-while the trains go by. A layout is one JSON file; everything visible is derived
+roads, footpaths, buildings and trees on a diorama block, with trains running on
+their own, cars, vans, buses and lorries driving the roads and waiting at level
+crossings while the trains go by, and people walking the sidewalks and paths. A layout is one JSON file; everything visible is derived
 from it plus a seed — including its scenery objects, which are themselves small
 JSON models built from primitives. Layouts and objects can be validated, simulated and screenshotted
 from the command line, so an LLM (or you) can write and repair them in a loop.
@@ -50,7 +50,7 @@ In the browser console, `dr` holds the API plus `world`, `sim`, `scene` and
 
 ```sh
 npm run check -- layouts/valley-loop.json [--json]          # validate; exit 1 on errors
-npm run simulate -- layouts/valley-loop.json --minutes 30   # per-service stops, speed, waits; road traffic; exit 1 on deadlock
+npm run simulate -- layouts/valley-loop.json --minutes 30   # per-service stops, speed, waits; traffic; people; exit 1 on deadlock
 npm run screenshot -- layouts/valley-loop.json --out shot.png --t 120 --view top --size 1600x1000
 npm run screenshot -- layouts/valley-loop.json --object windmill --out mill.png     # one object alone
 npm run screenshot -- layouts/valley-loop.json --object all --season winter         # every object
@@ -67,17 +67,18 @@ scenery objects (built-in and the layout's own) on a small plinth, labelled.
 The same preview is live in the browser at `?layout=valley-loop&object=*`.
 
 Writing layouts: read [docs/LAYOUT_GUIDE.md](docs/LAYOUT_GUIDE.md) — coordinates,
-roads and traffic, placing scenery, designing objects, rules of thumb, every
-validation code with a fix, and the authoring loop.
+roads and traffic, sidewalks, paths and people, placing scenery, designing
+objects, rules of thumb, every validation code with a fix, and the authoring loop.
 
 ## How it fits together
 
 ```
 layout.json ─► model/  parse (zod) → refs → track geometry (fillets, junctions) → heights,
                  │     bridges/tunnels → roads (junctions, crossroads, level crossings, heights)
+                 │     → paths and sidewalks (the walk network: zebras, foot crossings)
                  │     → terrain shaping → conflicts, stations, routes → scenery
                  ├───► sim/    blocks, per-service plans, trains, level crossings, road traffic,
-                 │             fixed 1/30 s step, deadlock check
+                 │             pedestrians, fixed 1/30 s step, deadlock check
                  └───► scene/  three.js meshes built once; trains, vehicles, barriers, people,
                                smoke, light updated per frame
 cli/ check | simulate | schema | screenshot        api.ts: the stable public API (also window.dr)
@@ -122,7 +123,7 @@ its centre, `lamp`-coloured parts for headlights) and list it in the layout's
    with `error(code, message, path, at?)` or `warning(...)`.
 2. `src/model/build.ts`: call it where its inputs exist, e.g.
    `issues.push(...checkSomething(layout, tracks));`.
-3. Add the code to `docs/LAYOUT_GUIDE.md` §7 and a failing fixture to
+3. Add the code to `docs/LAYOUT_GUIDE.md` §8 and a failing fixture to
    `test/validate.test.ts`.
 
 ## Notes on v0.1
@@ -152,7 +153,7 @@ primitive parts), placed one by one or scattered over an area. Built-in objects
 live in `src/model/objectLibrary.ts`; a layout can add or override objects in
 its `objects` section. Both example layouts now lay out their towns along their
 roads and define a few objects of their own (windmill, hay bale, lighthouse,
-fishing boat, jetty).
+fishing boat).
 
 ### Roads and traffic
 
@@ -183,6 +184,33 @@ height. The sim (`src/sim/traffic.ts`) drives vehicles on two right-hand lanes:
   because its way out is full takes another); one vehicle at a time in a
   junction.
 
+### Sidewalks, paths and people
+
+![](docs/people.png)
+
+Roads can have sidewalks (`sidewalks: "both" | "left" | "right"`), and a layout's
+`paths` are footpaths built like roads (`src/model/walks.ts`): filleted
+waypoints, heights within `maxGrade`, bridges and tunnels, T-junctions via
+`from`/`to` (on another path, or at a road's edge, joining its sidewalk) and
+automatic junctions. Together they form one walk network: sidewalks round the
+corners of road junctions and across their legs, zebra crossings where a path
+crosses a road, foot crossings (lights and a barrier) where a path crosses a
+track, and piers where a path runs out over the sea. People
+(`src/sim/walkers.ts`), drawn like the station passengers, walk it:
+
+- They keep right at their own pace, now and then stop for a while, pick a way at
+  random at each junction, and leave and re-enter the board at walkway ends near
+  its edge.
+- At a zebra they wait at the kerb until every car coming can stop (cars stop for
+  anyone on it or waiting); if a car has waited a few seconds they let it through.
+  Over a junction's leg (unmarked) they wait for a gap, and after a while step out
+  in front of cars that can still stop. At level and foot crossings they wait
+  while the lights flash, and the barriers only come down once nobody is in the
+  way.
+- People do not avoid each other on a walkway (they pass through one another
+  when overtaking); that, and the one-person-wide way they queue at a kerb, are
+  the visible simplifications.
+
 ### Interpretations and limitations
 - **Fixed routes.** A service follows one path through the graph. Two shuttles
   cannot choose either side of a passing loop, so `harbour-town` uses two
@@ -205,7 +233,7 @@ height. The sim (`src/sim/traffic.ts`) drives vehicles on two right-hand lanes:
 - The terrain mesh receives but does not cast shadows (it would double its
   175k-triangle cost); trees, buildings, structures and trains cast them.
 - The renderer's triangle count includes the shadow pass. Both examples render
-  in about 90 draw calls and ~430k triangles (shadow pass included). Each object
+  in about 90–100 draw calls and ~420–460k triangles (shadow pass included). Each object
   type in use costs 2–3 instanced draw calls (fixed colours, tinted parts,
   glowing windows), however many times it is placed; vehicles likewise per type.
 - Turnouts are drawn as overlapping track; no signals, sound or timetables.

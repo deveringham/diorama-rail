@@ -7,6 +7,7 @@ import type { Layout } from "./schema";
 import type { TrackGeom } from "./trackGraph";
 import type { TrackPoint, Issue } from "./validate";
 import type { RoadPoint } from "./roads";
+import { type WalkPoint, smallEnough } from "./walks";
 import { error, warning } from "./validate";
 import { type Terrain, groundZ, slopeAt } from "./terrain";
 import { type Profile, profileZ } from "./heights";
@@ -28,6 +29,7 @@ const SCATTER_TRACK_GAP = 6;            // scattered items keep further away
 const ROAD_GAP = 0.3;                   // placed objects keep this far outside a road's edge
 const SCATTER_ROAD_GAP = 3;             // scattered items keep further away
 const ROAD_DZ = 5;                      // m; a road this far above or below an object (bridge, tunnel) does not count
+const SCATTER_WALK_GAP = 1.5;           // scattered items keep this far from paths and sidewalks
 const WATER_MARGIN = 0.5;
 const MAX_SCATTERED = 20000;
 const FACE_TRACK_SEARCH = 400;          // m to look for the nearest track when facing "track"
@@ -112,6 +114,7 @@ type Context = {
   terrain: Terrain;
   trackHash: SpatialHash<TrackPoint>;
   roadHash: SpatialHash<RoadPoint>;
+  walkHash: SpatialHash<WalkPoint>;
   stations: StationGeom[];
   objects: Map<string, ObjectInfo>;
 };
@@ -149,6 +152,10 @@ export function placeScenery(ctx: Context): { placements: Placement[]; issues: I
       const road = nearestRoad(ctx.roadHash, box, z);
       if (road && road.d < ROAD_GAP) {
         issues.push(error("SCENERY_ON_ROAD", `the building of station '${st.id}' stands on road '${road.road}'; move the road away from the platform side, or set "building": null`, `stations[${i}].building`, [p.x, p.y]));
+      }
+      const walk = nearestWalk(ctx.walkHash, box, z);
+      if (walk && walk.d < 0) {
+        issues.push(error("SCENERY_ON_PATH", `the building of station '${st.id}' stands on ${walk.what}; move it away from the platform side, or set "building": null`, `stations[${i}].building`, [p.x, p.y]));
       }
       add(st.building!, p.x, p.y, z, rot, 1, tintFor(building, r), false);
       solids.push({ box, path: `stations[${i}].building`, object: st.building!, flat: false });
@@ -191,6 +198,13 @@ export function placeScenery(ctx: Context): { placements: Placement[]; issues: I
     if (road && road.d < ROAD_GAP) {
       issues.push(error("SCENERY_ON_ROAD",
         `${e.object} at (${x}, ${y}) ${road.d <= -road.half ? "stands in the middle of" : "reaches onto"} road '${road.road}' (keep ${ROAD_GAP} m outside its ${(2 * road.half).toFixed(0)} m carriageway); move it about ${(ROAD_GAP - road.d + 0.5).toFixed(0)} m further from the road centre or turn it`,
+        `${path}.at`, [x, y]));
+      return;
+    }
+    const walk = smallEnough(box.hx, box.hy) ? null : nearestWalk(ctx.walkHash, box, z);
+    if (walk && walk.d < 0) {
+      issues.push(error("SCENERY_ON_PATH",
+        `${e.object} at (${x}, ${y}) stands on ${walk.what}; move it about ${(0.5 - walk.d).toFixed(0)} m further away (only things under ${1.2} m across, like lamp posts, may stand on a walkway)`,
         `${path}.at`, [x, y]));
       return;
     }
@@ -239,6 +253,8 @@ export function placeScenery(ctx: Context): { placements: Placement[]; issues: I
       if (hit && hit.d < SCATTER_TRACK_GAP + reach * 0.5) continue;
       const road = nearestRoad(ctx.roadHash, box, z);
       if (road && road.d < SCATTER_ROAD_GAP + reach * 0.5) continue;
+      const walk = nearestWalk(ctx.walkHash, box, z);
+      if (walk && walk.d < SCATTER_WALK_GAP + reach * 0.5) continue;
       if (solids.some((sol) => boxDistance(sol.box, x, y) < reach + (sol.flat ? 0 : GARDEN))) continue;
       add(id, x, y, z, rotation, scale, tintFor(info, r), info.mesh.chimneys.length > 0 && r() < info.def.smoke);
       scattered++;
@@ -260,6 +276,17 @@ function facing(ctx: Context, face: "track" | "road" | [number, number] | undefi
     });
   }
   return target ? Math.atan2(target[1] - y, target[0] - x) : undefined;
+}
+
+/** Nearest walkway (path or sidewalk) to a footprint at height z: distance from its edge (negative: on it). */
+function nearestWalk(hash: SpatialHash<WalkPoint>, box: Box, z: number): { d: number; what: string } | null {
+  let best: { d: number; what: string } | null = null;
+  hash.near(box.cx, box.cy, boxRadius(box) + 12, (p) => {
+    if (Math.abs(p.z - z) > ROAD_DZ) return;
+    const d = boxDistance(box, p.x, p.y) - p.width / 2;
+    if (!best || d < best.d) best = { d, what: p.kind === "path" ? `path '${p.owner}'` : `the sidewalk of road '${p.owner.split("/")[0]}'` };
+  });
+  return best;
 }
 
 /**

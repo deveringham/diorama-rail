@@ -30,6 +30,14 @@ type Person = {
   timer: number;
 };
 
+/** A person, minimalist: a body block (tinted per instance) and a head. Facing +x, standing on z = 0. */
+export function personGeometry(): THREE.BufferGeometry {
+  const g = new GeoBuilder();
+  g.box(0, 0, 0, 0.35, 0.5, 1.15, 0, 0xffffff);
+  g.box(0, 0, 1.2, 0.3, 0.3, 0.35, 0, PALETTE.skin);
+  return g.build();
+}
+
 export class Life {
   readonly group = new THREE.Group();
   private people: Person[] = [];
@@ -67,10 +75,7 @@ export class Life {
       }
     }
     if (this.people.length) {
-      const g = new GeoBuilder();
-      g.box(0, 0, 0, 0.35, 0.5, 1.15, 0, 0xffffff);
-      g.box(0, 0, 1.2, 0.3, 0.3, 0.35, 0, PALETTE.skin);
-      this.peopleMesh = new THREE.InstancedMesh(g.build(), flatMaterial(), this.people.length);
+      this.peopleMesh = new THREE.InstancedMesh(personGeometry(), flatMaterial(), this.people.length);
       const c = new THREE.Color();
       this.people.forEach((_, i) => this.peopleMesh!.setColorAt(i, c.setHex(pick(this.r, PALETTE.people))));
       this.peopleMesh.name = "people";

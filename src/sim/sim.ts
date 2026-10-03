@@ -15,6 +15,7 @@ import { type Blocks, buildBlocks } from "./blocks";
 import { type Plan, buildPlans } from "./services";
 import { type Train, type Phase, type World4Trains, spawn, stepTrain, forEachCar, nextStopOf, entryOf } from "./trains";
 import { type VehicleSnapshot, type GateSnapshot, type TrafficStats, Traffic } from "./traffic";
+import { type WalkerSnapshot, type WalkerStats, Walkers } from "./walkers";
 import { rng } from "../util/rng";
 
 export const DT = (1 / 30) * TIME_SCALE;
@@ -44,7 +45,8 @@ export type TrainSnapshot = {
 export type SimSnapshot = {
   time: number; trains: TrainSnapshot[]; switches: SwitchState[]; blocks: number[];
   vehicles: VehicleSnapshot[];        // road traffic
-  gates: GateSnapshot[];              // level crossings, in world.roads.crossings order
+  gates: GateSnapshot[];              // level crossings (world.roads.crossings), then foot crossings (world.walks.footCrossings)
+  walkers: WalkerSnapshot[];          // people on paths and sidewalks
 };
 
 export class Sim {
@@ -53,6 +55,7 @@ export class Sim {
   readonly plans: Plan[];
   readonly trains: Train[] = [];
   readonly traffic: Traffic;
+  readonly walkers: Walkers;
   /** Trains the spawner could not place anywhere on their route. */
   readonly unplaced: string[] = [];
   events: SimEvent[] = [];
@@ -67,6 +70,8 @@ export class Sim {
     this.plans = buildPlans(world, this.blocks);
     this.planIndex = new Map(this.plans.map((p, i) => [p, i]));
     this.traffic = new Traffic(world, this.plans, opts.seed ?? world.layout.seed);
+    this.walkers = new Walkers(world, opts.seed ?? world.layout.seed);
+    this.traffic.walkers = this.walkers;
     this.state = {
       owner: new Int32Array(this.blocks.blocks.length).fill(-1),
       switchStates: world.graph.switches.map(() => "straight"),
@@ -93,6 +98,7 @@ export class Sim {
       if (ev) this.events.push({ t: this.time, type: ev.type, train: t.id, service: t.plan.svc.id, station: ev.station });
     });
     this.traffic.step(this.trains, (t) => this.planIndex.get(t.plan)!, DT);
+    this.walkers.step(DT, this.traffic);
     if (this.ticks % 30 === 0 && !this.deadlock) this.checkDeadlock();
   }
 
@@ -140,7 +146,7 @@ export class Sim {
 
   /** Current state. Pass the previous snapshot as `out` to update it in place. */
   snapshot(out?: SimSnapshot): SimSnapshot {
-    const snap: SimSnapshot = out ?? { time: 0, trains: [], switches: [], blocks: [], vehicles: [], gates: [] };
+    const snap: SimSnapshot = out ?? { time: 0, trains: [], switches: [], blocks: [], vehicles: [], gates: [], walkers: [] };
     snap.time = this.time;
     snap.switches = this.state.switchStates;
     const owner = this.state.owner;
@@ -171,12 +177,15 @@ export class Sim {
     });
     this.traffic.snapshotCars(snap.vehicles);
     this.traffic.snapshotGates(snap.gates);
+    this.walkers.snapshot(snap.walkers);
     return snap;
   }
 }
 
 export type ServiceStats = { service: string; stops: number; avgSpeed: number; maxWait: number };
-export type SimReport = { report: Report; events: SimEvent[]; perService: ServiceStats[]; traffic?: TrafficStats; deadlock?: Issue };
+export type SimReport = {
+  report: Report; events: SimEvent[]; perService: ServiceStats[]; traffic?: TrafficStats; pedestrians?: WalkerStats; deadlock?: Issue;
+};
 
 /** Validate, then run the sim headlessly for `seconds` of simulated time. */
 export function simulate(json: unknown, seconds: number): SimReport {
@@ -207,6 +216,7 @@ export function simulate(json: unknown, seconds: number): SimReport {
   const full = { ...report, ok: report.ok && !sim.deadlock, issues };
   return {
     report: full, events: sim.events, perService, ...(world.roads.roads.size ? { traffic } : {}),
+    ...(sim.walkers.people.length ? { pedestrians: sim.walkers.stats() } : {}),
     ...(sim.deadlock ? { deadlock: sim.deadlock } : {}),
   };
 }

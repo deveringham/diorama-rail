@@ -116,6 +116,27 @@ export function query(world: World) {
         for (const c of net.crossings) out.push(`  level crossing ${c.id}: ${c.road} s=${f0(c.roadS)} × ${c.track} s=${f0(c.trackS)} at (${f0(c.at[0])}, ${f0(c.at[1])}), ${f0(c.angle)}°`);
         const cars = L.traffic.cars;
         out.push(`  traffic: ${cars ?? "auto"} vehicles of [${[...new Set(L.traffic.vehicles)].join(", ")}]`);
+        const walked = [...net.roads.values()].filter((r) => r.spec.sidewalks !== "none").map((r) => `${r.id} (${r.spec.sidewalks})`);
+        if (walked.length) out.push(`  sidewalks: ${walked.join(", ")}`);
+      }
+      const walks = world.walks;
+      if (walks.paths.size) {
+        out.push("Paths:");
+        for (const id of walks.order) {
+          const p = walks.paths.get(id)!;
+          const ends = (["from", "to"] as const).map((w) => {
+            const e = p.spec[w];
+            return e ? `${w} ${e.path ? `path ${e.path}` : `road ${e.road}`}@${e.at}` : "";
+          }).filter(Boolean);
+          const spans = walks.spans.get(id)!.filter((s) => s.kind !== "ground").map((s) => `${s.kind} ${f0(s.s0)}–${f0(s.s1)}`);
+          out.push(`  ${id} ${p.spec.kind} ${f0(p.path.length)} m, ${p.spec.width} m ${p.spec.surface}` + (ends.length ? `; ${ends.join(", ")}` : "") + (spans.length ? `; ${spans.join(", ")}` : ""));
+        }
+      }
+      if (walks.ways.length) {
+        const zebras = walks.crossings.filter((c) => c.kind === "zebra");
+        for (const c of zebras) out.push(`  zebra crossing on ${c.road} s=${f0(c.roadS)} at (${f0(c.at[0])}, ${f0(c.at[1])})`);
+        for (const c of walks.footCrossings) out.push(`  foot crossing ${c.id}: ${c.road} s=${f0(c.roadS)} × ${c.track} s=${f0(c.trackS)} at (${f0(c.at[0])}, ${f0(c.at[1])}), ${f0(c.angle)}°`);
+        out.push(`  pedestrians: ${L.pedestrians.count ?? "auto"}; ${walks.crossings.length - zebras.length} unmarked crossings at road junctions`);
       }
       const counts = new Map<string, number>();
       for (const p of world.scenery) counts.set(p.object, (counts.get(p.object) ?? 0) + 1);

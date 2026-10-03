@@ -1,5 +1,5 @@
 // Structures (§8.3): bridge decks with piers and parapets, tunnel portals at
-// every ground↔tunnel transition (for tracks and roads alike), and station
+// every ground↔tunnel transition (for tracks, roads and paths alike), and station
 // platforms and canopies. All merged into one static mesh. (Station buildings and
 // benches are scenery objects.)
 
@@ -10,7 +10,8 @@ import { PLATFORM_OFFSET, PLATFORM_WIDTH, PLATFORM_TOP } from "../model/scenery"
 import { PALETTE } from "./palette";
 import { GeoBuilder, flatMaterial } from "./geo";
 import { type Frame, frameAt, side } from "./trackMesh";
-import { roadFrame } from "./roadMesh";
+import { roadFrame, pathFrame } from "./roadMesh";
+import { roadReach } from "../model/roads";
 import type { Span } from "../model/heights";
 
 const STEP = 2;
@@ -32,8 +33,14 @@ export function structureMeshes(world: World): THREE.Object3D[] {
   }
   for (const r of world.roads.roads.values()) {
     const w = r.spec.width;
+    const reach = roadReach(r.spec);
     spanStructures(world, g, world.roads.spans.get(r.id)!, r.path.closed, (s) => roadFrame(world, r.id, s),
-      { half: w / 2 + 0.8, top: -0.03, pier: w * 0.6 }, w / 2 + 0.6);
+      { half: Math.max(w / 2 + 0.8, reach + 0.5), top: -0.03, pier: w * 0.6 }, reach + 0.6);
+  }
+  for (const p of world.walks.paths.values()) {
+    const w = p.spec.width;
+    spanStructures(world, g, world.walks.spans.get(p.id)!, p.path.closed, (s) => pathFrame(world, p.id, s),
+      { half: w / 2 + 0.45, top: 0, pier: 1.2 }, w / 2 + 0.6);
   }
   for (const st of world.stations) station(world, g, st);
   const mesh = new THREE.Mesh(g.build(), flatMaterial());

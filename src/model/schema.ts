@@ -62,18 +62,49 @@ const Road = z
     minRadius: z.number().positive().default(10),
     maxGrade: z.number().positive().max(0.25).default(0.08),
     speed: z.number().positive().max(40).default(13).describe("Speed limit (m/s); 13 ≈ 50 km/h"),
+    sidewalks: z.enum(["none", "both", "left", "right"]).default("none")
+      .describe("Raised pavements beside the carriageway, left/right of the direction of increasing s; people walk on them"),
+    sidewalkWidth: z.number().min(1).max(5).default(2),
     from: RoadEnd.optional(),
     to: RoadEnd.optional(),
   })
-  .superRefine((r, ctx) => {
-    const need = r.kind === "loop" ? 3 : r.from || r.to ? 1 : 2;
-    if (r.points.length < need) {
-      ctx.addIssue({ code: "custom", path: ["points"], message: `a ${r.kind} road${r.kind === "line" && need === 1 ? " with from/to" : ""} needs at least ${need} points, got ${r.points.length}` });
-    }
-    if (r.kind === "loop" && (r.from || r.to)) {
-      ctx.addIssue({ code: "custom", path: [r.from ? "from" : "to"], message: "from/to are only allowed on line roads" });
-    }
+  .superRefine((r, ctx) => lineChecks(r, "road", ctx));
+
+/** Point counts and from/to rules shared by roads and paths. */
+function lineChecks(r: { kind: string; points: unknown[]; from?: unknown; to?: unknown }, noun: string, ctx: z.RefinementCtx): void {
+  const need = r.kind === "loop" ? 3 : r.from || r.to ? 1 : 2;
+  if (r.points.length < need) {
+    ctx.addIssue({ code: "custom", path: ["points"], message: `a ${r.kind} ${noun}${r.kind === "line" && need === 1 ? " with from/to" : ""} needs at least ${need} points, got ${r.points.length}` });
+  }
+  if (r.kind === "loop" && (r.from || r.to)) {
+    ctx.addIssue({ code: "custom", path: [r.from ? "from" : "to"], message: `from/to are only allowed on line ${noun}s` });
+  }
+}
+
+const PathEnd = z
+  .strictObject({
+    path: Id.optional().describe("Path this one starts (from) or ends (to) on, forming a T-junction"),
+    road: Id.optional().describe("Road whose edge this path starts or ends at, joining its sidewalk on that side"),
+    at: z.union([z.number(), z.enum(["start", "end"])])
+      .describe('Arc length s on that path or road (m), or "start" / "end"'),
+  })
+  .superRefine((e, ctx) => {
+    if (!!e.path === !!e.road) ctx.addIssue({ code: "custom", path: [e.path ? "road" : "path"], message: "give exactly one of `path` or `road`" });
   });
+
+const Path = z
+  .strictObject({
+    id: Id,
+    kind: z.enum(["line", "loop"]).default("line"),
+    points: z.array(Waypoint).min(1).describe("Waypoints like a road's; corners are rounded with `minRadius`"),
+    width: z.number().min(0.8).max(6).default(2).describe("Path width (m)"),
+    surface: z.enum(["gravel", "paved"]).default("gravel"),
+    minRadius: z.number().positive().default(3),
+    maxGrade: z.number().positive().max(0.3).default(0.12),
+    from: PathEnd.optional(),
+    to: PathEnd.optional(),
+  })
+  .superRefine((p, ctx) => lineChecks(p, "path", ctx));
 
 const Station = z.strictObject({
   id: Id,
@@ -153,6 +184,11 @@ export const LayoutSchema = z.strictObject({
   stations: z.array(Station).default([]),
   services: z.array(Service).default([]),
   roads: z.array(Road).default([]).describe("Road network: crossroads form automatically, level crossings where a road meets a track at grade"),
+  paths: z.array(Path).default([])
+    .describe("Footpaths: junctions form automatically, zebra crossings where a path crosses a road, foot crossings over tracks"),
+  pedestrians: z.strictObject({
+    count: z.int().min(0).max(1000).optional().describe("People walking the paths and sidewalks; default about one per 25 m of walkway"),
+  }).prefault({}),
   traffic: z.strictObject({
     cars: z.int().min(0).max(400).optional().describe("Number of vehicles; default about one per 70 m of road"),
     vehicles: z.array(Id).min(1).default(["car", "car", "car", "van", "bus", "truck"])
@@ -177,6 +213,7 @@ export type StationSpec = Layout["stations"][number];
 export type ServiceSpec = Layout["services"][number];
 export type SceneryEntrySpec = Layout["scenery"][number];
 export type RoadSpec = Layout["roads"][number];
+export type PathSpec = Layout["paths"][number];
 
 /** Normalises a waypoint to { at, z?, radius? }. */
 export function waypoint(w: WaypointSpec): { at: [number, number]; z?: number; radius?: number } {

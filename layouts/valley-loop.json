@@ -53,23 +53,31 @@
   ],
   "style": { "season": "summer", "timeOfDay": 15, "dayLengthSeconds": null },
   "roads": [
-    { "id": "country-road", "points": [[6, 300], { "at": [1092, 300], "z": -1.8 }, [1394, 300]], "speed": 16 },
-    { "id": "station-street", "points": [[560, 252], [830, 252]] },
-    { "id": "church-street", "points": [[560, 348], [830, 348]] },
+    { "id": "country-west", "points": [[6, 300], [560, 300]], "speed": 16 },
+    { "id": "market-street", "points": [[560, 300], [830, 300]], "sidewalks": "both" },
+    {
+      "id": "country-east",
+      "points": [[830, 300], { "at": [1092, 300], "z": -1.8 }, [1394, 300]],
+      "speed": 16
+    },
+    { "id": "station-street", "points": [[560, 252], [830, 252]], "sidewalks": "both" },
+    { "id": "church-street", "points": [[560, 348], [830, 348]], "sidewalks": "both" },
     {
       "id": "west-lane",
       "from": { "road": "station-street", "at": "start" },
       "points": [[560, 300]],
-      "to": { "road": "church-street", "at": "start" }
+      "to": { "road": "church-street", "at": "start" },
+      "sidewalks": "both"
     },
     {
       "id": "east-lane",
       "from": { "road": "station-street", "at": "end" },
       "points": [[830, 300]],
-      "to": { "road": "church-street", "at": "end" }
+      "to": { "road": "church-street", "at": "end" },
+      "sidewalks": "both"
     },
-    { "id": "high-street", "points": [[693, 214], [693, 376]] },
-    { "id": "south-street", "points": [[600, 172], [800, 172]] },
+    { "id": "high-street", "points": [[693, 214], [693, 376]], "sidewalks": "both" },
+    { "id": "south-street", "points": [[600, 172], [800, 172]], "sidewalks": "right" },
     {
       "id": "crossing-lane",
       "from": { "road": "south-street", "at": "end" },
@@ -79,6 +87,19 @@
     { "id": "bergdorf-lane", "width": 5, "maxGrade": 0.1, "speed": 9, "points": [[1001, 788], [1001, 994]] }
   ],
   "traffic": { "cars": 40 },
+  "paths": [
+    {
+      "id": "mill-walk",
+      "from": { "road": "high-street", "at": "end" },
+      "points": [[660, 400], [560, 445], [445, 470]]
+    },
+    {
+      "id": "field-path",
+      "from": { "path": "mill-walk", "at": "end" },
+      "points": [[452, 380], [450, 240], [445, 160], [460, 6]]
+    }
+  ],
+  "pedestrians": { "count": 120 },
   "objects": {
     "windmill": {
       "description": "Tower windmill with a cap and four sails; the sails face +x",

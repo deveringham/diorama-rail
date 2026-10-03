@@ -1,7 +1,7 @@
 // World → THREE.Scene. Builds every static mesh once (terrain, track, roads,
-// structures, scenery), the instanced trains and road vehicles, the crossing
-// barriers and the cosmetic life layer, and exposes one per-frame update that
-// reads a sim snapshot and the time of day.
+// walkways, structures, scenery), the instanced trains, road vehicles and
+// people, the crossing barriers and the cosmetic life layer, and exposes one
+// per-frame update that reads a sim snapshot and the time of day.
 
 import * as THREE from "three";
 import type { World } from "../model/build";
@@ -11,6 +11,8 @@ import { trackMeshes } from "./trackMesh";
 import { structureMeshes } from "./structures";
 import { roadMeshes, CrossingMeshes } from "./roadMesh";
 import { VehicleMeshes } from "./vehicleMesh";
+import { walkMeshes } from "./walkMesh";
+import { WalkerMeshes } from "./walkerMesh";
 import { SceneryMeshes } from "./sceneryMesh";
 import { TrainMeshes } from "./trainMesh";
 import { Life } from "./life";
@@ -27,14 +29,15 @@ export type DioramaScene = {
 
 export function buildScene(world: World, snap: SimSnapshot): DioramaScene {
   const scene = new THREE.Scene();
-  const statics = [...terrainMeshes(world), ...trackMeshes(world), ...roadMeshes(world), ...structureMeshes(world)];
+  const statics = [...terrainMeshes(world), ...trackMeshes(world), ...roadMeshes(world), ...walkMeshes(world), ...structureMeshes(world)];
   scene.add(...statics);
   const scenery = new SceneryMeshes(world.objects, world.scenery);
   const trains = new TrainMeshes(world, snap);
   const vehicles = new VehicleMeshes(world, snap);
   const crossings = new CrossingMeshes(world);
+  const walkers = new WalkerMeshes(world.layout.seed, snap);
   const life = new Life(world, scenery.chimneys);
-  scene.add(scenery.group, trains.group, vehicles.group, crossings.group, life.group);
+  scene.add(scenery.group, trains.group, vehicles.group, crossings.group, walkers.group, life.group);
   const lighting = new Lighting(world, scene);
   lighting.setHour(world.layout.style.timeOfDay);
   // Static meshes never move: skip their per-frame matrix updates.
@@ -50,6 +53,7 @@ export function buildScene(world: World, snap: SimSnapshot): DioramaScene {
       trains.update(s);
       vehicles.update(s);
       crossings.update(s.gates);
+      walkers.update(s);
       life.update(dt, s);
       lighting.setHour(hour);
       scenery.setNight(lighting.windows, LIGHT.windowGlow);
@@ -65,6 +69,7 @@ export function buildScene(world: World, snap: SimSnapshot): DioramaScene {
       trains.dispose();
       vehicles.dispose();
       crossings.dispose();
+      walkers.dispose();
       life.dispose();
       lighting.sun.shadow.map?.dispose();
     },

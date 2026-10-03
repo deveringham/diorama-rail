@@ -46,3 +46,21 @@ export function withRoads(): Fixture {
   L.traffic = { cars: 16 };
   return L;
 }
+
+/**
+ * Roads plus walkways: sidewalks on both main roads, a path crossing the side lane
+ * and the cross road at zebras, one from the cross road's sidewalk over the track at
+ * a foot crossing, and a spur joining the first at a T.
+ */
+export function withWalks(): Fixture {
+  const L = withRoads();
+  L.roads![0].sidewalks = "both";
+  L.roads![1].sidewalks = "both";
+  L.paths = [
+    { id: "park", points: [[330, 470], [560, 470], [560, 330]] },
+    { id: "track-walk", from: { road: "cross", at: 20 }, points: [[320, 330], [320, 120], [500, 120]] },
+    { id: "spur", from: { path: "park", at: 120 }, points: [[450, 545]] },
+  ];
+  L.pedestrians = { count: 60 };
+  return L;
+}

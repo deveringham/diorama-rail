@@ -56,7 +56,7 @@ if (shot) {
 let world: World | null = null;
 let sim: Sim | null = null;
 let dscene: DioramaScene | null = null;
-const snap: SimSnapshot = { time: 0, trains: [], switches: [], blocks: [], vehicles: [], gates: [] };
+const snap: SimSnapshot = { time: 0, trains: [], switches: [], blocks: [], vehicles: [], gates: [], walkers: [] };
 let paused = false;
 let speed = 1;
 let shadows = true;
@@ -128,6 +128,7 @@ function rebuild(json: unknown, preStep: number): boolean {
   snap.trains.length = 0;
   snap.vehicles.length = 0;
   snap.gates.length = 0;
+  snap.walkers.length = 0;
   sim.snapshot(snap);
   dscene = buildScene(world, snap);
   dscene.lighting.setShadows(shadows);

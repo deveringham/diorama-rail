@@ -1,8 +1,8 @@
 # Diorama Rail — Layout Guide (for layout authors, human or LLM)
 
-A layout is one JSON document. Everything you see — track and road geometry,
-heights, bridges, tunnels, terrain shaping, trees, houses, trains, cars — is
-**derived** from it plus its `seed`. You never draw track directly: you give waypoints and the
+A layout is one JSON document. Everything you see — track, road and path
+geometry, heights, bridges, tunnels, terrain shaping, trees, houses, trains,
+cars, people — is **derived** from it plus its `seed`. You never draw track directly: you give waypoints and the
 builder fits straights and curves through them, then checks the result.
 
 The full machine-readable schema is in [`schema.json`](schema.json)
@@ -73,9 +73,12 @@ stations[]: { id, name, track, at (s of platform centre), length 120, side "left
 services[]: { id, train "regional-3"|"express-6"|"freight-10"|"tram-2", color? "#rrggbb", route [track ids],
               mode "loop"|"shuttle", stops [station ids], dwell 25, count 1 }
 roads[]: { id, kind "line"|"loop", points [[x,y] | {at,z?,radius?}], width 6, minRadius 10, maxGrade 0.08, speed 13,
-           from? {road, at (s) | "start" | "end"}, to? {…} }               (§3)
+           sidewalks "none"|"both"|"left"|"right", sidewalkWidth 2, from? {road, at (s) | "start" | "end"}, to? {…} }   (§3, §4)
 traffic: { cars? (default ≈ 1 per 70 m of road, ≤ 60), vehicles ["car","car","car","van","bus","truck"] }
-objects: { <id>: { description?, parts [part…], tint "walls", smoke 0, maxSlope 30 } }     custom scenery objects (§5)
+paths[]: { id, kind "line"|"loop", points [[x,y] | {at,z?,radius?}], width 2, surface "gravel"|"paved", minRadius 3,
+           maxGrade 0.12, from? {path | road, at (s) | "start" | "end"}, to? {…} }                      (§4)
+pedestrians: { count? (default ≈ 1 per 25 m of walkway, ≤ 200) }
+objects: { <id>: { description?, parts [part…], tint "walls", smoke 0, maxSlope 30 } }     custom scenery objects (§6)
 scenery[]: { object, at [x,y], rotation 0 | face "track"|"road"|[x,y], scale 1, z?, color?, smoke? }   one object
          | { scatter [ids], spacing, at? [x,y], radius?, scale [0.8, 1.2] }                     many, randomly
 style: { season "summer"|"autumn"|"winter", timeOfDay 15, dayLengthSeconds null }
@@ -147,7 +150,8 @@ down for every train.
   one or the other. A level crossing must be on plain ground (not on a bridge or
   in a tunnel), clear of platforms (5 m), 35 m from a railway junction and 25 m
   from a road junction or road end, and should cross at 30° or more (ideally
-  square).
+  square); under 15° is an error. Crossings with less than 60 m of road between
+  them work as one for the cars, which wait before the first while either is shut.
   Elsewhere keep roads half their width + 2.5 m from track centres.
 - **Dead ends:** a road end that joins nothing is a dead end where cars turn
   round — unless it is within 30 m of the board edge: there cars drive off the
@@ -171,7 +175,62 @@ down for every train.
   and houses are ordinary scenery: put houses about 10 m from a 6 m road's centre
   and lamps 4.5 m.
 
-## 4. Scenery: buildings, trees and other objects
+## 4. Sidewalks, paths and people
+
+People walk on **sidewalks** (raised pavements along roads) and **footpaths**
+(paths of their own, built like roads), in the same minimalist style as the
+passengers on the platforms.
+
+```jsonc
+"roads": [
+  { "id": "high-street", "points": [[693, 214], [693, 376]], "sidewalks": "both" },
+  { "id": "south-street", "points": [[600, 172], [800, 172]], "sidewalks": "right", "sidewalkWidth": 2.5 }
+],
+"paths": [
+  { "id": "mill-walk", "from": { "road": "high-street", "at": "end" }, "points": [[660, 400], [560, 445], [445, 470]] },
+  { "id": "field-path", "from": { "path": "mill-walk", "at": "end" }, "points": [[452, 380], [450, 240], [460, 6]] },
+  { "id": "pier", "width": 2.5, "surface": "paved", "from": { "road": "harbour-front", "at": 105 }, "points": [[205, 316]] }
+],
+"pedestrians": { "count": 120 }
+```
+
+- **Sidewalks:** a road's `sidewalks` adds raised (0.15 m) pavements of
+  `sidewalkWidth` on its `left`, `right` (of increasing s) or `both` sides. They
+  follow the road, round the corners of its junctions, and at junctions of three
+  roads or more people cross each leg a car's length behind where the cars wait
+  (unmarked: they wait for a gap in the traffic). A sidewalk is part of the road's
+  footprint: houses go about 10 m from a 6 m road's centre, lamps about 4.5 m.
+  Sidewalks run the whole length of a road, so a country road that passes through
+  a town is best split into three roads joined end to end (see `valley-loop`).
+- **Paths** work like roads: `points` with rounded corners (`minRadius` 3), `width`
+  (default 2 m), `surface` gravel or paved, heights that follow the ground within
+  `maxGrade` (default 12%), bridges and tunnels, terrain shaping. `from`/`to`
+  start or end a path on another path (`{ "path": id, "at": s }`, a T-junction)
+  or at a road's edge (`{ "road": id, "at": s }`), joining that road's sidewalk
+  on the side the path leaves from. A path end that simply lies on a road joins
+  it the same way, and paths that cross each other at about the same height meet
+  at a junction.
+- **Zebra crossings:** where a path crosses a road at about the same height
+  there is a zebra crossing; cars stop for anyone on it or waiting at the kerb.
+  Keep zebras away from road junctions (beyond the sidewalk corners, or 15 m
+  without sidewalks) and 8 m from a level crossing's zone.
+- **Foot crossings:** a path that crosses a track within 2 m of its height gets
+  a foot crossing with lights and a barrier; it closes for trains exactly like a
+  level crossing and follows the same rules (plain ground, off platforms, 35 m
+  from railway junctions, 30° or more). Farther apart in height (6.5 m) the path
+  goes over or under the line; in between is a `PATH_CONFLICT` — add a waypoint `z`.
+  People on sidewalks wait at level crossings too.
+- **Piers:** a path over the sea stands on piles — a pier with a deck and railings.
+- **People:** `pedestrians.count` people (default about one per 25 m of walkway)
+  walk on the right of each walkway at their own pace, now and then stop for a
+  while, pick a way at random at every junction (crossing roads less often than
+  not), turn round at dead ends, and walk off the board where a walkway ends
+  within 30 m of its edge, coming back a little later.
+- **Scenery and walkways:** placed objects must not stand on a path or sidewalk
+  (`SCENERY_ON_PATH`), except small things under 1.2 m across such as lamp posts.
+  Scattered items keep 1.5 m and more away. Benches go beside a path, not on it.
+
+## 5. Scenery: buildings, trees and other objects
 
 Everything beside the track — houses, churches, trees, lamps, boats — is an
 **object**: a small low-poly model described in JSON. Many are built in (below);
@@ -203,12 +262,13 @@ placed through `scenery`.
   it more common), `spacing` is the minimum distance between items, and `at` +
   `radius` limit it to a circle with a ragged edge. Scattered items skip water,
   ground steeper than the object's `maxSlope`, the track corridor (6 m+), roads
-  (3 m+ beyond the carriageway) and the footprints of placed objects (plus a 2 m
-  garden). Use it for forests, orchards,
+  (3 m+ beyond the carriageway), paths and sidewalks (1.5 m+) and the footprints
+  of placed objects (plus a 2 m garden). Use it for forests, orchards,
   hay bales, rocks.
 - Single objects are checked: within 2 m of a track centre → `SCENERY_ON_TRACK`
-  (error); reaching onto a road → `SCENERY_ON_ROAD` (error); standing inside
-  another placed object → `SCENERY_OVERLAP` (warning). Flat pieces under 0.5 m
+  (error); reaching onto a road → `SCENERY_ON_ROAD` (error); onto a path or
+  sidewalk → `SCENERY_ON_PATH` (error, small things like lamp posts excepted);
+  standing inside another placed object → `SCENERY_OVERLAP` (warning). Flat pieces under 0.5 m
   tall (`paving`) may overlap other objects.
 - Stations add their own `building` (beside the platform, facing it) and
   benches (`bench`); people on platforms are automatic.
@@ -239,7 +299,7 @@ placed through `scenery`.
 
 See them all with `npm run screenshot -- layouts/valley-loop.json --object all --out objects.png`.
 
-## 5. Designing objects (`objects`)
+## 6. Designing objects (`objects`)
 
 An object is a list of **parts**, each a low-poly primitive in the object's own
 frame: **x = front, y = left, z = up**, metres, origin on the ground at the
@@ -307,7 +367,7 @@ lights the part warmly at night; `smoke: true` marks a chimney, and the object's
 - Budget: a house is ~60 triangles; keep objects under ~500. Every object type
   in use costs 2–3 draw calls, however many times it is placed.
 
-## 6. Rules of thumb (avoid most errors)
+## 7. Rules of thumb (avoid most errors)
 
 1. Keep waypoints at least `2·minRadius` apart where the track turns.
 2. Put junctions on straights (`at` well away from curves); turnouts on curves
@@ -325,23 +385,25 @@ lights the part warmly at night; `smoke: true` marks a chimney, and the object's
     stations and junctions, as squarely as you can — or 6.5 m above or below.
 11. Keep 25 m between road junctions, and between a junction or a road's end
     and a level crossing.
-12. Lay out a town's streets as `roads` first, then line them with houses
-    (≈10 m from the road centre, fronts facing it) and lamps (≈4.5 m).
+12. Lay out a town's streets as `roads` first (with `sidewalks`), then line them
+    with houses (≈10 m from the road centre, fronts facing it) and lamps (≈4.5 m).
+13. End footpaths on a road's sidewalk (`from`/`to` with `road`) rather than near
+    it, and cross roads well away from junctions.
 
-## 7. Validation codes
+## 8. Validation codes
 
 | Code | Severity | Fix |
 |---|---|---|
 | `SCHEMA` | error | Match `schema.json`: fix the type, add the missing field, or remove the unknown key. |
-| `DUPLICATE_ID` | error | Rename one of the two; ids are shared by tracks, roads, stations and services (objects have their own namespace). |
-| `UNKNOWN_REF` | error | Use an existing id (the message lists the known ones): track, road, station, train type or object (also in `traffic.vehicles`). |
-| `TRACK_REF_CYCLE` | error | A branch can't (indirectly) be its own parent; make one track (or road) a plain line/loop. |
-| `OUT_OF_BOUNDS` | error | Move waypoints inward (track must stay 20 m inside the terrain, roads 5 m), or move a placed object onto the board. |
+| `DUPLICATE_ID` | error | Rename one of the two; ids are shared by tracks, roads, paths, stations and services (objects have their own namespace). |
+| `UNKNOWN_REF` | error | Use an existing id (the message lists the known ones): track, road, path, station, train type or object (also in `traffic.vehicles`). |
+| `TRACK_REF_CYCLE` | error | A branch can't (indirectly) be its own parent; make one track (road, path) a plain line/loop. |
+| `OUT_OF_BOUNDS` | error | Move waypoints inward (track must stay 20 m inside the terrain, roads 5 m, paths 3 m), or move a placed object onto the board. |
 | `FILLET_OVERLAP` | error | Spread the two named waypoints apart or lower `minRadius` / waypoint `radius`. |
 | `CORNER_TOO_SHARP` | error | Split the hairpin with an extra waypoint so no single turn exceeds 170°. |
 | `JUNCTION_UNREACHABLE` | error | Move the branch's first (or last, for `to`) waypoint further from the junction, or flip `heading`. |
-| `JUNCTION_POSITION` | error | Put `at` inside the parent (not at a line end) and on a straight or a curve ≥ 150 m. Roads: `at` within the road (or `"start"`/`"end"`), and road junctions ≥ 25 m apart. |
-| `GRADE_EXCEEDED` | error | Lengthen the climb, change the `z` targets, or raise `maxGrade` (message gives the length needed). Also for roads. |
+| `JUNCTION_POSITION` | error | Put `at` inside the parent (not at a line end) and on a straight or a curve ≥ 150 m. Roads and paths: `at` within the parent (or `"start"`/`"end"`), and road junctions ≥ 25 m apart. |
+| `GRADE_EXCEEDED` | error | Lengthen the climb, change the `z` targets, or raise `maxGrade` (message gives the length needed). Also for roads and paths. |
 | `TRACK_CONFLICT` | error | Separate the tracks by ≥ 5 m in plan or ≥ 6 m in height, or join them with a junction. |
 | `STATION_RANGE` | error | Move `at` so `at ± length/2` lies within the track. |
 | `STATION_CURVE` | warning | Move the platform onto a straight (curves tighter than 300 m). |
@@ -352,23 +414,25 @@ lights the part warmly at night; `smoke: true` marks a chimney, and the object's
 | `TRAIN_TOO_LONG` | warning | Lengthen the platform or use a shorter train. |
 | `CAPACITY` | warning | Fewer trains, or a longer route. (`simulate`: also vehicles that found no room on the roads — lower `traffic.cars`.) |
 | `ROAD_CONFLICT` | error | A road crosses a track (or road) 3–6.5 m (5.5 m) apart in height, runs too close beside a track, or overlaps another road without a junction: make it a level crossing / crossroads, clear it in height with a waypoint `z`, move it, or join the roads with `from`/`to`. |
-| `LEVEL_CROSSING_POSITION` | error | Move the crossing onto plain ground, off the platform, 35 m from railway junctions and 25 m from road junctions and road ends — or take the road over or under the line. |
-| `LEVEL_CROSSING_ANGLE` | warning | Cross the track at 30° or more (ideally square) so the crossing stays short. |
+| `LEVEL_CROSSING_POSITION` | error | Move the crossing onto plain ground, off the platform, 35 m from railway junctions and 25 m from road junctions and road ends — or take the road over or under the line. The same for a path's foot crossing (without the road rules). |
+| `LEVEL_CROSSING_ANGLE` | warning / error | Cross the track at 30° or more (ideally square) so the crossing stays short; below 15° it is an error. Also for paths. |
+| `PATH_CONFLICT` | error | A path crosses a track, road or path at an awkward height difference (add a waypoint `z`: at grade, or 6.5 / 5 / 3 m clear), runs beside a track or along a road too closely, overlaps another path, or crosses a road too close to a junction or level crossing: move it, cross elsewhere, or end it on the sidewalk. |
 | `SCENERY_ON_TRACK` | error | A placed object comes within 2 m of a track centre: move it away (the message says how far) or turn it. |
 | `SCENERY_ON_ROAD` | error | A placed object (or a station building) reaches onto a road: move it further from the road centre or turn it. |
+| `SCENERY_ON_PATH` | error | A placed object over 1.2 m across stands on a path or sidewalk: move it beside the walkway. |
 | `SCENERY_OVERLAP` | warning | Two placed objects stand inside each other: move one. |
 | `DEADLOCK` | error | (`simulate` only) Trains wait on each other: add a passing loop, fewer trains, or different routes. |
 
 Every issue has `path` (JSON path such as `tracks[1].points[2]`), a one-sentence
 `message` with numbers and a suggested fix, and often `at` (map coordinates).
 
-## 8. Authoring loop
+## 9. Authoring loop
 
 1. Write the JSON (start from an example).
 2. `npm run check -- my.json --json` → fix every error (warnings are advisory).
 3. `npm run simulate -- my.json --minutes 30` → every service should stop
-   regularly, no `DEADLOCK`, and `max wait` should be modest; road traffic should
-   show no stuck vehicles and a longest wait under a minute or two.
+   regularly, no `DEADLOCK`, and `max wait` should be modest; road traffic and
+   pedestrians should show nobody stuck and a longest wait under a minute or two.
 4. New objects: `npm run screenshot -- my.json --object <id> --out obj.png` and
    look at it from the front-right before placing it.
 5. `npm run screenshot -- my.json --view top --out top.png` to verify geometry
@@ -377,11 +441,11 @@ Every issue has `path` (JSON path such as `tracks[1].points[2]`), a one-sentence
    are bridges and tunnels where you meant them, is the board too empty or busy?
    `--t 120` shows trains after two minutes; `--cam x,y,z,tx,ty,tz` takes a close-up.
 6. Iterate. Use `query(world).describe()` from `src/api.ts` for a compact text
-   summary (track and road lengths, structures, junctions, level crossings,
-   placed objects) when choosing `at` values; `query(world).roadAt(x, y)` and
+   summary (track, road and path lengths, structures, junctions, level, zebra
+   and foot crossings, placed objects) when choosing `at` values; `query(world).roadAt(x, y)` and
    `trackAt(x, y)` give the `s` of a point near a road or track.
 
-## 9. Examples
+## 10. Examples
 
 Both examples are in `layouts/`. Their tracks and services are short; most of
 each file is the scenery list, one placement per line.
@@ -391,12 +455,17 @@ each file is the scenery list, one placement per line.
   a shallow valley inside an oval main line (`main`, five corners at r = 120 m).
 - `hill` leaves `main` at s = 700, crosses over the main line on a 350 m viaduct,
   tunnels under the hill's shoulder and ends at Bergdorf at z = 26.
-- Roads: a country road from the west edge to the east edge, over both sides of
-  the main line at level crossings and through a dip under the `hill` viaduct;
+- Roads: a country road from the west edge to the east edge (three roads joined
+  end to end, so only the town stretch, `market-street`, has sidewalks), over
+  both sides of the main line at level crossings and through a dip under the
+  `hill` viaduct;
   Lindenau's streets as a small grid of crossroads, T-junctions and corners; a
   lane from the south street over a third level crossing just past the
   platforms; and a steep lane (`maxGrade` 0.1) up to Bergdorf from the north
-  edge. 40 vehicles.
+  edge. 40 vehicles. Lindenau's streets have sidewalks.
+- Paths: `mill-walk` from the church square out to the windmill, and
+  `field-path` on from there over the country road (a zebra) and the main line
+  (a foot crossing) to the south edge of the board. 120 pedestrians.
 - Lindenau: the high street runs north from the station forecourt to a church
   square, crossed by Station Street, the country road and Church Street, lined
   with houses, terraces and lamps; flats by the station, gardens with trees;
@@ -428,13 +497,15 @@ each file is the scenery list, one placement per line.
   south, with a bay that the coastal line crosses on a 225 m bridge.
 - `coast` runs between the termini Westhafen and Ostkap, with a 6 m-offset
   passing loop; two shuttles (one per loop track) cross there every cycle.
-- Westhafen: a waterfront road (kept 1 m above the sea) with lamps and a row of
-  houses facing the sea, joined round the end of the line to streets inland up
-  to a church; a `jetty` and moored `fishing-boat`s placed at `z: 0`.
+- Westhafen: a waterfront road (kept 1 m above the sea) with sidewalks, lamps and
+  a row of houses facing the sea, joined round the end of the line to streets
+  inland up to a church; a `pier` (a path running out over the sea, so it stands
+  on piles) and moored `fishing-boat`s placed at `z: 0`.
 - An inland road climbs over the hills past a hamlet to Ostkap's streets; a
   lane leaves it over a level crossing west of Ostkap station and runs along the
-  shore to the `lighthouse`. 28 vehicles.
+  shore to the `lighthouse`. 28 vehicles. A `beach-path` leaves the inland road
+  and crosses the line at a foot crossing (a waypoint `z` brings it up to the
+  rails). 90 pedestrians on the paths and the towns' sidewalks.
 - Custom objects: `lighthouse` (stacked red and white cylinders using `grid`
-  steps, a glowing `lamp` lantern), `fishing-boat` (an upside-down tapered box
-  as the hull, a cabin, a mast; tinted per boat) and `jetty` (a deck on a grid
-  of posts).
+  steps, a glowing `lamp` lantern) and `fishing-boat` (an upside-down tapered
+  box as the hull, a cabin, a mast; tinted per boat).

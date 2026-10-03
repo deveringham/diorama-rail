@@ -6,7 +6,7 @@
 // closed. Pure TypeScript, deterministic from the layout seed.
 
 import type { World } from "../model/build";
-import type { RoadGeom, RoadNode, LevelCrossing } from "../model/roads";
+import { type RoadGeom, type RoadNode, type LevelCrossing, junctionStop } from "../model/roads";
 import { type Plan, curveLimit } from "./services";
 import type { Train } from "./trains";
 import { rOnPiece } from "../model/routes";
@@ -28,6 +28,8 @@ const ARRIVE = 0.05;            // m
 const LOOK = 90;                // m of path planned ahead
 const SPEED_STEP = 5;           // m between lane speed-limit samples
 const STOP_GAP = 1.5;           // m between a crossing's stop line and its zone
+const SHORT_GAP = 60;           // m: crossings along a lane with less road than this between them are one to the cars
+const ZEBRA_GAP = 1.0;          // m between a zebra's stop line and its stripes
 const LOCK_REACH = 8;           // m beyond braking distance at which a car asks for a junction
 const REROUTE_AFTER = 4;        // s waiting for room beyond a junction before trying another way
 const QUEUED = 2;               // m/s: slower than this, the car ahead counts as queueing
@@ -62,11 +64,21 @@ type Lane = {
   end: number | null;           // node at the end (null: a loop road without nodes runs into itself)
   lateral: number;              // offset along the road's left normal (driving on the right)
   limit: Float32Array;          // speed limit every SPEED_STEP m
-  // Level crossings as lane offsets: stop line and the far end of the zone. Only the
-  // first crossing of a group (see Gate.group) is a place to stop; its zone runs to
-  // the end of the group's.
-  crossings: Array<{ gate: number; stop: number; zoneEnd: number; lead: boolean }>;
+  // Level crossings as lane offsets: stop line, centre and the far end of the zone.
+  // Crossings of a group (see Gate.group), or with too little road between them for a
+  // queue, are one to the cars: only the first (the lead) is a place to stop, for all of
+  // their gates, and its zone runs to the end of the last. `from` is the lead's stop
+  // line: a car past it is committed to every crossing up to `zoneEnd`.
+  crossings: Array<{ gate: number; stop: number; at: number; zoneEnd: number; lead: boolean; from: number; gates: number[] }>;
+  // Where people cross this lane (see WalkNet.crossings): stop line and far edge, as lane offsets.
+  zebras: Array<{ c: number; stop: number; zoneEnd: number }>;
   next: Lane[];                 // lanes a car may take at the end
+};
+
+/** What traffic needs to know about the people (see sim/walkers.ts). */
+export type WalkerView = {
+  busy: Uint8Array;             // per road crossing: cars must give way there
+  inGate(gate: number): boolean;   // someone within a level or foot crossing's zone
 };
 type Turn = { kind: "turn"; node: number; junction: boolean; to: Lane; length: number; speed: number; pts: Float64Array; cum: Float64Array };
 type Away = { kind: "away"; node: number; back: Lane; length: number };
@@ -126,15 +138,17 @@ export class Traffic {
   private r: Rng;
   private time = 0;
   private world: World;
+  /** The people, once the sim attaches them. */
+  walkers: WalkerView | null = null;
 
   constructor(world: World, plans: Plan[], seed: number) {
     this.world = world;
     this.r = rng(seed, "traffic");
     const net = world.roads;
     this.holder = new Int32Array(net.nodes.length).fill(-1);
-    for (const c of net.crossings) {
-      const road = net.roads.get(c.road)!;
-      const half = road.spec.width / 2 / Math.max(Math.sin((c.angle * Math.PI) / 180), 0.25) + 1;
+    // Road level crossings first, then foot crossings (paths over tracks): the order of SimSnapshot.gates.
+    for (const c of [...net.crossings, ...world.walks.footCrossings]) {
+      const half = c.width / 2 / Math.max(Math.sin((c.angle * Math.PI) / 180), 0.25) + 1;
       this.gates.push({ crossing: c, half, state: "open", t: 0, barrier: 0, group: c.group, want: false, wantedAt: -Infinity, closures: 0, closedFor: 0 });
     }
     this.groups = this.gates.map((_, i) => i).filter((i) => this.gates[i].group === i)
@@ -164,17 +178,7 @@ export class Traffic {
     let box: number;
     if (n.legs.length === 1) box = this.portal(n) ? 0 : DEAD_END_TURN;
     else if (n.legs.length === 2) box = 1;
-    else {
-      // Stop clear of every other road at the junction, further back when it meets at an angle.
-      const h = headingAt(road.path, leg.s) + (leg.dir < 0 ? Math.PI : 0);
-      box = 2;
-      for (const o of n.legs) {
-        if (o.road === leg.road) continue;
-        const other = net.roads.get(o.road)!;
-        const sin = Math.abs(Math.sin(headingAt(other.path, o.s) - h));
-        box = Math.max(box, other.spec.width / 2 / Math.max(sin, 0.4) + 1.5);
-      }
-    }
+    else box = junctionStop(net, n, legIndex);
     // Never more than half way to the next node along this leg.
     const next = this.nextStop(road, leg.s, leg.dir);
     if (next) box = Math.min(box, Math.max(0, next.dist / 2 - 0.5));
@@ -210,7 +214,7 @@ export class Traffic {
         limit[i] = Math.min(road.spec.speed, Math.sqrt(LATERAL * radiusAt(road.path, s)));
       }
       const lane: Lane = {
-        kind: "lane", id: this.lanes.length, road, dir, s0, length, end, lateral: (-dir * road.spec.width) / 4, limit, crossings: [], next: [],
+        kind: "lane", id: this.lanes.length, road, dir, s0, length, end, lateral: (-dir * road.spec.width) / 4, limit, crossings: [], zebras: [], next: [],
       };
       this.lanes.push(lane);
       return lane;
@@ -253,21 +257,35 @@ export class Traffic {
     this.gates.forEach((g, gi) => {
       const c = g.crossing;
       for (const lane of this.lanes) {
-        if (lane.road.id !== c.road) continue;
+        if (c.kind !== "road" || lane.road.id !== c.road) continue;
         const L = lane.road.path.length;
         let at = (c.roadS - lane.s0) * lane.dir;
         if (lane.road.path.closed) at = mod(at, L);
         if (at < 0 || at > lane.length) continue;
-        lane.crossings.push({ gate: gi, stop: at - c.zone - STOP_GAP, zoneEnd: at + c.zone, lead: true });
+        const stop = at - c.zone - STOP_GAP;
+        lane.crossings.push({ gate: gi, stop, at, zoneEnd: at + c.zone, lead: true, from: stop, gates: [gi] });
+      }
+    });
+    this.world.walks.crossings.forEach((wc, ci) => {
+      for (const lane of this.lanes) {
+        if (lane.road.id !== wc.road) continue;
+        const L = lane.road.path.length;
+        let at = (wc.roadS - lane.s0) * lane.dir;
+        if (lane.road.path.closed) at = mod(at, L);
+        if (at < -wc.half || at > lane.length + wc.half) continue;
+        lane.zebras.push({ c: ci, stop: at - wc.half - ZEBRA_GAP, zoneEnd: at + wc.half });
       }
     });
     for (const lane of this.lanes) {
+      lane.zebras.sort((a, b) => a.stop - b.stop);
       lane.crossings.sort((a, b) => a.stop - b.stop);
       let lead: Lane["crossings"][number] | null = null;
       for (const x of lane.crossings) {
-        if (lead && this.gates[lead.gate].group === this.gates[x.gate].group) {
+        if (lead && (this.gates[lead.gate].group === this.gates[x.gate].group || x.stop - lead.zoneEnd < SHORT_GAP)) {
           x.lead = false;
+          x.from = lead.stop;
           lead.zoneEnd = Math.max(lead.zoneEnd, x.zoneEnd);
+          if (!lead.gates.includes(x.gate)) lead.gates.push(x.gate);
         } else lead = x;
       }
     }
@@ -401,7 +419,8 @@ export class Traffic {
         const lane = this.lanes.find((l) => (x -= l.length) < 0) ?? this.lanes[this.lanes.length - 1];
         if (lane.length < length + 2) continue;
         const d = range(this.r, length, lane.length);
-        if (lane.crossings.some((c) => d > c.stop - 2 && d - length < c.zoneEnd + 2)) continue;
+        if (lane.crossings.some((c) => d > c.from - 2 && d - length < c.zoneEnd + 2)) continue;
+        if (lane.zebras.some((c) => d > c.stop - 1 && d - length < c.zoneEnd + 1)) continue;
         const clash = this.cars.some((o) => o.path[0] === lane && Math.abs(o.d - d) < Math.max(o.length, length) + SPAWN_GAP);
         if (clash) continue;
         const car: Car = {
@@ -537,10 +556,11 @@ export class Traffic {
 
   /** No car between a crossing's stop lines and the far side of its zone. */
   private zoneClear(gate: number): boolean {
+    if (this.walkers?.inGate(gate)) return false;
     for (const lane of this.lanes) {
       for (const c of lane.crossings) {
         if (c.gate !== gate) continue;
-        for (const o of this.occ.get(lane) ?? []) if (o.front > c.stop + 0.1 && o.rear < c.zoneEnd) return false;
+        for (const o of this.occ.get(lane) ?? []) if (o.front > c.from + 0.1 && o.rear < c.zoneEnd) return false;
       }
     }
     return true;
@@ -579,6 +599,7 @@ export class Traffic {
         car.maxWait = Math.max(car.maxWait, car.stopped);
       } else car.stopped = 0;
     }
+    this.occupy();                // where the cars are now, for the people deciding whether to cross
   }
 
   /** Junctions go to one car at a time, longest waiting first, and only if it can get clear beyond. */
@@ -635,7 +656,10 @@ export class Traffic {
       if (seg.kind === "turn" && seg.junction) return cum;
       let room = seg.length;
       for (const o of this.occ.get(seg) ?? []) if (o.car !== car) room = Math.min(room, o.rear);
-      if (seg.kind === "lane") for (const c of seg.crossings) if (this.gates[c.gate].state !== "open") room = Math.min(room, c.stop);
+      if (seg.kind === "lane") {
+        for (const c of seg.crossings) if (this.gates[c.gate].state !== "open") room = Math.min(room, c.from);
+        for (const z of seg.zebras) if (this.walkers?.busy[z.c]) room = Math.min(room, z.stop);
+      }
       if (room < seg.length || cum + room >= need) return cum + room;
       cum += seg.length;
     }
@@ -646,7 +670,8 @@ export class Traffic {
   private exitRoom(lane: Lane): number {
     let room = lane.length;
     for (const o of this.occ.get(lane) ?? []) room = Math.min(room, o.rear);
-    for (const c of lane.crossings) if (this.gates[c.gate].state !== "open") room = Math.min(room, c.stop);
+    for (const c of lane.crossings) if (this.gates[c.gate].state !== "open") room = Math.min(room, c.from);
+    for (const z of lane.zebras) if (this.walkers?.busy[z.c]) room = Math.min(room, z.stop);
     return room;
   }
 
@@ -698,6 +723,14 @@ export class Traffic {
       if (gap <= ARRIVE) cap = 0;
     }
 
+    // Crossings for people that the car is already on (on any of its lanes): it carries on over them.
+    const onZebras = new Set<number>();
+    for (const seg of [lane0, ...car.trail]) {
+      if (seg.kind !== "lane" || !seg.zebras.length) continue;
+      const me = this.occ.get(seg)?.find((o) => o.car === car);
+      if (me) for (const z of seg.zebras) if (me.front > z.stop + 0.1 && me.rear < z.zoneEnd) onZebras.add(z.c);
+    }
+
     // Stop lines, slower stretches and turns ahead.
     cum = -car.d;
     let clear = true;                                       // nothing holds the car before the next junction
@@ -713,11 +746,19 @@ export class Traffic {
           if (!c.lead) continue;                           // inside the group's zone: committed already
           const stop = cum + c.stop;
           if (stop < -0.1) continue;                      // already past the stop line: carry on
-          const g = this.gates[c.gate];
-          let halt = g.state !== "open";
-          if (g.state === "warning" && stop < (v * v) / (2 * HARD_DECEL)) halt = false;
+          // Too close to stop when the lights start: keep going (the barriers wait for the car).
+          const late = stop < (v * v) / (2 * HARD_DECEL);
+          let halt = c.gates.some((gi) => { const g = this.gates[gi].state; return g !== "open" && !(g === "warning" && late); });
           // Don't stop on the crossing: wait until there is room beyond it.
           if (!halt) halt = obstacles.some((o) => o.rel > cum + c.stop && o.rel < cum + c.zoneEnd + car.length + MIN_GAP && o.speed < QUEUED);
+          if (halt) { stopAt(stop); clear = false; }
+        }
+        // People crossing: give way if there is still room to stop, and never stop on the crossing.
+        for (const z of seg.zebras) {
+          const stop = cum + z.stop;
+          if (stop < -0.1 || onZebras.has(z.c)) continue;
+          let halt = !!this.walkers?.busy[z.c] && (stop >= (v * v) / (2 * HARD_DECEL) || v < 0.5);
+          if (!halt) halt = obstacles.some((o) => o.rel > stop && o.rel < cum + z.zoneEnd + car.length + MIN_GAP && o.speed < QUEUED);
           if (halt) { stopAt(stop); clear = false; }
         }
       } else if (seg.kind === "away") {
@@ -774,6 +815,71 @@ export class Traffic {
   private release(car: Car, turn: Turn): void {
     if (this.holder[turn.node] === car.index) this.holder[turn.node] = -1;
     car.held = car.held.filter((t) => t !== turn);
+  }
+
+  // -- for the people ----------------------------------------------------------------
+
+  /**
+   * Whether stepping onto road crossing c now would be unsafe: a car is on it, or
+   * coming that could not stop in time (`gap` = 0, a zebra) or would arrive within
+   * `gap` seconds (an unmarked crossing, where people wait for a gap).
+   */
+  crossingThreat(c: number, gap: number): boolean {
+    for (const lane of this.lanes) {
+      for (const z of lane.zebras) {
+        if (z.c !== c) continue;
+        for (const o of this.occ.get(lane) ?? []) if (o.front > z.stop + 0.1 && o.rear < z.zoneEnd) return true;
+        // Cars still on their way: on this lane before the stop line, or on the segments leading to it.
+        for (const car of this.cars) {
+          if (car.hidden) continue;
+          const dist = this.distanceTo(car, lane, z.stop);
+          if (dist === null) continue;
+          // A car standing before the stop line is no danger: it will wait for anyone on the crossing.
+          const v = car.speed;
+          if (v > 0.3 && dist < (gap > 0 ? v * gap + 2 : (v * v) / (2 * DECEL) + 1)) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /** How far a car's front is before offset `at` of a lane, along its planned path (null: not heading there soon). */
+  private distanceTo(car: Car, lane: Lane, at: number): number | null {
+    let cum = -car.d;
+    for (let k = 0; k < car.path.length && cum < LOOK; k++) {
+      const seg = car.path[k];
+      if (seg === lane) {
+        const d = cum + at;
+        return d >= -0.1 ? d : null;
+      }
+      cum += seg.length;
+    }
+    return null;
+  }
+
+  /** Seconds the longest-waiting car has stood at road crossing c's stop line. */
+  carWaitingAt(c: number): number {
+    let longest = 0;
+    for (const lane of this.lanes) {
+      for (const z of lane.zebras) {
+        if (z.c !== c) continue;
+        for (const o of this.occ.get(lane) ?? []) {
+          if (o.front <= z.stop + 0.1 && o.front > z.stop - 1.5 && o.car.speed < 0.1) longest = Math.max(longest, o.car.stopped);
+        }
+      }
+    }
+    return longest;
+  }
+
+  /** For tests: whether any car body is on road crossing c. */
+  carOnRoadCrossing(c: number): boolean {
+    for (const lane of this.lanes) {
+      for (const z of lane.zebras) {
+        if (z.c !== c) continue;
+        for (const o of this.occ.get(lane) ?? []) if (o.front > z.stop + ZEBRA_GAP && o.rear < z.zoneEnd) return true;
+      }
+    }
+    return false;
   }
 
   // -- output ---------------------------------------------------------------------
@@ -857,9 +963,8 @@ export class Traffic {
     for (const lane of this.lanes) {
       for (const c of lane.crossings) {
         if (c.gate !== gate) continue;
-        const at = (c.stop + STOP_GAP + c.zoneEnd) / 2;
         const zone = g.crossing.zone;
-        for (const o of this.occ.get(lane) ?? []) if (o.front > at - zone && o.rear < at + zone) return true;
+        for (const o of this.occ.get(lane) ?? []) if (o.front > c.at - zone && o.rear < c.at + zone) return true;
       }
     }
     return false;

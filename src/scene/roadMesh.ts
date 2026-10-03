@@ -9,7 +9,7 @@ import type { World } from "../model/build";
 import type { GateSnapshot } from "../sim/traffic";
 import { pointAt, headingAt, sampleS } from "../model/geometry";
 import { profileZ, structureAt } from "../model/heights";
-import { CROSSING_ROAD_Z } from "../model/roads";
+import { CROSSING_ROAD_Z, sidewalkWidth, type LevelCrossing } from "../model/roads";
 import { PALETTE } from "./palette";
 import { GeoBuilder, flatMaterial, toThree, type P3 } from "./geo";
 import { type Frame, side } from "./trackMesh";
@@ -17,6 +17,7 @@ import { type Frame, side } from "./trackMesh";
 const STEP = 2;                  // m between cross-sections
 const VERGE = 1.0;               // m the verge reaches beyond the carriageway
 const VERGE_DROP = 0.6;          // m it falls over that width
+const KERB_DROP = 0.45;          // m a kerb face reaches down where a sidewalk runs
 const TUNNEL_VISIBLE = 14;       // m of road drawn inside each tunnel mouth
 const DASH = 3;                  // m centre-line dash, then the same gap
 const LINE_HALF = 0.08;
@@ -34,6 +35,12 @@ export function roadFrame(world: World, road: string, s: number): Frame {
   const r = world.roads.roads.get(road)!;
   const [x, y] = pointAt(r.path, s);
   return { x, y, z: profileZ(world.roads.profiles.get(road)!, s), h: headingAt(r.path, s) };
+}
+
+export function pathFrame(world: World, path: string, s: number): Frame {
+  const p = world.walks.paths.get(path)!;
+  const [x, y] = pointAt(p.path, s);
+  return { x, y, z: profileZ(world.walks.profiles.get(path)!, s), h: headingAt(p.path, s) };
 }
 
 const inRanges = (s: number, ranges: Array<[number, number]>) => ranges.some(([a, b]) => s >= a && s <= b);
@@ -64,9 +71,12 @@ export function roadMeshes(world: World): THREE.Object3D[] {
       if (ss[i + 1] - ss[i] < 1e-3 || inRanges(mid, trims) || hidden(mid)) continue;
       const [a, b] = [frames[i], frames[i + 1]];
       g.quad(side(a, -half, 0), side(b, -half, 0), side(b, half, 0), side(a, half, 0), PALETTE.road[season]);
-      if (structureAt(spans, mid) === "bridge") continue;
-      g.quad(side(a, half, 0), side(b, half, 0), side(b, half + VERGE, -VERGE_DROP), side(a, half + VERGE, -VERGE_DROP), PALETTE.verge[season]);
-      g.quad(side(a, -half - VERGE, -VERGE_DROP), side(b, -half - VERGE, -VERGE_DROP), side(b, -half, 0), side(a, -half, 0), PALETTE.verge[season]);
+      // A sloping verge, or a kerb face where a sidewalk runs (the sidewalk itself is a walkway).
+      const bridge = structureAt(spans, mid) === "bridge";
+      if (sidewalkWidth(r.spec, 1) > 0) g.quad(side(a, half, 0), side(b, half, 0), side(b, half, -KERB_DROP), side(a, half, -KERB_DROP), PALETTE.kerb);
+      else if (!bridge) g.quad(side(a, half, 0), side(b, half, 0), side(b, half + VERGE, -VERGE_DROP), side(a, half + VERGE, -VERGE_DROP), PALETTE.verge[season]);
+      if (sidewalkWidth(r.spec, -1) > 0) g.quad(side(a, -half, -KERB_DROP), side(b, -half, -KERB_DROP), side(b, -half, 0), side(a, -half, 0), PALETTE.kerb);
+      else if (!bridge) g.quad(side(a, -half - VERGE, -VERGE_DROP), side(b, -half - VERGE, -VERGE_DROP), side(b, -half, 0), side(a, -half, 0), PALETTE.verge[season]);
     }
 
     // A line road ending where another road joins it (a corner or the head of a T):
@@ -95,6 +105,7 @@ export function roadMeshes(world: World): THREE.Object3D[] {
       quiet.push([mine.s - widest / 2 - 3, mine.s + widest / 2 + 3]);
     }
     for (const c of net.crossings) if (c.road === r.id) quiet.push([c.roadS - c.zone - 2, c.roadS + c.zone + 2]);
+    for (const c of world.walks.crossings) if (c.road === r.id && c.kind === "zebra") quiet.push([c.roadS - c.half - 1.5, c.roadS + c.half + 1.5]);
     if (!r.path.closed) quiet.push([-Infinity, 2], [L - 2, Infinity]);
     for (let s = 1; s + DASH <= L; s += 2 * DASH) {
       if (inRanges(s, quiet) || inRanges(s + DASH, quiet) || hidden(s)) continue;
@@ -111,7 +122,7 @@ export function roadMeshes(world: World): THREE.Object3D[] {
     const ht = headingAt(t.path, c.trackS);
     const hr = headingAt(r.path, c.roadS);
     const sin = Math.max(Math.abs(Math.sin(hr - ht)), 0.25);
-    const along = r.spec.width / 2 / sin;                   // along the track to the road edges
+    const along = c.width / 2 / sin;                        // along the track to the outer edges (sidewalks included)
     const across = PANEL_HALF / sin;                        // along the road to the panel edges
     const z = c.z + CROSSING_ROAD_Z + MARK_LIFT;
     const corner = (a: number, b: number): P3 => [
@@ -152,16 +163,28 @@ export function roadMeshes(world: World): THREE.Object3D[] {
 /** One approach to a level crossing: the post on the driver's right and where its barrier points. */
 type Approach = { post: P3; travel: number; arm: number; length: number };
 
-function crossingApproaches(world: World, c: World["roads"]["crossings"][number]): Array<Approach | null> {
-  const r = world.roads.roads.get(c.road)!;
-  const half = r.spec.width / 2;
+/**
+ * The two approaches of a road level crossing or a foot crossing. A road's barrier
+ * covers its lane and sidewalk; a path's covers the whole path.
+ */
+export function crossingApproaches(world: World, c: LevelCrossing): Array<Approach | null> {
+  const road = c.kind === "road";
+  const geom = road ? world.roads.roads.get(c.road)!.path : world.walks.paths.get(c.road)!.path;
+  const list = road ? world.roads.crossings : world.walks.footCrossings;
   // In a group of crossings, barriers stand only outside the first and last.
-  const group = world.roads.crossings.filter((x) => x.group === c.group);
+  const group = list.filter((x) => x.group === c.group);
   return ([1, -1] as const).map((k) => {
     if (group.some((x) => (x.roadS - c.roadS) * k < 0)) return null;
-    const s = c.roadS - k * (c.zone + 0.5);
-    const f = roadFrame(world, c.road, r.path.closed ? (s + r.path.length) % r.path.length : Math.min(Math.max(s, 0), r.path.length));
+    const raw = c.roadS - k * (c.zone + 0.5);
+    const s = geom.closed ? (raw + geom.length) % geom.length : Math.min(Math.max(raw, 0), geom.length);
+    const f = road ? roadFrame(world, c.road, s) : pathFrame(world, c.road, s);
     const travel = f.h + (k < 0 ? Math.PI : 0);
+    if (!road) {
+      const half = c.width / 2;
+      return { post: side(f, -k * (half + 0.5), 0), travel, arm: travel + Math.PI / 2, length: c.width + 0.4 };
+    }
+    const spec = world.roads.roads.get(c.road)!.spec;
+    const half = spec.width / 2 + sidewalkWidth(spec, (-k) as 1 | -1);
     return { post: side(f, -k * (half + POST_OUT), 0), travel, arm: travel + Math.PI / 2, length: half + POST_OUT - 0.2 };
   });
 }
@@ -182,7 +205,7 @@ function orientedBox(g: GeoBuilder, c: P3, u: P3, v: P3, n: P3, lu: number, lv: 
   g.quad(p(1, 1, -1), p(-1, 1, -1), p(-1, 1, 1), p(1, 1, 1), color, 0.9);
 }
 
-function furniture(g: GeoBuilder, a: Approach): void {
+export function furniture(g: GeoBuilder, a: Approach): void {
   const [x, y, z] = a.post;
   g.box(x, y, z - 0.3, 0.16, 0.16, CROSS_Z + 0.9, a.travel, PALETTE.signalPost);
   // Barrier housing at the foot of the post.
@@ -218,7 +241,8 @@ export class CrossingMeshes {
   private off = new THREE.Color(PALETTE.lampOff);
 
   constructor(world: World) {
-    for (const c of world.roads.crossings) this.approaches.push(...crossingApproaches(world, c));
+    // Road crossings, then foot crossings: two approaches each, in the order of the sim's gates.
+    for (const c of [...world.roads.crossings, ...world.walks.footCrossings]) this.approaches.push(...crossingApproaches(world, c));
     const n = this.approaches.length;
     if (!n) return;
     // Arm: unit length along +x from the pivot, red and white bands; scaled per approach.

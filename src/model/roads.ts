@@ -21,6 +21,7 @@ const CROSSING_FLAT = 5;         // m either side of a level crossing held level
 const CROSSING_GROUP_GAP = 15;   // m: level crossings closer than this along a road work as one
 const TRACK_ZONE = 3;            // m either side of the track centre that cars must clear
 const MIN_CROSSING_ANGLE = 30;   // degrees; shallower level crossings get a warning
+export const SHALLOWEST_CROSSING = 15;   // degrees; shallower ones are an error (the crossing zone is not modelled)
 const TURNOUT_CLEAR = 35;        // m a level crossing must keep from a railway junction
 const NODE_CLEAR = 25;           // m a level crossing must keep from a road junction or road end
 const NODE_SPACING = 25;         // m between road junctions along a road
@@ -37,7 +38,9 @@ export type Leg = { road: string; s: number; dir: 1 | -1 };       // leave a nod
 export type RoadNode = { id: number; at: V2; legs: Leg[] };       // 1 leg = dead end; 3+ = junction
 export type LevelCrossing = {
   id: string;
-  road: string; roadS: number;
+  kind: "road" | "path";         // a road (cars and its sidewalks) or a footpath crossing the line
+  road: string; roadS: number;   // the road or path, and s along it
+  width: number;                 // m across the whole crossing: carriageway and sidewalks, or the path
   track: string; trackS: number;
   at: V2; z: number;
   angle: number;                 // degrees between road and track (90 = square)
@@ -45,7 +48,40 @@ export type LevelCrossing = {
   group: number;                 // index of the first crossing of its group: crossings close together on one road
                                  // (a road over double track) close and open together, with barriers only outside
 };
-export type RoadPoint = { road: string; s: number; x: number; y: number; z: number; width: number; ground: boolean };
+export type RoadPoint = {
+  road: string; s: number; x: number; y: number; z: number;
+  width: number;                 // carriageway
+  reach: number;                 // half-width including the wider sidewalk
+  ground: boolean;
+};
+
+/** Width of a road's sidewalk on one side (+1 left, −1 right of increasing s), 0 if none. */
+export function sidewalkWidth(spec: RoadSpec, side: 1 | -1): number {
+  const has = spec.sidewalks === "both" || spec.sidewalks === (side > 0 ? "left" : "right");
+  return has ? spec.sidewalkWidth : 0;
+}
+
+/** Half-width of a road including its wider sidewalk. */
+export const roadReach = (spec: RoadSpec) => spec.width / 2 + Math.max(sidewalkWidth(spec, 1), sidewalkWidth(spec, -1));
+
+/**
+ * How far from a junction's centre cars on one leg stop: clear of every other road
+ * there, further back when that road meets at an angle. Shared by traffic and the
+ * pedestrian crossings placed just behind it.
+ */
+export function junctionStop(net: Pick<RoadNet, "roads">, n: RoadNode, legIndex: number): number {
+  const leg = n.legs[legIndex];
+  const road = net.roads.get(leg.road)!;
+  const h = headingAt(road.path, leg.s) + (leg.dir < 0 ? Math.PI : 0);
+  let box = 2;
+  for (const o of n.legs) {
+    if (o.road === leg.road) continue;
+    const other = net.roads.get(o.road)!;
+    const sin = Math.abs(Math.sin(headingAt(other.path, o.s) - h));
+    box = Math.max(box, other.spec.width / 2 / Math.max(sin, 0.4) + 1.5);
+  }
+  return box;
+}
 export type RoadNet = {
   roads: Map<string, RoadGeom>;
   order: string[];
@@ -76,8 +112,8 @@ type Ctx = {
 // ---------------------------------------------------------------------------
 
 /** Polyline of a path sampled every ~1 m, for intersection tests. */
-type Poly = { s: number[]; x: number[]; y: number[] };
-function polyline(path: Path): Poly {
+export type Poly = { s: number[]; x: number[]; y: number[] };
+export function polyline(path: Path): Poly {
   const s = sampleS(path, 1);
   if (path.closed) s.push(path.length);
   const pts = s.map((v) => pointAt(path, v));
@@ -85,7 +121,7 @@ function polyline(path: Path): Poly {
 }
 
 /** Where two polylines cross: s on each and the point. Segments of b are hashed for speed. */
-function intersections(a: Poly, b: Poly): Array<{ sa: number; sb: number; at: V2 }> {
+export function intersections(a: Poly, b: Poly): Array<{ sa: number; sb: number; at: V2 }> {
   const hash = new SpatialHash<number>(8);
   for (let j = 0; j + 1 < b.s.length; j++) hash.insert((b.x[j] + b.x[j + 1]) / 2, (b.y[j] + b.y[j + 1]) / 2, j);
   const out: Array<{ sa: number; sb: number; at: V2 }> = [];
@@ -106,11 +142,11 @@ function intersections(a: Poly, b: Poly): Array<{ sa: number; sb: number; at: V2
   return out;
 }
 
-/** s on the parent road of a from/to end ("start" and "end" resolved). */
-const endAt = (e: { at: number | "start" | "end" }, parent: RoadGeom) =>
+/** s on the parent of a from/to end ("start" and "end" resolved). */
+export const endAt = (e: { at: number | "start" | "end" }, parent: { path: Path }) =>
   e.at === "start" ? 0 : e.at === "end" ? parent.path.length : e.at;
 
-const crossAngle = (h1: number, h2: number) => {
+export const crossAngle = (h1: number, h2: number) => {
   const d = Math.abs(wrapAngle(h1 - h2));
   return (Math.min(d, Math.PI - d) * 180) / Math.PI;
 };
@@ -178,7 +214,10 @@ export function buildRoads(ctx: Ctx): { net: RoadNet | null; issues: Issue[] } {
           const zone = (TRACK_ZONE + (r.spec.width / 2) * Math.cos(a)) / Math.max(Math.sin(a), 0.25);
           const id = `${r.id}×${t.id}`;
           const n = crossings.filter((c) => c.id === id || c.id.startsWith(`${id}#`)).length;
-          crossings.push({ id: n ? `${id}#${n + 1}` : id, group: crossings.length, road: r.id, roadS: x.sa, track: t.id, trackS: x.sb, at: x.at, z: tz, angle, zone });
+          crossings.push({
+            id: n ? `${id}#${n + 1}` : id, kind: "road", group: crossings.length, road: r.id, roadS: x.sa, width: 2 * roadReach(r.spec),
+            track: t.id, trackS: x.sb, at: x.at, z: tz, angle, zone,
+          });
         } else if (Math.abs(dz) < RAIL_CLEAR) {
           issues.push(error("ROAD_CONFLICT", `road '${r.id}' crosses track '${t.id}' ${Math.abs(dz).toFixed(1)} m ${dz > 0 ? "above" : "below"} it; make it a level crossing (within ${LEVEL_DZ} m, e.g. with a waypoint z) or clear it by ${RAIL_CLEAR} m`, path, x.at));
         } else separated.push({ road: r.id, s: x.sa, other: t.id, otherS: x.sb, rail: true, above: dz > 0, at: x.at });
@@ -330,7 +369,7 @@ export function buildRoads(ctx: Ctx): { net: RoadNet | null; issues: Issue[] } {
   for (const r of roads.values()) {
     for (const s of sampleS(r.path, POINT_STEP)) {
       const [x, y] = pointAt(r.path, s);
-      points.push({ road: r.id, s, x, y, z: profileZ(profiles.get(r.id)!, s), width: r.spec.width, ground: structureAt(spans.get(r.id)!, s) === "ground" });
+      points.push({ road: r.id, s, x, y, z: profileZ(profiles.get(r.id)!, s), width: r.spec.width, reach: roadReach(r.spec), ground: structureAt(spans.get(r.id)!, s) === "ground" });
     }
   }
   const hash = new SpatialHash<RoadPoint>(10);
@@ -412,7 +451,9 @@ function checkRoads(ctx: Ctx, net: RoadNet): Issue[] {
         : turnout ? `it is within ${TURNOUT_CLEAR} m of the railway junction ${turnout.id}`
           : node ? `it is within ${NODE_CLEAR} m of ${node.legs.length === 1 ? "the end of the road" : "a road junction"}` : null;
     if (why) issues.push(error("LEVEL_CROSSING_POSITION", `road '${c.road}' crosses track '${c.track}' at grade near (${c.at[0].toFixed(0)}, ${c.at[1].toFixed(0)}) but ${why}; move the crossing or take the road over or under the line`, path, c.at));
-    if (c.angle < MIN_CROSSING_ANGLE) {
+    if (c.angle < SHALLOWEST_CROSSING) {
+      issues.push(error("LEVEL_CROSSING_ANGLE", `road '${c.road}' crosses track '${c.track}' at only ${c.angle.toFixed(0)}°; a level crossing needs at least ${SHALLOWEST_CROSSING}° (aim for ${MIN_CROSSING_ANGLE}° or more, ideally square), or take the road over or under the line`, path, c.at));
+    } else if (c.angle < MIN_CROSSING_ANGLE) {
       issues.push(warning("LEVEL_CROSSING_ANGLE", `road '${c.road}' crosses track '${c.track}' at only ${c.angle.toFixed(0)}°; aim for at least ${MIN_CROSSING_ANGLE}° (ideally square) so the crossing stays short`, path, c.at));
     }
   }
@@ -428,7 +469,7 @@ function checkRoads(ctx: Ctx, net: RoadNet): Issue[] {
   const reported = new Set<string>();
   const report = (key: string, issue: Issue) => { if (!reported.has(key)) { reported.add(key); issues.push(issue); } };
   for (const p of net.points) {
-    const gap = p.width / 2 + 2.5;
+    const gap = Math.max(p.width / 2 + 2.5, p.reach + 1.5);
     trackHash.near(p.x, p.y, gap, (q) => {
       if (Math.hypot(p.x - q.x, p.y - q.y) >= gap || Math.abs(p.z - q.z) >= RAIL_CLEAR) return;
       if (net.crossings.some((c) => c.road === p.road && Math.hypot(c.at[0] - p.x, c.at[1] - p.y) < c.zone + p.width + 4)) return;
@@ -441,7 +482,7 @@ function checkRoads(ctx: Ctx, net: RoadNet): Issue[] {
         if ((path.closed ? Math.min(ds, path.length - ds) : ds) < 40) return;
       }
       if (q.road < p.road) return;
-      const need = (p.width + q.width) / 2 + 0.5;
+      const need = p.reach + q.reach + 0.5;
       if (Math.hypot(p.x - q.x, p.y - q.y) >= need || Math.abs(p.z - q.z) >= ROAD_CLEAR) return;
       const shared = net.nodes.some((n) => n.legs.some((l) => l.road === p.road) && n.legs.some((l) => l.road === q.road)
         && Math.hypot(n.at[0] - p.x, n.at[1] - p.y) < JUNCTION_IGNORE);
