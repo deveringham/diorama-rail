@@ -60,7 +60,7 @@ export function checkReferences(layout: Layout): Issue[] {
   const seen = new Map<string, string>();
   const note = (id: string, path: string) => {
     const prev = seen.get(id);
-    if (prev) issues.push(error("DUPLICATE_ID", `id '${id}' is used twice (also at ${prev}); ids must be unique across tracks, roads, paths, stations and services`, path));
+    if (prev) issues.push(error("DUPLICATE_ID", `id '${id}' is used twice (also at ${prev}); ids must be unique across tracks, roads, paths, car parks, stations and services`, path));
     else seen.set(id, path);
   };
   layout.tracks.forEach((t, i) => note(t.id, `tracks[${i}].id`));
@@ -68,6 +68,7 @@ export function checkReferences(layout: Layout): Issue[] {
   layout.services.forEach((s, i) => note(s.id, `services[${i}].id`));
   layout.roads.forEach((r, i) => note(r.id, `roads[${i}].id`));
   layout.paths.forEach((p, i) => note(p.id, `paths[${i}].id`));
+  layout.parking.forEach((p, i) => note(p.id, `parking[${i}].id`));
 
   const trackIds = new Set(layout.tracks.map((t) => t.id));
   const stationIds = new Set(layout.stations.map((s) => s.id));
@@ -106,12 +107,15 @@ export function checkReferences(layout: Layout): Issue[] {
     }
   });
   layout.traffic.vehicles.forEach((id, k) => { if (!objectIds.has(id)) unknown("object", id, `traffic.vehicles[${k}]`, known()); });
+  layout.people.vehicles.forEach((id, k) => { if (!objectIds.has(id)) unknown("object", id, `people.vehicles[${k}]`, known()); });
+  layout.parking.forEach((p, i) => { if (p.road && !roadIds.has(p.road)) unknown("road", p.road, `parking[${i}].road`, roadIds); });
   const pathIds = new Set(layout.paths.map((p) => p.id));
   layout.paths.forEach((p, i) => {
     for (const w of ["from", "to"] as const) {
       const end = p[w];
       if (end?.path && !pathIds.has(end.path)) unknown("path", end.path, `paths[${i}].${w}.path`, pathIds);
       if (end?.road && !roadIds.has(end.road)) unknown("road", end.road, `paths[${i}].${w}.road`, roadIds);
+      if (end?.station && !stationIds.has(end.station)) unknown("station", end.station, `paths[${i}].${w}.station`, stationIds);
       if (end?.path === p.id) issues.push(error("TRACK_REF_CYCLE", `path '${p.id}' cannot branch from itself`, `paths[${i}].${w}.path`));
     }
   });

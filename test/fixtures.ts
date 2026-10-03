@@ -61,6 +61,29 @@ export function withWalks(): Fixture {
     { id: "track-walk", from: { road: "cross", at: 20 }, points: [[320, 330], [320, 120], [500, 120]] },
     { id: "spur", from: { path: "park", at: 120 }, points: [[450, 545]] },
   ];
-  L.pedestrians = { count: 60 };
+  return L;
+}
+
+/**
+ * Walkways plus a town: houses along the cross road, a shop and an inn on the main
+ * road, an office block and a church, street parking, a car park south of the line,
+ * and a path to the station.
+ */
+export function withTown(): Fixture {
+  const L = withWalks();
+  L.roads![0].parking = "both";
+  L.roads![1].parking = "left";
+  L.paths!.push({ id: "station-path", from: { path: "track-walk", at: 380 }, to: { station: "a" }, points: [[460, 160]] });
+  L.parking = [{ id: "car-park", at: [725, 130], spaces: 12, rotation: 180 }];
+  L.scenery = [
+    ...[340, 356, 372, 388, 445, 461, 477, 493, 509].map((x) => ({ object: "house", at: [x, 413.5] as [number, number], rotation: 270 })),
+    ...[340, 356, 372, 388, 445, 461, 477, 493].map((x) => ({ object: "house", at: [x, 387.5] as [number, number], rotation: 90 })),
+    { object: "shop", at: [693.5, 300], rotation: 180, name: "Corner Shop" },
+    { object: "pub", at: [695, 340], rotation: 180 },
+    { object: "office", at: [662, 480], rotation: 0 },
+    { object: "church", at: [650, 690], rotation: 0, name: "St. Peter's" },
+  ];
+  L.traffic = { cars: 6 };
+  L.people = { cars: 0.4 };
   return L;
 }

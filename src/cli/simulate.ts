@@ -28,12 +28,15 @@ if (values.json) {
   }
   const tr = res.traffic;
   if (tr) {
-    console.log(`\nroad traffic: ${tr.cars} vehicles, avg ${tr.avgSpeed.toFixed(1)} m/s, longest wait ${tr.maxWait.toFixed(0)} s`
-      + `${tr.stuck ? `, ${tr.stuck} stuck` : ""}; level crossings closed ${tr.closures} times, ${(tr.closedShare * 100).toFixed(0)}% of the time`);
+    console.log(`\nroad traffic: ${tr.cars} through-traffic vehicles, avg ${tr.avgSpeed.toFixed(1)} m/s; ${tr.own} residents' cars drove ${(tr.ownDistance / 1000).toFixed(1)} km;`
+      + ` longest wait ${tr.maxWait.toFixed(0)} s${tr.stuck ? `, ${tr.stuck} stuck` : ""}; level crossings closed ${tr.closures} times, ${(tr.closedShare * 100).toFixed(0)}% of the time`);
   }
-  const pd = res.pedestrians;
-  if (pd) {
-    console.log(`pedestrians: ${pd.people} people, avg ${pd.avgSpeed.toFixed(1)} m/s, longest wait ${pd.maxWait.toFixed(0)} s${pd.stuck ? `, ${pd.stuck} stuck` : ""}; ${pd.crossed} road crossings`);
+  const pp = res.people;
+  if (pp) {
+    console.log(`people: ${pp.people} residents, ${pp.tasks} errands done, ${Object.values(pp.trips).reduce((a, b) => a + b, 0)} journeys (avg ${(pp.avgTrip / 60).toFixed(1)} min),`
+      + ` longest wait ${pp.maxWait.toFixed(0)} s${pp.stuck ? `, ${pp.stuck} stuck` : ""}; ${pp.crossed} road crossings`);
+    console.log(`  journeys by way of travel: ${Object.entries(pp.trips).map(([k, n]) => `${k} ${n}`).join("; ") || "none"}`);
+    console.log(`  now: ${pp.outside} outside (${pp.walking} walking, ${pp.waiting} on platforms), ${pp.driving} driving, ${pp.riding} on trains`);
   }
   if (res.deadlock) console.log(`\nDEADLOCK: ${res.deadlock.message}`);
 }

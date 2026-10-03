@@ -10,7 +10,7 @@ import { Sim, DT } from "../src/sim/sim";
 import { locate } from "../src/model/routes";
 import { KERB } from "../src/model/walks";
 import { profileZ } from "../src/model/heights";
-import { base, withWalks, example, type Fixture } from "./fixtures";
+import { base, withWalks, withTown, example, type Fixture } from "./fixtures";
 
 describe("walk network", () => {
   const { world, report } = buildWorld(withWalks());
@@ -138,10 +138,10 @@ function trainOver(world: World, sim: Sim, c: World["roads"]["crossings"][number
 }
 
 describe.each([
-  ["walk fixture", () => withWalks()],
+  ["town fixture", () => withTown()],
   ["valley-loop", () => example("valley-loop")],
   ["harbour-town", () => example("harbour-town")],
-])("%s pedestrians", (_, make) => {
+])("%s people on foot", (_, make) => {
   const { world } = buildWorld(make());
   const sim = new Sim(world!);
   const gates = [...world!.roads.crossings, ...world!.walks.footCrossings];
@@ -152,23 +152,23 @@ describe.each([
     sim.step();
     if (tick % 10) continue;
     world!.walks.crossings.forEach((c, i) => {
-      if (sim.walkers.onCrossing(i) && sim.traffic.carOnRoadCrossing(i)) carAndPerson++;
+      if (sim.people.onCrossing(i) && sim.traffic.carOnRoadCrossing(i)) carAndPerson++;
       if (c.kind === "zebra" && sim.traffic.carWaitingAt(i) > 0) carsYielded++;
     });
-    gates.forEach((c, g) => { if (sim.walkers.inGate(g) && trainOver(world!, sim, c)) trainAndPerson++; });
+    gates.forEach((c, g) => { if (sim.people.inGate(g) && trainOver(world!, sim, c)) trainAndPerson++; });
   }
 
-  it("places everyone", () => expect(sim.walkers.people.length).toBe(world!.stats.pedestrians));
+  it("has everyone who lives there", () => expect(sim.people.bodies.length).toBe(world!.stats.people));
 
   it("never has a car on a crossing someone is on", () => expect(carAndPerson).toBe(0));
 
   it("never has anyone in a crossing's zone while a train is over it", () => expect(trainAndPerson).toBe(0));
 
   it("keeps people moving and crossing roads", () => {
-    const st = sim.walkers.stats();
+    const st = sim.people.stats();
     expect(st.stuck).toBe(0);
     expect(st.maxWait).toBeLessThan(180);
-    expect(st.avgSpeed).toBeGreaterThan(0.6);
+    expect(st.trips.walk).toBeGreaterThan(st.people / 2);
     expect(st.crossed).toBeGreaterThan(20);
   });
 
@@ -182,6 +182,6 @@ describe.each([
     const a = new Sim(world!);
     const b = new Sim(world!);
     for (let i = 0; i < 1500; i++) { a.step(); b.step(); }
-    expect(a.snapshot().walkers).toEqual(b.snapshot().walkers);
+    expect(a.snapshot().people).toEqual(b.snapshot().people);
   });
 });

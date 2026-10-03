@@ -36,7 +36,7 @@ export function buildScene(world: World, snap: SimSnapshot): DioramaScene {
   const vehicles = new VehicleMeshes(world, snap);
   const crossings = new CrossingMeshes(world);
   const walkers = new WalkerMeshes(world.layout.seed, snap);
-  const life = new Life(world, scenery.chimneys);
+  const life = new Life(scenery.chimneys);
   scene.add(scenery.group, trains.group, vehicles.group, crossings.group, walkers.group, life.group);
   const lighting = new Lighting(world, scene);
   lighting.setHour(world.layout.style.timeOfDay);
@@ -54,7 +54,7 @@ export function buildScene(world: World, snap: SimSnapshot): DioramaScene {
       vehicles.update(s);
       crossings.update(s.gates);
       walkers.update(s);
-      life.update(dt, s);
+      life.update(dt);
       lighting.setHour(hour);
       scenery.setNight(lighting.windows, LIGHT.windowGlow);
       vehicles.setNight(lighting.windows, LIGHT.windowGlow);

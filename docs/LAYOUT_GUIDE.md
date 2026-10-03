@@ -2,7 +2,8 @@
 
 A layout is one JSON document. Everything you see — track, road and path
 geometry, heights, bridges, tunnels, terrain shaping, trees, houses, trains,
-cars, people — is **derived** from it plus its `seed`. You never draw track directly: you give waypoints and the
+cars, the people who live in the houses and their comings and goings — is
+**derived** from it plus its `seed`. You never draw track directly: you give waypoints and the
 builder fits straights and curves through them, then checks the result.
 
 The full machine-readable schema is in [`schema.json`](schema.json)
@@ -73,14 +74,17 @@ stations[]: { id, name, track, at (s of platform centre), length 120, side "left
 services[]: { id, train "regional-3"|"express-6"|"freight-10"|"tram-2", color? "#rrggbb", route [track ids],
               mode "loop"|"shuttle", stops [station ids], dwell 25, count 1 }
 roads[]: { id, kind "line"|"loop", points [[x,y] | {at,z?,radius?}], width 6, minRadius 10, maxGrade 0.08, speed 13,
-           sidewalks "none"|"both"|"left"|"right", sidewalkWidth 2, from? {road, at (s) | "start" | "end"}, to? {…} }   (§3, §4)
-traffic: { cars? (default ≈ 1 per 70 m of road, ≤ 60), vehicles ["car","car","car","van","bus","truck"] }
+           sidewalks "none"|"both"|"left"|"right", sidewalkWidth 2, parking "none"|"both"|"left"|"right",
+           parkingStyle "parallel"|"perpendicular", name?, from? {road, at (s) | "start" | "end"}, to? {…} }   (§3, §4)
 paths[]: { id, kind "line"|"loop", points [[x,y] | {at,z?,radius?}], width 2, surface "gravel"|"paved", minRadius 3,
-           maxGrade 0.12, from? {path | road, at (s) | "start" | "end"}, to? {…} }                      (§4)
-pedestrians: { count? (default ≈ 1 per 25 m of walkway, ≤ 200) }
-objects: { <id>: { description?, parts [part…], tint "walls", smoke 0, maxSlope 30 } }     custom scenery objects (§6)
-scenery[]: { object, at [x,y], rotation 0 | face "track"|"road"|[x,y], scale 1, z?, color?, smoke? }   one object
+           maxGrade 0.12, name?, from? {path | road, at (s) | "start" | "end"} | {station}, to? {…} }   (§4)
+parking[]: { id, at [x,y], spaces 20, rotation?, road?, name? }                                  car parks (§3)
+people: { count? (default: as many as the homes hold, ≤ 600), cars 0.45, vehicles ["car","car","car","van"] }   (§5)
+traffic: { cars? (through traffic; default ≈ 1 per 200 m of road, ≤ 30), vehicles ["car","van","bus","truck"] }
+objects: { <id>: { description?, building?, parts [part…], tint "walls", smoke 0, maxSlope 30 } }   custom objects (§7)
+scenery[]: { object, at [x,y], rotation 0 | face "track"|"road"|[x,y], scale 1, z?, color?, smoke?, name?, building? }
          | { scatter [ids], spacing, at? [x,y], radius?, scale [0.8, 1.2] }                     many, randomly
+building: { functions ["accommodation"|"workplace"|"landmark"], residents 3, jobs 3, titles ["Employee"], kind?, door? [x,y] }
 style: { season "summer"|"autumn"|"winter", timeOfDay 15, dayLengthSeconds null }
 ```
 
@@ -121,9 +125,10 @@ down for every train.
   { "id": "west-lane", "from": { "road": "station-street", "at": "start" }, "points": [[560, 300]],
     "to": { "road": "church-street", "at": "start" } },
   { "id": "crossing-lane", "from": { "road": "south-street", "at": "end" }, "points": [[800, 230]],
-    "to": { "road": "station-street", "at": 240 } }
+    "to": { "road": "station-street", "at": 240 }, "parking": "both" }
 ],
-"traffic": { "cars": 40 }
+"parking": [{ "id": "station-car-park", "name": "Station Car Park", "at": [568, 148], "spaces": 24, "rotation": 90 }],
+"traffic": { "cars": 10 }
 ```
 
 - **Geometry** works as for tracks: `points` are waypoints whose corners become
@@ -156,13 +161,30 @@ down for every train.
 - **Dead ends:** a road end that joins nothing is a dead end where cars turn
   round — unless it is within 30 m of the board edge: there cars drive off the
   board and come back a few seconds later, as if the road went on.
-- **Traffic:** `traffic.cars` vehicles (default about one per 70 m of road, at
-  most 60) are picked at random from `traffic.vehicles` — object ids, so the
-  built-in `car`, `van`, `bus` and `truck` or your own (front toward +x, origin at
-  the centre, like any object; parts coloured `lamp` are headlights). Each picks
-  turns at random (straight on is twice as likely), keeps its distance, takes a
-  junction only when it is free and there is room beyond it, and never stops on
-  a level crossing.
+- **Street parking:** `parking` (`left`, `right` or `both`, of increasing s) adds
+  a strip of bays between the carriageway and the sidewalk: 2.4 m of parallel
+  bays 6 m long (`parkingStyle: "parallel"`, the default) or 5.2 m of nose-in
+  bays (`"perpendicular"`). The strip widens the road: its sidewalks move out with
+  it, so houses go about 12.5 m from a 6 m road's centre and lamps about 7 m.
+  There are no bays near junctions, crossings, zebras, path ends, bridges or dead
+  ends, nor where a car pulling out would cross one.
+- **Car parks:** each `parking` entry is a car park centred on `at`: two rows of
+  nose-in bays (`spaces`, default 20) either side of an aisle, 16.4 m wide and
+  2 + 1.3·spaces + 8 m long. Its entrance faces the road it joins (the nearest, or
+  `road`; or set `rotation`, the direction the entrance faces) by a driveway of
+  1–60 m; the aisle is a dead-end road of its own, so cars reach the bays under
+  the usual rules. The paved area must keep clear of roads, tracks and placed
+  objects (`PARKING_POSITION`, `SCENERY_ON_ROAD`). `name` is how people speak of
+  it (default from its id).
+- **Traffic:** residents drive their own cars (§5): out of their bay when there
+  is a gap, along the quickest lanes, into a free bay near where they are going.
+  On top of that, `traffic.cars` vehicles of **through traffic** (default about
+  one per 200 m of road, at most 30) are picked from `traffic.vehicles` — object
+  ids, so the built-in `car`, `van`, `bus` and `truck` or your own (front toward
+  +x, origin at the centre, like any object; parts coloured `lamp` are
+  headlights) — and drive about at random (straight on is twice as likely). All
+  keep their distance, take a junction only when it is free and there is room
+  beyond it, and never stop on a level crossing.
 - **Level crossings** start flashing when a train could arrive within about
   11 s (or is close enough to need to brake), lower their barriers once no car is
   on the crossing, and open when the train's tail has passed. A train only has to
@@ -175,11 +197,10 @@ down for every train.
   and houses are ordinary scenery: put houses about 10 m from a 6 m road's centre
   and lamps 4.5 m.
 
-## 4. Sidewalks, paths and people
+## 4. Sidewalks and paths
 
-People walk on **sidewalks** (raised pavements along roads) and **footpaths**
-(paths of their own, built like roads), in the same minimalist style as the
-passengers on the platforms.
+People (§5) walk on **sidewalks** (raised pavements along roads) and
+**footpaths** (paths of their own, built like roads).
 
 ```jsonc
 "roads": [
@@ -189,9 +210,9 @@ passengers on the platforms.
 "paths": [
   { "id": "mill-walk", "from": { "road": "high-street", "at": "end" }, "points": [[660, 400], [560, 445], [445, 470]] },
   { "id": "field-path", "from": { "path": "mill-walk", "at": "end" }, "points": [[452, 380], [450, 240], [460, 6]] },
-  { "id": "pier", "width": 2.5, "surface": "paved", "from": { "road": "harbour-front", "at": 105 }, "points": [[205, 316]] }
-],
-"pedestrians": { "count": 120 }
+  { "id": "pier", "width": 2.5, "surface": "paved", "from": { "road": "harbour-front", "at": 105 }, "points": [[205, 316]] },
+  { "id": "station-path", "from": { "road": "high-street", "at": 40 }, "points": [[660, 214]], "to": { "station": "lindenau" } }
+]
 ```
 
 - **Sidewalks:** a road's `sidewalks` adds raised (0.15 m) pavements of
@@ -209,7 +230,9 @@ passengers on the platforms.
   or at a road's edge (`{ "road": id, "at": s }`), joining that road's sidewalk
   on the side the path leaves from. A path end that simply lies on a road joins
   it the same way, and paths that cross each other at about the same height meet
-  at a junction.
+  at a junction. `{ "station": id }` ends a path on that station's platform,
+  beside the station building (people walk on to the platform there). A path's
+  `name` is used for addresses and for the places people stroll to along it.
 - **Zebra crossings:** where a path crosses a road at about the same height
   there is a zebra crossing; cars stop for anyone on it or waiting at the kerb.
   Keep zebras away from road junctions (beyond the sidewalk corners, or 15 m
@@ -221,16 +244,85 @@ passengers on the platforms.
   goes over or under the line; in between is a `PATH_CONFLICT` — add a waypoint `z`.
   People on sidewalks wait at level crossings too.
 - **Piers:** a path over the sea stands on piles — a pier with a deck and railings.
-- **People:** `pedestrians.count` people (default about one per 25 m of walkway)
-  walk on the right of each walkway at their own pace, now and then stop for a
-  while, pick a way at random at every junction (crossing roads less often than
-  not), turn round at dead ends, and walk off the board where a walkway ends
-  within 30 m of its edge, coming back a little later.
+- **Walking:** people keep to the right of a walkway at their own pace, wait at
+  the kerb of a zebra until the cars have stopped, wait for a gap at unmarked
+  crossings, and wait at level and foot crossings while the lights flash.
 - **Scenery and walkways:** placed objects must not stand on a path or sidewalk
   (`SCENERY_ON_PATH`), except small things under 1.2 m across such as lamp posts.
   Scattered items keep 1.5 m and more away. Benches go beside a path, not on it.
 
-## 5. Scenery: buildings, trees and other objects
+## 5. Buildings, people and their errands
+
+Every placed object whose definition has a `building` block is a **building**:
+somewhere people live (`accommodation`), work (`workplace`) or go to visit
+(`landmark`: a church, a shop, an inn). The residents are generated from the
+homes — each has a name, a home, usually a job and perhaps a car — and run
+errands: go to work, go home, visit a shop or a friend, stroll along a footpath.
+For each they take the quickest way by their own lights: on foot, in their own
+car, by train, or a mix (driving to the station and taking the train is
+common). At the destination they go inside for a while, then think of the next
+thing to do and come out again.
+
+```jsonc
+"scenery": [
+  { "object": "shop", "at": [625, 314], "rotation": 270, "name": "Lindenau Bakery",
+    "building": { "kind": "Bakery", "titles": ["Baker", "Shop assistant"] } },
+  { "object": "church", "at": [693, 410], "rotation": 270, "name": "St. Michael's Church" },
+  { "object": "windmill", "at": [430, 470], "rotation": 300, "name": "Lindenau Windmill",
+    "building": { "functions": ["landmark", "workplace"], "jobs": 2, "titles": ["Miller", "Apprentice miller"], "door": [4.6, 0] } }
+],
+"people": { "cars": 0.3 }
+```
+
+- **Buildings:** built-in buildings come with their uses (table in §6): a house is
+  a home for 3, a terrace for 7, flats for 20; the church, barn (a farm), station
+  building, shop, office block and inn have jobs. A placement's `building`
+  overrides any of `functions`, `residents`, `jobs`, `titles` (the first job gets
+  the first title, the last title fills the rest), `kind` (what sort of place it
+  is, shown with its name) and `door` ([x, y] in the object frame; default the
+  middle of its front). A custom object becomes a building with a `building`
+  block in its definition (§7). Scattered objects are buildings too, if their
+  object is.
+- **Names and addresses:** `name` names a placed building. Otherwise it gets an
+  address on the nearest street within 60 m — numbered along the street, odd on
+  its left and even on its right (of increasing s): `"14 Market Street"`. A
+  road's (or path's) `name` is its street name, by default its id in title case
+  (`market-street` → "Market Street"). Station buildings are named after their
+  station, car parks by their `name`.
+- **Doors:** people go in and out at the door, which must reach a sidewalk or
+  path within 45 m in a straight line that crosses no road or track and climbs at
+  most 4.5 m (so turn doors toward the street). A door that reaches only a parking
+  bay (within 40 m) makes the building reachable by car alone; one that reaches
+  neither gets `BUILDING_UNREACHABLE` and nobody lives, works or visits there.
+- **People:** `people.count` (default: as many as the reachable homes hold, at
+  most 600; more than they hold is a `CAPACITY` warning) live in the homes,
+  households sharing a surname. About 72% have a job, where there are posts.
+  A share `people.cars` (default 0.45) own a car, one of `people.vehicles`, kept in
+  the nearest free bay within 150 m of home — so give the streets where people
+  live some parking.
+- **Errands:** someone with nothing to do thinks of a task every half minute or
+  so — work (4–12 min), home (3–10 min), a visit (1–4 min) or a stroll to a place
+  on a footpath (½–1½ min) — and plans the quickest journey by their own tastes
+  (some mind walking more than others). They drive only from where their car is
+  parked, to a free bay near the destination (it is reserved for them), so a car
+  left at the station is collected on the way back. They take a train from a
+  station they can walk to, on any passenger service calling at both stations,
+  boarding the first one heading their way.
+- **Stations:** people reach a platform at the end of a path ending at the
+  station (`"to": { "station": id }`), through the station building's door, or
+  from the nearest walkway within 45 m of a platform's back edge; platforms on
+  `both` sides can be entered from either (by the station's underpass). A station
+  that trains stop at but no walkway reaches gets `STATION_UNREACHABLE`. People
+  wait on the platform and every train keeps a list of who is aboard.
+- **Click to inspect:** in the viewer, click a person, building, car or train to
+  see who they are and what they are doing: a person's home, job, car, current
+  errand and journey; who lives, works and is inside a building; whose car it is
+  and where it is going; a train's passengers and where each is going. Names in
+  the panel can be clicked in turn; Esc closes it. The same descriptions are in
+  `describePerson`, `describeBuilding`, `describeVehicle` and `describeTrain`
+  (`src/sim/describe.ts`).
+
+## 6. Scenery: buildings, trees and other objects
 
 Everything beside the track — houses, churches, trees, lamps, boats — is an
 **object**: a small low-poly model described in JSON. Many are built in (below);
@@ -270,24 +362,28 @@ placed through `scenery`.
   sidewalk → `SCENERY_ON_PATH` (error, small things like lamp posts excepted);
   standing inside another placed object → `SCENERY_OVERLAP` (warning). Flat pieces under 0.5 m
   tall (`paving`) may overlap other objects.
-- Stations add their own `building` (beside the platform, facing it) and
-  benches (`bench`); people on platforms are automatic.
+- Stations add their own `building` (beside the platform, facing it; its door is
+  at the back, toward the town) and benches (`bench`).
+- **Buildings:** `name` and `building` (§5) apply to single objects.
 
 ### Built-in objects
 
 | id | what | footprint (x × y m) |
 |---|---|---|
-| `house` | two-storey house, door at the front, chimney (smokes sometimes) | 7.8 × 9.8 |
-| `terrace` | row of three terraced houses | 8.8 × 22.8 |
-| `flats` | four-storey block of flats | 12.4 × 16.4 |
-| `church` | church with tower and spire; the tower end is the front | 25 × 10.8 |
-| `barn` | timber barn with big doors | 11 × 16.8 |
-| `station-building` | used for every station unless `building` says otherwise | 9.8 × 16.8 |
+| `house` | two-storey house, door at the front, chimney (smokes sometimes); home for 3 | 7.8 × 9.8 |
+| `terrace` | row of three terraced houses; homes for 7 | 8.8 × 22.8 |
+| `flats` | four-storey block of flats; homes for 20 | 12.4 × 16.4 |
+| `church` | church with tower and spire, the tower end the front; landmark, vicar and verger | 25 × 10.8 |
+| `barn` | timber barn with big doors; a farm, farmer and farmhand | 11 × 16.8 |
+| `shop` | shop with a flat above, shop window and awning; landmark, shopkeeper and assistant | 9.6 × 10.6 |
+| `pub` | village inn, sign by the door; landmark, landlord, cook and bar staff | 11.5 × 12.8 |
+| `office` | three-storey office block; 16 jobs | 15.6 × 20.4 |
+| `station-building` | used for every station unless `building` says otherwise; door at the back, 3 jobs | 9.8 × 16.8 |
 | `bench` | platform bench | 0.6 × 1.8 |
 | `lamp-post` | street lamp, lit at night | 0.6 × 0.6 |
 | `fence` | 10 m of wooden fence along y | 0.2 × 10.2 |
 | `paving` | 10 × 10 m paved square | 10 × 10 |
-| `car` | small car (traffic) | 4.3 × 1.8 |
+| `car` | small car (traffic, residents' cars) | 4.3 × 1.8 |
 | `van` | delivery van (traffic) | 5.1 × 2 |
 | `bus` | single-deck bus, windows lit at night (traffic) | 11.1 × 2.6 |
 | `truck` | box lorry (traffic) | 8 × 2.5 |
@@ -299,7 +395,7 @@ placed through `scenery`.
 
 See them all with `npm run screenshot -- layouts/valley-loop.json --object all --out objects.png`.
 
-## 6. Designing objects (`objects`)
+## 7. Designing objects (`objects`)
 
 An object is a list of **parts**, each a low-poly primitive in the object's own
 frame: **x = front, y = left, z = up**, metres, origin on the ground at the
@@ -347,6 +443,11 @@ object's `tint`: a list of colours or a palette list (`walls`, `roofs`, `foliage
 `needles`, `people`; foliage and needles follow the season). Only one tint
 colour per placement, so give fixed colours to roofs, doors and trims.
 
+**Buildings:** `"building": { "functions": [...], "residents", "jobs", "titles",
+"kind", "door" }` makes every placement of the object a building (§5), e.g.
+`{ "functions": ["workplace", "landmark"], "jobs": 2, "titles": ["Owner", "Waiter"], "kind": "Café" }`.
+Put the door where the object's door is drawn.
+
 **Seasons, light and smoke:** `winter` is the part's colour in winter (snow on
 roofs); `seasons` limits a part to some seasons (a full crown in summer and
 autumn, bare twigs in winter); `glow: true` (default for `window` and `lamp`)
@@ -367,7 +468,7 @@ lights the part warmly at night; `smoke: true` marks a chimney, and the object's
 - Budget: a house is ~60 triangles; keep objects under ~500. Every object type
   in use costs 2–3 draw calls, however many times it is placed.
 
-## 7. Rules of thumb (avoid most errors)
+## 8. Rules of thumb (avoid most errors)
 
 1. Keep waypoints at least `2·minRadius` apart where the track turns.
 2. Put junctions on straights (`at` well away from curves); turnouts on curves
@@ -389,14 +490,19 @@ lights the part warmly at night; `smoke: true` marks a chimney, and the object's
     with houses (≈10 m from the road centre, fronts facing it) and lamps (≈4.5 m).
 13. End footpaths on a road's sidewalk (`from`/`to` with `road`) rather than near
     it, and cross roads well away from junctions.
+14. Give every building a sidewalk or path within reach of its door, and every
+    station a path or sidewalk to its building or platform; check `describe()`'s
+    Town section for anything unreachable.
+15. Give the streets where people live parking (`parking`, with houses set back
+    a further 2.4 m), and a car park by each station for park and ride.
 
-## 8. Validation codes
+## 9. Validation codes
 
 | Code | Severity | Fix |
 |---|---|---|
 | `SCHEMA` | error | Match `schema.json`: fix the type, add the missing field, or remove the unknown key. |
-| `DUPLICATE_ID` | error | Rename one of the two; ids are shared by tracks, roads, paths, stations and services (objects have their own namespace). |
-| `UNKNOWN_REF` | error | Use an existing id (the message lists the known ones): track, road, path, station, train type or object (also in `traffic.vehicles`). |
+| `DUPLICATE_ID` | error | Rename one of the two; ids are shared by tracks, roads, paths, car parks, stations and services (objects have their own namespace). |
+| `UNKNOWN_REF` | error | Use an existing id (the message lists the known ones): track, road, path, station, train type or object (also in `traffic.vehicles` and `people.vehicles`). |
 | `TRACK_REF_CYCLE` | error | A branch can't (indirectly) be its own parent; make one track (road, path) a plain line/loop. |
 | `OUT_OF_BOUNDS` | error | Move waypoints inward (track must stay 20 m inside the terrain, roads 5 m, paths 3 m), or move a placed object onto the board. |
 | `FILLET_OVERLAP` | error | Spread the two named waypoints apart or lower `minRadius` / waypoint `radius`. |
@@ -412,7 +518,7 @@ lights the part warmly at night; `smoke: true` marks a chimney, and the object's
 | `ROUTE_NOT_CLOSED` | error | Use `mode: "shuttle"` or add tracks that lead back to the first one. |
 | `STOP_NOT_ON_ROUTE` | error | Add the station's track to the route or drop the stop. |
 | `TRAIN_TOO_LONG` | warning | Lengthen the platform or use a shorter train. |
-| `CAPACITY` | warning | Fewer trains, or a longer route. (`simulate`: also vehicles that found no room on the roads — lower `traffic.cars`.) |
+| `CAPACITY` | warning | Fewer trains, or a longer route. (`simulate`: also vehicles that found no room on the roads — lower `traffic.cars`. And `people.count` above what the homes hold.) |
 | `ROAD_CONFLICT` | error | A road crosses a track (or road) 3–6.5 m (5.5 m) apart in height, runs too close beside a track, or overlaps another road without a junction: make it a level crossing / crossroads, clear it in height with a waypoint `z`, move it, or join the roads with `from`/`to`. |
 | `LEVEL_CROSSING_POSITION` | error | Move the crossing onto plain ground, off the platform, 35 m from railway junctions and 25 m from road junctions and road ends — or take the road over or under the line. The same for a path's foot crossing (without the road rules). |
 | `LEVEL_CROSSING_ANGLE` | warning / error | Cross the track at 30° or more (ideally square) so the crossing stays short; below 15° it is an error. Also for paths. |
@@ -421,18 +527,22 @@ lights the part warmly at night; `smoke: true` marks a chimney, and the object's
 | `SCENERY_ON_ROAD` | error | A placed object (or a station building) reaches onto a road: move it further from the road centre or turn it. |
 | `SCENERY_ON_PATH` | error | A placed object over 1.2 m across stands on a path or sidewalk: move it beside the walkway. |
 | `SCENERY_OVERLAP` | warning | Two placed objects stand inside each other: move one. |
+| `PARKING_POSITION` | error | A car park has no road within 300 m, is more than 60 m from the road it joins, or overlaps a road or track: move it beside the road, clear of both. |
+| `BUILDING_UNREACHABLE` | warning | Nobody can reach the building's door: run a sidewalk or path within 45 m of it (in a straight line not crossing a road or track), turn its door toward the street, or give it parking beside it. |
+| `STATION_UNREACHABLE` | warning | No walkway reaches the station: end a path at it (`"to": { "station": id }`) or run a sidewalk past its building or platform. |
 | `DEADLOCK` | error | (`simulate` only) Trains wait on each other: add a passing loop, fewer trains, or different routes. |
 
 Every issue has `path` (JSON path such as `tracks[1].points[2]`), a one-sentence
 `message` with numbers and a suggested fix, and often `at` (map coordinates).
 
-## 9. Authoring loop
+## 10. Authoring loop
 
 1. Write the JSON (start from an example).
 2. `npm run check -- my.json --json` → fix every error (warnings are advisory).
 3. `npm run simulate -- my.json --minutes 30` → every service should stop
    regularly, no `DEADLOCK`, and `max wait` should be modest; road traffic and
-   pedestrians should show nobody stuck and a longest wait under a minute or two.
+   people should show nobody stuck and a longest wait under a minute or two, and
+   the journeys line shows how people got about (walk, drive, train and mixes).
 4. New objects: `npm run screenshot -- my.json --object <id> --out obj.png` and
    look at it from the front-right before placing it.
 5. `npm run screenshot -- my.json --view top --out top.png` to verify geometry
@@ -442,10 +552,11 @@ Every issue has `path` (JSON path such as `tracks[1].points[2]`), a one-sentence
    `--t 120` shows trains after two minutes; `--cam x,y,z,tx,ty,tz` takes a close-up.
 6. Iterate. Use `query(world).describe()` from `src/api.ts` for a compact text
    summary (track, road and path lengths, structures, junctions, level, zebra
-   and foot crossings, placed objects) when choosing `at` values; `query(world).roadAt(x, y)` and
+   and foot crossings, parking, the town's buildings, homes and station
+   entrances, placed objects) when choosing `at` values; `query(world).roadAt(x, y)` and
    `trackAt(x, y)` give the `s` of a point near a road or track.
 
-## 10. Examples
+## 11. Examples
 
 Both examples are in `layouts/`. Their tracks and services are short; most of
 each file is the scenery list, one placement per line.
@@ -462,10 +573,17 @@ each file is the scenery list, one placement per line.
   Lindenau's streets as a small grid of crossroads, T-junctions and corners; a
   lane from the south street over a third level crossing just past the
   platforms; and a steep lane (`maxGrade` 0.1) up to Bergdorf from the north
-  edge. 40 vehicles. Lindenau's streets have sidewalks.
-- Paths: `mill-walk` from the church square out to the windmill, and
-  `field-path` on from there over the country road (a zebra) and the main line
-  (a foot crossing) to the south edge of the board. 120 pedestrians.
+  edge. Lindenau's streets have sidewalks and street parking (their houses set
+  back for it), the country roads a sidewalk on the farms' side; a car park by
+  the station; 10 vehicles of through traffic.
+- Paths: `mill-walk` from the church square out to the windmill, `field-path`
+  on from there over the country road (a zebra) and the main line (a foot
+  crossing) to the south edge of the board, and `chapel-path` to St. Anne's door.
+- The town: about 420 people in Lindenau's houses, terraces and flats and
+  Bergdorf's cottages; shops, an inn, a post office and a café on Market Street,
+  offices behind the station, the churches, farms and the windmill as
+  workplaces. Lindenau station is entered from the town side (north platform)
+  and through its building from South Street.
 - Lindenau: the high street runs north from the station forecourt to a church
   square, crossed by Station Street, the country road and Church Street, lined
   with houses, terraces and lamps; flats by the station, gardens with trees;
@@ -503,9 +621,14 @@ each file is the scenery list, one placement per line.
   on piles) and moored `fishing-boat`s placed at `z: 0`.
 - An inland road climbs over the hills past a hamlet to Ostkap's streets; a
   lane leaves it over a level crossing west of Ostkap station and runs along the
-  shore to the `lighthouse`. 28 vehicles. A `beach-path` leaves the inland road
-  and crosses the line at a foot crossing (a waypoint `z` brings it up to the
-  rails). 90 pedestrians on the paths and the towns' sidewalks.
+  shore to the `lighthouse`. 8 vehicles of through traffic. A `beach-path`
+  leaves the inland road and crosses the line at a foot crossing (a waypoint `z`
+  brings it up to the rails); a `farm-track` and a `lighthouse-path`.
+- The towns: about 260 people; an inn, a fishmonger, a chandler, a bakery and
+  stores in Westhafen, stores and the Lighthouse Inn in Ostkap, a harbour office,
+  the church, the farm and the lighthouse; street parking in Westhafen, a car
+  park there and one by Ostkap station — people drive to Ostkap, park, and take
+  the train to Westhafen, and back.
 - Custom objects: `lighthouse` (stacked red and white cylinders using `grid`
   steps, a glowing `lamp` lantern) and `fishing-boat` (an upside-down tapered
   box as the hull, a cabin, a mast; tinted per boat).

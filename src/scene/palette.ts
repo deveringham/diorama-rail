@@ -34,6 +34,7 @@ export const PALETTE = {
   portal: 0x8f877b,
   portalDark: 0x2a2724,
   road: { summer: 0x7d7a75, autumn: 0x7b7873, winter: 0xc8cdd1 },
+  parking: { summer: 0x8a8781, autumn: 0x88857f, winter: 0xd2d6d9 },
   verge: { summer: 0x9d9686, autumn: 0x9b9282, winter: 0xe2e7ea },
   roadLine: 0xece8dc,
   sidewalk: { summer: 0xbab5ab, autumn: 0xb7b1a6, winter: 0xe4e8eb },

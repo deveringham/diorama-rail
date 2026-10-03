@@ -22,7 +22,7 @@ export class WalkerMeshes {
   private up = new THREE.Vector3(0, 1, 0);
 
   constructor(seed: number, snapshot: SimSnapshot) {
-    const n = snapshot.walkers.length;
+    const n = snapshot.people.length;
     if (!n) return;
     this.mesh = new THREE.InstancedMesh(personGeometry(), flatMaterial(), n);
     const c = new THREE.Color();
@@ -36,7 +36,7 @@ export class WalkerMeshes {
 
   update(snapshot: SimSnapshot): void {
     if (!this.mesh) return;
-    snapshot.walkers.forEach((w, i) => {
+    snapshot.people.forEach((w, i) => {
       const bob = w.moving ? BOB * Math.abs(Math.sin((w.step / STRIDE) * Math.PI)) : 0;
       toThree(w.x, w.y, w.z + bob, this.p);
       this.q.setFromAxisAngle(this.up, w.heading);

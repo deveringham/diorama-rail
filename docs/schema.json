@@ -506,6 +506,31 @@
             "minimum": 1,
             "maximum": 5
           },
+          "parking": {
+            "default": "none",
+            "description": "Street parking: a strip of parking bays between the carriageway and the sidewalk, left/right of increasing s",
+            "type": "string",
+            "enum": [
+              "none",
+              "both",
+              "left",
+              "right"
+            ]
+          },
+          "parkingStyle": {
+            "default": "parallel",
+            "description": "parallel: bays along the kerb (2.4 m strip); perpendicular: nose-in bays (5.2 m strip)",
+            "type": "string",
+            "enum": [
+              "parallel",
+              "perpendicular"
+            ]
+          },
+          "name": {
+            "description": "Street name for addresses; default from the id (\"market-street\" → \"Market Street\")",
+            "type": "string",
+            "minLength": 1
+          },
           "from": {
             "type": "object",
             "properties": {
@@ -665,6 +690,11 @@
               "paved"
             ]
           },
+          "name": {
+            "description": "Name for addresses and places to visit; default from the id",
+            "type": "string",
+            "minLength": 1
+          },
           "minRadius": {
             "default": 3,
             "type": "number",
@@ -689,7 +719,13 @@
                 "type": "string",
                 "pattern": "^[a-z][a-z0-9-]*$"
               },
+              "station": {
+                "description": "Station whose platform this path starts or ends at (people walk on to the platform there)",
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]*$"
+              },
               "at": {
+                "description": "With path or road: arc length s on it (m), or \"start\" / \"end\"",
                 "anyOf": [
                   {
                     "type": "number"
@@ -701,13 +737,9 @@
                       "end"
                     ]
                   }
-                ],
-                "description": "Arc length s on that path or road (m), or \"start\" / \"end\""
+                ]
               }
             },
-            "required": [
-              "at"
-            ],
             "additionalProperties": false
           },
           "to": {
@@ -723,7 +755,13 @@
                 "type": "string",
                 "pattern": "^[a-z][a-z0-9-]*$"
               },
+              "station": {
+                "description": "Station whose platform this path starts or ends at (people walk on to the platform there)",
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]*$"
+              },
               "at": {
+                "description": "With path or road: arc length s on it (m), or \"start\" / \"end\"",
                 "anyOf": [
                   {
                     "type": "number"
@@ -735,13 +773,9 @@
                       "end"
                     ]
                   }
-                ],
-                "description": "Arc length s on that path or road (m), or \"start\" / \"end\""
+                ]
               }
             },
-            "required": [
-              "at"
-            ],
             "additionalProperties": false
           }
         },
@@ -752,15 +786,92 @@
         "additionalProperties": false
       }
     },
-    "pedestrians": {
+    "parking": {
+      "default": [],
+      "description": "Car parks: rows of bays along an aisle, joined to a road by a driveway",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$"
+          },
+          "name": {
+            "description": "Shown as its address; default from the id (\"station-car-park\" → \"Station Car Park\")",
+            "type": "string",
+            "minLength": 1
+          },
+          "at": {
+            "type": "array",
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "items": false,
+            "minItems": 2,
+            "maxItems": 2,
+            "description": "Centre of the car park"
+          },
+          "spaces": {
+            "default": 20,
+            "description": "Number of bays, in two rows either side of an aisle",
+            "type": "integer",
+            "minimum": 2,
+            "maximum": 200
+          },
+          "rotation": {
+            "description": "Degrees counter-clockwise from east that the entrance faces; default toward the road it joins",
+            "type": "number"
+          },
+          "road": {
+            "description": "Road its driveway joins; default the nearest",
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$"
+          }
+        },
+        "required": [
+          "id",
+          "at"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "people": {
       "default": {},
       "type": "object",
       "properties": {
         "count": {
-          "description": "People walking the paths and sidewalks; default about one per 25 m of walkway",
+          "description": "How many people live on the board; default as many as the accommodation holds (at most 600)",
           "type": "integer",
           "minimum": 0,
-          "maximum": 1000
+          "maximum": 2000
+        },
+        "cars": {
+          "default": 0.45,
+          "description": "Share of people who own a car (when there is parking near home)",
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "vehicles": {
+          "default": [
+            "car",
+            "car",
+            "car",
+            "van"
+          ],
+          "description": "Object ids of the residents' own vehicles, picked at random",
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$"
+          }
         }
       },
       "additionalProperties": false
@@ -770,7 +881,7 @@
       "type": "object",
       "properties": {
         "cars": {
-          "description": "Number of vehicles; default about one per 70 m of road",
+          "description": "Through traffic: vehicles driving about at random, not owned by residents; default about one per 200 m of road (at most 30)",
           "type": "integer",
           "minimum": 0,
           "maximum": 400
@@ -778,13 +889,11 @@
         "vehicles": {
           "default": [
             "car",
-            "car",
-            "car",
             "van",
             "bus",
             "truck"
           ],
-          "description": "Object ids to drive, picked at random (repeat an id to make it more common)",
+          "description": "Object ids for through traffic, picked at random (repeat an id to make it more common)",
           "minItems": 1,
           "type": "array",
           "items": {
@@ -809,6 +918,70 @@
           "description": {
             "description": "What it is, for people and LLMs reading the layout",
             "type": "string"
+          },
+          "building": {
+            "description": "Makes every placement of this object a building people can live in, work at or visit",
+            "type": "object",
+            "properties": {
+              "functions": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "accommodation",
+                    "workplace",
+                    "landmark"
+                  ]
+                },
+                "description": "accommodation: people live here; workplace: people work here; landmark: people visit it (a church, a shop, a pub)"
+              },
+              "residents": {
+                "description": "accommodation: how many people live here (default 3)",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 500
+              },
+              "jobs": {
+                "description": "workplace: how many people work here (default 3)",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 500
+              },
+              "titles": {
+                "description": "workplace: job titles; the first job gets the first title and so on, the last title fills the rest (default [\"Employee\"])",
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "kind": {
+                "description": "What sort of place it is, shown with its address, e.g. \"Church\" or \"Bakery\"",
+                "type": "string",
+                "minLength": 1
+              },
+              "door": {
+                "description": "Entrance [x, y] in the object frame; default the middle of the front (+x) face",
+                "type": "array",
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "items": false,
+                "minItems": 2,
+                "maxItems": 2
+              }
+            },
+            "required": [
+              "functions"
+            ],
+            "additionalProperties": false
           },
           "parts": {
             "minItems": 1,
@@ -1366,6 +1539,72 @@
           "smoke": {
             "description": "object: whether its chimneys smoke; default by the object's smoke share",
             "type": "boolean"
+          },
+          "name": {
+            "description": "object: the building's name or address, e.g. \"St. Mary's Church\" or \"4 Mill Lane\"; default an address from the nearest street",
+            "type": "string",
+            "minLength": 1
+          },
+          "building": {
+            "description": "object: what this building is for, overriding the object's own `building` (functions, residents, jobs, titles, kind)",
+            "type": "object",
+            "properties": {
+              "functions": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "accommodation",
+                    "workplace",
+                    "landmark"
+                  ]
+                },
+                "description": "accommodation: people live here; workplace: people work here; landmark: people visit it (a church, a shop, a pub)"
+              },
+              "residents": {
+                "description": "accommodation: how many people live here (default 3)",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 500
+              },
+              "jobs": {
+                "description": "workplace: how many people work here (default 3)",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 500
+              },
+              "titles": {
+                "description": "workplace: job titles; the first job gets the first title and so on, the last title fills the rest (default [\"Employee\"])",
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "kind": {
+                "description": "What sort of place it is, shown with its address, e.g. \"Church\" or \"Bakery\"",
+                "type": "string",
+                "minLength": 1
+              },
+              "door": {
+                "description": "Entrance [x, y] in the object frame; default the middle of the front (+x) face",
+                "type": "array",
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "items": false,
+                "minItems": 2,
+                "maxItems": 2
+              }
+            },
+            "additionalProperties": false
           }
         },
         "additionalProperties": false

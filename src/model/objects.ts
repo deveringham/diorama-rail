@@ -53,8 +53,24 @@ export const PartSchema = z
     }
   });
 
+export const FUNCTIONS = ["accommodation", "workplace", "landmark"] as const;
+
+/** What a building is for: where people live, work and go. */
+export const BuildingSchema = z.strictObject({
+  functions: z.array(z.enum(FUNCTIONS)).min(1)
+    .describe("accommodation: people live here; workplace: people work here; landmark: people visit it (a church, a shop, a pub)"),
+  residents: z.int().min(0).max(500).optional().describe("accommodation: how many people live here (default 3)"),
+  jobs: z.int().min(0).max(500).optional().describe("workplace: how many people work here (default 3)"),
+  titles: z.array(z.string().min(1)).min(1).optional()
+    .describe('workplace: job titles; the first job gets the first title and so on, the last title fills the rest (default ["Employee"])'),
+  kind: z.string().min(1).optional().describe('What sort of place it is, shown with its address, e.g. "Church" or "Bakery"'),
+  door: z.tuple([z.number(), z.number()]).optional()
+    .describe("Entrance [x, y] in the object frame; default the middle of the front (+x) face"),
+});
+
 export const ObjectSchema = z.strictObject({
   description: z.string().optional().describe("What it is, for people and LLMs reading the layout"),
+  building: BuildingSchema.optional().describe("Makes every placement of this object a building people can live in, work at or visit"),
   parts: z.array(PartSchema).min(1).max(300),
   tint: z.union([z.enum(TINT_LISTS), z.array(Color).min(1)]).default("walls")
     .describe(`Colours for parts coloured "tint": one is picked per placement. A palette list (${TINT_LISTS.join(", ")}; foliage and needles follow the season) or an array of colours`),
@@ -63,6 +79,8 @@ export const ObjectSchema = z.strictObject({
 });
 
 export type ObjectDef = z.output<typeof ObjectSchema>;
+export type BuildingDef = z.output<typeof BuildingSchema>;
+export type BuildingFunction = (typeof FUNCTIONS)[number];
 export type ObjectInput = z.input<typeof ObjectSchema>;
 export type PartDef = ObjectDef["parts"][number];
 

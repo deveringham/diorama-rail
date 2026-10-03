@@ -3,7 +3,7 @@
 
 import { z } from "zod";
 import { TRAIN_CATALOG } from "./catalog";
-import { ObjectSchema, ColorSchema } from "./objects";
+import { ObjectSchema, ColorSchema, BuildingSchema } from "./objects";
 
 const Vec2 = z.tuple([z.number(), z.number()]).describe("[x, y] in metres; x = east, y = north");
 const Id = z.string().regex(/^[a-z][a-z0-9-]*$/, "ids must match /^[a-z][a-z0-9-]*$/ (lowercase, digits, dashes)");
@@ -65,6 +65,11 @@ const Road = z
     sidewalks: z.enum(["none", "both", "left", "right"]).default("none")
       .describe("Raised pavements beside the carriageway, left/right of the direction of increasing s; people walk on them"),
     sidewalkWidth: z.number().min(1).max(5).default(2),
+    parking: z.enum(["none", "both", "left", "right"]).default("none")
+      .describe("Street parking: a strip of parking bays between the carriageway and the sidewalk, left/right of increasing s"),
+    parkingStyle: z.enum(["parallel", "perpendicular"]).default("parallel")
+      .describe("parallel: bays along the kerb (2.4 m strip); perpendicular: nose-in bays (5.2 m strip)"),
+    name: z.string().min(1).optional().describe('Street name for addresses; default from the id ("market-street" → "Market Street")'),
     from: RoadEnd.optional(),
     to: RoadEnd.optional(),
   })
@@ -85,11 +90,15 @@ const PathEnd = z
   .strictObject({
     path: Id.optional().describe("Path this one starts (from) or ends (to) on, forming a T-junction"),
     road: Id.optional().describe("Road whose edge this path starts or ends at, joining its sidewalk on that side"),
-    at: z.union([z.number(), z.enum(["start", "end"])])
-      .describe('Arc length s on that path or road (m), or "start" / "end"'),
+    station: Id.optional().describe("Station whose platform this path starts or ends at (people walk on to the platform there)"),
+    at: z.union([z.number(), z.enum(["start", "end"])]).optional()
+      .describe('With path or road: arc length s on it (m), or "start" / "end"'),
   })
   .superRefine((e, ctx) => {
-    if (!!e.path === !!e.road) ctx.addIssue({ code: "custom", path: [e.path ? "road" : "path"], message: "give exactly one of `path` or `road`" });
+    const given = [e.path, e.road, e.station].filter((x) => x !== undefined).length;
+    if (given !== 1) ctx.addIssue({ code: "custom", path: [e.station ? "station" : e.road ? "road" : "path"], message: "give exactly one of `path`, `road` or `station`" });
+    else if (!e.station && e.at === undefined) ctx.addIssue({ code: "custom", path: ["at"], message: "a path or road end needs `at`: s, \"start\" or \"end\"" });
+    else if (e.station && e.at !== undefined) ctx.addIssue({ code: "custom", path: ["at"], message: "a station end takes no `at` (the path meets the platform beside the station building)" });
   });
 
 const Path = z
@@ -99,6 +108,7 @@ const Path = z
     points: z.array(Waypoint).min(1).describe("Waypoints like a road's; corners are rounded with `minRadius`"),
     width: z.number().min(0.8).max(6).default(2).describe("Path width (m)"),
     surface: z.enum(["gravel", "paved"]).default("gravel"),
+    name: z.string().min(1).optional().describe("Name for addresses and places to visit; default from the id"),
     minRadius: z.number().positive().default(3),
     maxGrade: z.number().positive().max(0.3).default(0.12),
     from: PathEnd.optional(),
@@ -149,6 +159,9 @@ const SceneryEntry = z
     z: z.number().optional().describe("object: absolute base height (m); default the ground (or the platform top on a platform)"),
     color: ColorSchema.optional().describe('object: colour for its "tint" parts; default one picked from the object\'s tint list'),
     smoke: z.boolean().optional().describe("object: whether its chimneys smoke; default by the object's smoke share"),
+    name: z.string().min(1).optional().describe('object: the building\'s name or address, e.g. "St. Mary\'s Church" or "4 Mill Lane"; default an address from the nearest street'),
+    building: BuildingSchema.partial().optional()
+      .describe("object: what this building is for, overriding the object's own `building` (functions, residents, jobs, titles, kind)"),
   })
   .superRefine((e, ctx) => {
     const say = (path: string, message: string) => ctx.addIssue({ code: "custom", path: [path], message });
@@ -161,10 +174,19 @@ const SceneryEntry = z
     if (e.scatter) {
       if (e.spacing === undefined) say("spacing", "a `scatter` entry needs `spacing` (m between items)");
       if ((e.at === undefined) !== (e.radius === undefined)) say(e.at ? "radius" : "at", "give both `at` and `radius` for a circle, or neither for the whole map");
-      for (const k of ["rotation", "face", "z", "color", "smoke"] as const) if (e[k] !== undefined) say(k, `\`${k}\` only applies to single \`object\` entries`);
+      for (const k of ["rotation", "face", "z", "color", "smoke", "name", "building"] as const) if (e[k] !== undefined) say(k, `\`${k}\` only applies to single \`object\` entries`);
       if (typeof e.scale === "number") say("scale", "a `scatter` entry takes a scale range [min, max]");
     }
   });
+
+const ParkingLot = z.strictObject({
+  id: Id,
+  name: z.string().min(1).optional().describe('Shown as its address; default from the id ("station-car-park" → "Station Car Park")'),
+  at: Vec2.describe("Centre of the car park"),
+  spaces: z.int().min(2).max(200).default(20).describe("Number of bays, in two rows either side of an aisle"),
+  rotation: z.number().optional().describe("Degrees counter-clockwise from east that the entrance faces; default toward the road it joins"),
+  road: Id.optional().describe("Road its driveway joins; default the nearest"),
+});
 
 export const LayoutSchema = z.strictObject({
   version: z.literal(1),
@@ -186,13 +208,19 @@ export const LayoutSchema = z.strictObject({
   roads: z.array(Road).default([]).describe("Road network: crossroads form automatically, level crossings where a road meets a track at grade"),
   paths: z.array(Path).default([])
     .describe("Footpaths: junctions form automatically, zebra crossings where a path crosses a road, foot crossings over tracks"),
-  pedestrians: z.strictObject({
-    count: z.int().min(0).max(1000).optional().describe("People walking the paths and sidewalks; default about one per 25 m of walkway"),
+  parking: z.array(ParkingLot).default([]).describe("Car parks: rows of bays along an aisle, joined to a road by a driveway"),
+  people: z.strictObject({
+    count: z.int().min(0).max(2000).optional()
+      .describe("How many people live on the board; default as many as the accommodation holds (at most 600)"),
+    cars: z.number().min(0).max(1).default(0.45).describe("Share of people who own a car (when there is parking near home)"),
+    vehicles: z.array(Id).min(1).default(["car", "car", "car", "van"])
+      .describe("Object ids of the residents' own vehicles, picked at random"),
   }).prefault({}),
   traffic: z.strictObject({
-    cars: z.int().min(0).max(400).optional().describe("Number of vehicles; default about one per 70 m of road"),
-    vehicles: z.array(Id).min(1).default(["car", "car", "car", "van", "bus", "truck"])
-      .describe("Object ids to drive, picked at random (repeat an id to make it more common)"),
+    cars: z.int().min(0).max(400).optional()
+      .describe("Through traffic: vehicles driving about at random, not owned by residents; default about one per 200 m of road (at most 30)"),
+    vehicles: z.array(Id).min(1).default(["car", "van", "bus", "truck"])
+      .describe("Object ids for through traffic, picked at random (repeat an id to make it more common)"),
   }).prefault({}),
   objects: z.record(Id, ObjectSchema).default({})
     .describe("Custom scenery objects for this layout, by id; they may also redefine built-in ids"),
@@ -214,6 +242,8 @@ export type ServiceSpec = Layout["services"][number];
 export type SceneryEntrySpec = Layout["scenery"][number];
 export type RoadSpec = Layout["roads"][number];
 export type PathSpec = Layout["paths"][number];
+export type PathEndSpec = NonNullable<PathSpec["from"]>;
+export type ParkingLotSpec = Layout["parking"][number];
 
 /** Normalises a waypoint to { at, z?, radius? }. */
 export function waypoint(w: WaypointSpec): { at: [number, number]; z?: number; radius?: number } {

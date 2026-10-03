@@ -35,7 +35,7 @@ export function buildPreview(objects: Map<string, ObjectInfo>, ids: string[], se
     if (y > 0 && y + w > rowWidth) { x -= rowDepth + GAP; y = 0; rowDepth = 0; }
     const px = x - m.max[0];
     const py = y - m.min[1];
-    placements.push({ object: id, x: px, y: py, z: 0, rotation: 0, scale: 1, tint: tintColors(objects.get(id)!.def, season)[0], smoke: m.chimneys.length > 0 });
+    placements.push({ object: id, x: px, y: py, z: 0, rotation: 0, scale: 1, tint: tintColors(objects.get(id)!.def, season)[0], smoke: m.chimneys.length > 0, entry: -1 });
     labels.push({ id, at: toThree(px, py + (m.min[1] + m.max[1]) / 2, m.max[2] + 1.5) });
     for (let a = 0; a < 3; a++) {
       lo[a] = Math.min(lo[a], [px, py, 0][a] + m.min[a]);

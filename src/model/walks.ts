@@ -16,7 +16,7 @@ import { type Profile, type Span, type Pin, buildProfile, classify, profileZ, st
 import { type Terrain, baseZ } from "./terrain";
 import {
   type RoadNet, type RoadGeom, type LevelCrossing, polyline, intersections, crossAngle, endAt, sidewalkWidth, roadReach, junctionStop,
-  SHALLOWEST_CROSSING,
+  kerbOffset, SHALLOWEST_CROSSING,
 } from "./roads";
 import { type Issue, error, warning } from "./validate";
 import { SpatialHash } from "../util/spatial";
@@ -77,6 +77,7 @@ export type RoadCrossing = { id: number; kind: "zebra" | "crossing"; road: strin
 export type WalkPoint = { x: number; y: number; z: number; width: number; kind: WalkKind; owner: string; ground: boolean };
 export type WalkNet = {
   paths: Map<string, PathGeom>;
+  stationNodes: Array<{ station: string; node: number }>;   // path ends on station platforms
   order: string[];
   profiles: Map<string, Profile>;
   spans: Map<string, Span[]>;
@@ -89,12 +90,13 @@ export type WalkNet = {
 };
 
 export const emptyWalkNet = (): WalkNet => ({
-  paths: new Map(), order: [], profiles: new Map(), spans: new Map(), ways: [], nodes: [], crossings: [], footCrossings: [],
+  paths: new Map(), stationNodes: [], order: [], profiles: new Map(), spans: new Map(), ways: [], nodes: [], crossings: [], footCrossings: [],
   points: [], hash: new SpatialHash<WalkPoint>(10),
 });
 
 type Ctx = {
   layout: Layout;
+  stationEntries: Map<string, Array<{ at: P3 }>>;   // where paths may meet each station's platforms
   tracks: Map<string, TrackGeom>;
   trackProfiles: Map<string, Profile>;
   trackSpans: Map<string, Span[]>;
@@ -103,7 +105,7 @@ type Ctx = {
   roads: RoadNet;
 };
 
-type P3 = [number, number, number];
+export type P3 = [number, number, number];
 const dist2 = (a: { 0: number; 1: number }, b: { 0: number; 1: number }) => Math.hypot(a[0] - b[0], a[1] - b[1]);
 
 /** Paths in dependency order (parents first), or the cycle that prevents it. */
@@ -137,7 +139,8 @@ function beside(roads: RoadNet, road: string, s: number, lateral: number, dz = 0
 function sideSpot(roads: RoadNet, road: string, s: number, side: 1 | -1): P3 {
   const r = roads.roads.get(road)!;
   const sw = sidewalkWidth(r.spec, side);
-  return sw > 0 ? beside(roads, road, s, side * (r.spec.width / 2 + sw / 2), KERB) : beside(roads, road, s, side * (r.spec.width / 2 + 0.4));
+  const kerb = kerbOffset(r.spec, side);
+  return sw > 0 ? beside(roads, road, s, side * (kerb + sw / 2), KERB) : beside(roads, road, s, side * (kerb + 0.4));
 }
 
 /** Signed distance of (x, y) to the left of a road at s. */
@@ -184,13 +187,14 @@ export function buildWalks(ctx: Ctx): { net: WalkNet | null; issues: Issue[] } {
   const paths = new Map<string, PathGeom>();
   for (const id of order) {
     const index = layout.paths.findIndex((p) => p.id === id);
-    const geom = buildPathGeom(layout.paths[index], index, paths, roads, issues);
+    const geom = buildPathGeom(layout.paths[index], index, paths, roads, ctx.stationEntries, issues);
     if (geom) paths.set(id, geom);
   }
   if (paths.size < layout.paths.length) return { net: null, issues };
 
   // 2. How each path end meets the world: a parent path, a road's edge, or nothing.
-  type End = { kind: "path"; parent: string; s: number } | { kind: "road"; road: string; s: number; side: 1 | -1 } | { kind: "free" };
+  type End = { kind: "path"; parent: string; s: number } | { kind: "road"; road: string; s: number; side: 1 | -1 }
+    | { kind: "station"; station: string; z: number } | { kind: "free" };
   const ends = new Map<string, [End, End]>();
   const provisional = new Map([...paths].map(([id, p]) => [id, buildProfile(p, dry, [], { window: PATH_SMOOTH, noun: "path", follow: true }).profile]));
   for (const p of paths.values()) {
@@ -198,10 +202,16 @@ export function buildWalks(ctx: Ctx): { net: WalkNet | null; issues: Issue[] } {
     for (const k of [0, 1] as const) {
       const e = k === 0 ? p.spec.from : p.spec.to;
       if (p.path.closed) { pair.push({ kind: "free" }); continue; }
-      if (e?.path) { pair.push({ kind: "path", parent: e.path, s: endAt(e, paths.get(e.path)!) }); continue; }
+      if (e?.path) { pair.push({ kind: "path", parent: e.path, s: endAt({ at: e.at! }, paths.get(e.path)!) }); continue; }
+      if (e?.station) {
+        const [ex, ey] = pointAt(p.path, k === 0 ? 0 : p.path.length);
+        const entry = ctx.stationEntries.get(e.station)!.map((x) => x.at).reduce((a, b) => (dist2(a, [ex, ey]) <= dist2(b, [ex, ey]) ? a : b));
+        pair.push({ kind: "station", station: e.station, z: entry[2] });
+        continue;
+      }
       if (e?.road) {
         const r = roads.roads.get(e.road)!;
-        const s = endAt(e, r);
+        const s = endAt({ at: e.at! }, r);
         const inner = pointAt(p.path, k === 0 ? Math.min(3, p.path.length) : Math.max(0, p.path.length - 3));
         pair.push({ kind: "road", road: e.road, s, side: lateralOf(r, s, inner[0], inner[1]) >= 0 ? 1 : -1 });
         continue;
@@ -312,6 +322,7 @@ export function buildWalks(ctx: Ctx): { net: WalkNet | null; issues: Issue[] } {
       const s = k === 0 ? 0 : L;
       if (e.kind === "path") pins.push({ s, z: profileZ(profiles.get(e.parent)!, e.s) });
       if (e.kind === "road") pins.push({ s, z: sideSpot(roads, e.road, e.s, e.side)[2] });
+      if (e.kind === "station") pins.push({ s, z: e.z });
     });
     for (const z of zebras) {
       if (z.path !== id) continue;
@@ -373,6 +384,7 @@ export function buildWalks(ctx: Ctx): { net: WalkNet | null; issues: Issue[] } {
     return node;
   };
   const meetNodes = new Map<Meet, number>();
+  const stationNodes: Array<{ station: string; node: number }> = [];
   const joins: Array<{ path: string; road: string; at: V2 }> = [];
   for (const m of meets) {
     const z = pathZ(m.a, m.sa);
@@ -399,7 +411,7 @@ export function buildWalks(ctx: Ctx): { net: WalkNet | null; issues: Issue[] } {
         spot = g.nodes[node].at3;
         // The path stops at the road's outer edge; the last stretch runs to the sidewalk.
         const r = roads.roads.get(e.road)!;
-        const edge = r.spec.width / 2 + Math.max(sidewalkWidth(r.spec, e.side), 0.4);
+        const edge = kerbOffset(r.spec, e.side) + Math.max(sidewalkWidth(r.spec, e.side), 0.4);
         let t = s;
         for (let i = 0; i < 400; i++) {
           const [x, y] = pointAt(p.path, t);
@@ -414,6 +426,7 @@ export function buildWalks(ctx: Ctx): { net: WalkNet | null; issues: Issue[] } {
       } else {
         const existing = pathEvents.get(p.id)!.find((x) => Math.abs(x.s - s) < 0.5);
         node = existing ? existing.node : g.node(pathPt(p.id, s));
+        if (e.kind === "station") stationNodes.push({ station: e.station, node });
       }
       // A free path end that meets another path's end at a T was snapped into `meets` already.
       const list = pathEvents.get(p.id)!;
@@ -425,7 +438,7 @@ export function buildWalks(ctx: Ctx): { net: WalkNet | null; issues: Issue[] } {
   for (const z of zebras) {
     const p = paths.get(z.path)!;
     const r = roads.roads.get(z.road)!;
-    const edge = (side: 1 | -1) => r.spec.width / 2 + Math.max(sidewalkWidth(r.spec, side), 0.4);
+    const edge = (side: 1 | -1) => kerbOffset(r.spec, side) + Math.max(sidewalkWidth(r.spec, side), 0.4);
     // Walk out from the crossing point along the path until it is off the road on each side.
     const out = (dir: 1 | -1) => {
       let s = z.pathS;
@@ -494,7 +507,7 @@ export function buildWalks(ctx: Ctx): { net: WalkNet | null; issues: Issue[] } {
     for (const side of [1, -1] as const) {
       const sw = sidewalkWidth(r.spec, side);
       if (sw <= 0) continue;
-      const lateral = side * (r.spec.width / 2 + sw / 2);
+      const lateral = side * (kerbOffset(r.spec, side) + sw / 2);
       const splits = (sideEvents.get(sideKey(r.id, side)) ?? []).sort((a, b) => a.s - b.s);
       const L = r.path.length;
       for (const piece of cuts.pieces(r.id, side)) {
@@ -603,7 +616,7 @@ export function buildWalks(ctx: Ctx): { net: WalkNet | null; issues: Issue[] } {
   for (const p of points) hash.insert(p.x, p.y, p);
 
   const net: WalkNet = {
-    paths, order, profiles, spans, ways: g.ways, nodes: g.nodes.map((n) => ({ id: n.id, at: n.at, z: n.at3[2], ways: n.ways, portal: n.portal })),
+    paths, stationNodes, order, profiles, spans, ways: g.ways, nodes: g.nodes.map((n) => ({ id: n.id, at: n.at, z: n.at3[2], ways: n.ways, portal: n.portal })),
     crossings, footCrossings, points, hash,
   };
   issues.push(...checkWalks(ctx, net, zebras, cuts, joins));
@@ -635,7 +648,9 @@ export function wayHeading(w: Walkway, d: number): number {
 }
 
 /** One path's geometry: an optional start/end on a parent path or a road's edge, then filleted waypoints. */
-function buildPathGeom(spec: PathSpec, index: number, built: Map<string, PathGeom>, roads: RoadNet, issues: Issue[]): PathGeom | null {
+function buildPathGeom(
+  spec: PathSpec, index: number, built: Map<string, PathGeom>, roads: RoadNet, stationEntries: Map<string, Array<{ at: P3 }>>, issues: Issue[],
+): PathGeom | null {
   const base = `paths[${index}]`;
   const wps = spec.points.map(waypoint);
   const pts: V2[] = wps.map((w) => w.at);
@@ -643,10 +658,17 @@ function buildPathGeom(spec: PathSpec, index: number, built: Map<string, PathGeo
   for (const [which, e] of [["from", spec.from], ["to", spec.to]] as const) {
     if (!e) continue;
     let J: V2;
-    if (e.path) {
+    if (e.station) {
+      // Beside the station building on the platform's back edge, whichever side the path comes from.
+      const toward = which === "from" ? wps[0].at : wps[wps.length - 1].at;
+      const entries = stationEntries.get(e.station);
+      if (!entries?.length) return null;
+      const best = entries.map((x) => x.at).reduce((a, b) => (dist2(a, toward) <= dist2(b, toward) ? a : b));
+      J = [best[0], best[1]];
+    } else if (e.path) {
       const parent = built.get(e.path);
       if (!parent) return null;
-      const at = endAt(e, parent);
+      const at = endAt({ at: e.at! }, parent);
       if (!parent.path.closed && (at < 0 || at > parent.path.length)) {
         issues.push(error("JUNCTION_POSITION", `path junction at s=${at} is outside path '${e.path}' (length ${parent.path.length.toFixed(0)} m); use 0..${parent.path.length.toFixed(0)}, "start" or "end"`, `${base}.${which}.at`));
         return null;
@@ -655,7 +677,7 @@ function buildPathGeom(spec: PathSpec, index: number, built: Map<string, PathGeo
     } else {
       const r = roads.roads.get(e.road!);
       if (!r) return null;
-      const at = endAt(e, r);
+      const at = endAt({ at: e.at! }, r);
       if (!r.path.closed && (at < 0 || at > r.path.length)) {
         issues.push(error("JUNCTION_POSITION", `path start/end at s=${at} is outside road '${e.road}' (length ${r.path.length.toFixed(0)} m); use 0..${r.path.length.toFixed(0)}, "start" or "end"`, `${base}.${which}.at`));
         return null;
@@ -663,7 +685,7 @@ function buildPathGeom(spec: PathSpec, index: number, built: Map<string, PathGeo
       // Start at the outer edge of the road's sidewalk on the side the path goes.
       const toward = which === "from" ? wps[0].at : wps[wps.length - 1].at;
       const side = lateralOf(r, at, toward[0], toward[1]) >= 0 ? 1 : -1;
-      const [x, y] = beside(roads, r.id, at, side * (r.spec.width / 2 + Math.max(sidewalkWidth(r.spec, side), 0.4)));
+      const [x, y] = beside(roads, r.id, at, side * (kerbOffset(r.spec, side) + Math.max(sidewalkWidth(r.spec, side), 0.4)));
       J = [x, y];
     }
     if (which === "from") { pts.unshift(J); radii.unshift(spec.minRadius); } else { pts.push(J); radii.push(spec.minRadius); }
@@ -719,8 +741,10 @@ class GraphBuilder {
   /** A walkway straight across a road at s, from one side's node to the other's. */
   crossWay(kind: "zebra" | "crossing", road: string, s: number, fromSide: 1 | -1, a: number, b: number, width: number): number {
     const r = this.roads.roads.get(road)!;
-    const half = r.spec.width / 2;
-    const line: P3[] = [this.nodes[a].at3, beside(this.roads, road, s, fromSide * half), beside(this.roads, road, s, -fromSide * half), this.nodes[b].at3];
+    const line: P3[] = [
+      this.nodes[a].at3, beside(this.roads, road, s, fromSide * kerbOffset(r.spec, fromSide)),
+      beside(this.roads, road, s, -fromSide * kerbOffset(r.spec, (-fromSide) as 1 | -1)), this.nodes[b].at3,
+    ];
     return this.way(kind, road, line, a, b, width, "paved");
   }
 }
@@ -759,7 +783,8 @@ function roadJunctions(g: GraphBuilder, roads: RoadNet) {
     }).sort((a, b) => mod(a.theta, 2 * Math.PI) - mod(b.theta, 2 * Math.PI));
     const m = legs.length;
     const sw = (k: number, legSide: 1 | -1) => sidewalkWidth(legs[k].r.spec, (legSide * legs[k].l.dir) as 1 | -1);
-    const offset = (k: number, legSide: 1 | -1) => legs[k].r.spec.width / 2 + (sw(k, legSide) > 0 ? sw(k, legSide) / 2 : 1);
+    const offset = (k: number, legSide: 1 | -1) =>
+      kerbOffset(legs[k].r.spec, (legSide * legs[k].l.dir) as 1 | -1) + (sw(k, legSide) > 0 ? sw(k, legSide) / 2 : 1);
     // Corner between leg k (its left) and the next leg counter-clockwise (its right).
     const tLeft = new Array<number>(m).fill(0);
     const tRight = new Array<number>(m).fill(0);
@@ -801,7 +826,7 @@ function roadJunctions(g: GraphBuilder, roads: RoadNet) {
         const len = r.path.length;
         const sRaw = L.l.s + L.l.dir * cut[k];
         const s = r.path.closed ? mod(sRaw, len) : Math.min(Math.max(sRaw, 0), len);
-        const node = g.node(beside(roads, r.id, s, roadSide * (r.spec.width / 2 + sw(k, legSide) / 2), KERB));
+        const node = g.node(beside(roads, r.id, s, roadSide * (kerbOffset(r.spec, roadSide) + sw(k, legSide) / 2), KERB));
         // The piece runs away from the node along the leg: it starts here for dir +1 and ends here for dir −1.
         addBound(r.id, roadSide, s, node, L.l.dir > 0);
         pair.push({ node, s });
@@ -854,7 +879,7 @@ function roadJunctions(g: GraphBuilder, roads: RoadNet) {
       const list = (bounds.get(key(road, side)) ?? []).slice().sort((a, b) => a.s - b.s);
       if (!list.length) {
         if (!r.path.closed) return [];
-        const node = g.node(beside(roads, road, 0, side * (r.spec.width / 2 + sidewalkWidth(r.spec, side) / 2), KERB));
+        const node = g.node(beside(roads, road, 0, side * (kerbOffset(r.spec, side) + sidewalkWidth(r.spec, side) / 2), KERB));
         return [{ s0: 0, s1: L, a: node, b: node }];
       }
       const out: Array<{ s0: number; s1: number; a: number; b: number }> = [];

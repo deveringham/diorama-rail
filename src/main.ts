@@ -11,6 +11,7 @@ import { Sim, DT, type SimSnapshot } from "./sim/sim";
 import { buildScene, type DioramaScene } from "./scene/buildScene";
 import { CameraRig } from "./scene/camera";
 import { Hud } from "./scene/hud";
+import { Inspector } from "./scene/inspect";
 import { LIGHT, type Season } from "./scene/palette";
 import { buildPreview } from "./scene/objectPreview";
 import { LayoutSchema } from "./model/schema";
@@ -48,6 +49,7 @@ document.body.append(renderer.domElement);
 
 const rig = new CameraRig(renderer.domElement, innerWidth / innerHeight);
 const hud = new Hud(document.body);
+const inspector = new Inspector(document.body);
 if (shot) {
   rig.controls.autoRotate = false;
   hud.hideAll();
@@ -56,7 +58,7 @@ if (shot) {
 let world: World | null = null;
 let sim: Sim | null = null;
 let dscene: DioramaScene | null = null;
-const snap: SimSnapshot = { time: 0, trains: [], switches: [], blocks: [], vehicles: [], gates: [], walkers: [] };
+const snap: SimSnapshot = { time: 0, trains: [], switches: [], blocks: [], vehicles: [], gates: [], people: [] };
 let paused = false;
 let speed = 1;
 let shadows = true;
@@ -128,14 +130,16 @@ function rebuild(json: unknown, preStep: number): boolean {
   snap.trains.length = 0;
   snap.vehicles.length = 0;
   snap.gates.length = 0;
-  snap.walkers.length = 0;
+  snap.people.length = 0;
   sim.snapshot(snap);
   dscene = buildScene(world, snap);
   dscene.lighting.setShadows(shadows);
+  dscene.scene.add(inspector.marker);
+  inspector.setWorld(world);
   rig.setWorld(world, first);
   if (pose) rig.setPose(pose);
   if (follow >= 0) rig.follow = Math.min(follow, snap.trains.length - 1);
-  window.dr = { ...api, world, sim, scene: dscene.scene, renderer };
+  window.dr = { ...api, world, sim, scene: dscene.scene, renderer, camera: rig.camera, rig, inspector };
   return true;
 }
 
@@ -167,6 +171,7 @@ function frame(now: number): void {
   sim.snapshot(snap);
   dscene.update(snap, simDt, hourNow());
   rig.update(dt, snap);
+  inspector.update(sim, snap, rig.camera, simDt, now);
   renderer.render(dscene.scene, rig.camera);
   fps += (1 / Math.max(dt, 1e-3) - fps) * 0.05;
   const tr = rig.follow !== null ? snap.trains[rig.follow] : undefined;
@@ -184,10 +189,22 @@ addEventListener("keydown", (e) => {
   if (e.code === "Space") { paused = !paused; e.preventDefault(); }
   else if (e.code in SPEEDS) speed = SPEEDS[e.code as keyof typeof SPEEDS];
   else if (e.code === "KeyF") { rig.cycleFollow(snap.trains.length); follow = rig.follow ?? -1; }
-  else if (e.code === "Escape") { rig.stopFollow(); follow = -1; }
+  else if (e.code === "Escape") { rig.stopFollow(); follow = -1; inspector.select(null); }
   else if (e.code === "KeyS") { shadows = !shadows; dscene?.lighting.setShadows(shadows); }
   else if (e.code === "KeyH") hud.toggle();
   else if (e.code === "KeyR") rig.controls.autoRotate = !rig.controls.autoRotate;
+});
+// --- click to inspect (a click, not the end of a drag) ----------------------------------
+let press: { x: number; y: number; t: number } | null = null;
+renderer.domElement.addEventListener("pointerdown", (e) => { press = { x: e.clientX, y: e.clientY, t: performance.now() }; });
+renderer.domElement.addEventListener("pointerup", (e) => {
+  if (!press || !dscene || e.button !== 0) return;
+  const moved = Math.hypot(e.clientX - press.x, e.clientY - press.y);
+  const quick = performance.now() - press.t < 400;
+  press = null;
+  if (moved > 5 || !quick) return;
+  const rect = renderer.domElement.getBoundingClientRect();
+  inspector.select(inspector.pick(e.clientX - rect.left, e.clientY - rect.top, renderer.domElement, rig.camera, snap, dscene.scene));
 });
 addEventListener("resize", () => {
   renderer.setSize(innerWidth, innerHeight);

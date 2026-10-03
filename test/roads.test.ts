@@ -101,7 +101,19 @@ describe("road network", () => {
       { id: "other", points: [[861.97, 53.2], [740.26, 87.9]] },
     ];
     L.traffic = { cars: 24 };
-    L.pedestrians = { count: 100 };
+    if (sidewalks === "both") {
+      // Houses at both ends, so the people visiting each other walk over both crossings.
+      const along = (a: number[], b: number[], t: number, off: number): [number, number] => {
+        const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+        const u = [(b[0] - a[0]) / len, (b[1] - a[1]) / len];
+        return [a[0] + u[0] * t - u[1] * off, a[1] + u[1] * t + u[0] * off];
+      };
+      const [p0, p1, p2] = [[164.72, 535.33], [347.37, 679.78], [591.15, 778.29]];
+      L.scenery = [
+        ...[4, 18].map((t) => ({ object: "house", at: along(p0, p1, t, 14), face: "road" as const })),
+        ...[30, 50, 70, 90].map((t) => ({ object: "house", at: along(p1, p2, t, 14), face: "road" as const })),
+      ];
+    }
     const { world: w, report: r } = buildWorld(L);
     expect(r.issues.filter((i) => i.severity === "error")).toEqual([]);
     expect(w!.roads.crossings.length).toBe(2);
@@ -110,7 +122,8 @@ describe("road network", () => {
     for (let i = 0; i < (20 * 60) / DT && !sim.deadlock; i++) sim.step();
     expect(sim.deadlock).toBeNull();
     expect(sim.traffic.stats().stuck).toBe(0);
-    expect(sim.walkers.stats().stuck).toBe(0);
+    expect(sim.people.stats().stuck).toBe(0);
+    if (sidewalks === "both") expect(sim.people.stats().crossed + sim.people.stats().trips.walk).toBeGreaterThan(0);
   });
 
   it("keeps roads above the sea", () => {
@@ -152,7 +165,7 @@ describe.each([
 ])("%s traffic", (_, make) => {
   const { world } = buildWorld(make());
   const sim = new Sim(world!);
-  const snap: SimSnapshot = { time: 0, trains: [], switches: [], blocks: [], vehicles: [], gates: [], walkers: [] };
+  const snap: SimSnapshot = { time: 0, trains: [], switches: [], blocks: [], vehicles: [], gates: [], people: [] };
   let overlaps = 0;
   let unsafe = 0;
   const closedSeen = new Set<number>();
@@ -186,13 +199,14 @@ describe.each([
     expect(st.stuck).toBe(0);
     expect(st.maxWait).toBeLessThan(120);
     expect(st.avgSpeed).toBeGreaterThan(3);
-    for (const c of sim.traffic.cars) expect(c.odometer, `car ${c.index}`).toBeGreaterThan(500);
+    for (const c of sim.traffic.cars) if (c.owner < 0) expect(c.odometer, `car ${c.index}`).toBeGreaterThan(500);
   });
 
   it("does not hold up the trains", () => {
     const L = make();
     L.roads = [];
     L.paths = [];
+    L.parking = [];
     const plain = new Sim(buildWorld(L).world!);
     for (let i = 0; i < (30 * 60) / DT; i++) plain.step();
     const run = (s: Sim) => s.trains.reduce((a, t) => a + t.odometer, 0);

@@ -29,18 +29,19 @@ export class SceneryMeshes {
   readonly chimneys: THREE.Vector3[] = [];
 
   constructor(objects: Map<string, ObjectInfo>, placements: Placement[]) {
-    const byObject = new Map<string, Placement[]>();
-    for (const p of placements) {
+    const byObject = new Map<string, number[]>();
+    placements.forEach((p, i) => {
       if (!byObject.has(p.object)) byObject.set(p.object, []);
-      byObject.get(p.object)!.push(p);
-    }
+      byObject.get(p.object)!.push(i);
+    });
     const m = new THREE.Matrix4();
     const q = new THREE.Quaternion();
     const pos = new THREE.Vector3();
     const scl = new THREE.Vector3();
     const up = new THREE.Vector3(0, 1, 0);
     const color = new THREE.Color();
-    for (const [id, list] of byObject) {
+    for (const [id, indices] of byObject) {
+      const list = indices.map((i) => placements[i]);
       const { mesh } = objects.get(id)!;
       const parts: Array<[THREE.BufferGeometry | null, THREE.Material, "fixed" | "tint" | "glow"]> = [
         [geometry(mesh.fixed), flatMaterial(), "fixed"],
@@ -55,6 +56,7 @@ export class SceneryMeshes {
           if (kind === "tint") inst.setColorAt(i, color.setHex(p.tint));
         });
         inst.name = `${id}:${kind}`;
+        inst.userData.placements = indices;           // instance -> index into world.scenery (for picking)
         inst.castShadow = kind !== "glow";
         inst.receiveShadow = true;
         inst.computeBoundingSphere();

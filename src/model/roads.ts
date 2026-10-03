@@ -50,10 +50,14 @@ export type LevelCrossing = {
 };
 export type RoadPoint = {
   road: string; s: number; x: number; y: number; z: number;
-  width: number;                 // carriageway
-  reach: number;                 // half-width including the wider sidewalk
+  heading: number;
+  width: number;                 // paved width: carriageway and parking strips (twice the wider side)
+  left: number; right: number;   // m from the centre to the kerb on each side (carriageway plus parking)
+  reach: number;                 // half-width including parking and the wider sidewalk
   ground: boolean;
 };
+
+export const PARKING_WIDTH = { parallel: 2.4, perpendicular: 5.2 } as const;
 
 /** Width of a road's sidewalk on one side (+1 left, −1 right of increasing s), 0 if none. */
 export function sidewalkWidth(spec: RoadSpec, side: 1 | -1): number {
@@ -61,8 +65,24 @@ export function sidewalkWidth(spec: RoadSpec, side: 1 | -1): number {
   return has ? spec.sidewalkWidth : 0;
 }
 
-/** Half-width of a road including its wider sidewalk. */
-export const roadReach = (spec: RoadSpec) => spec.width / 2 + Math.max(sidewalkWidth(spec, 1), sidewalkWidth(spec, -1));
+/** Width of a road's parking strip on one side, 0 if none. */
+export function parkingWidth(spec: RoadSpec, side: 1 | -1): number {
+  const has = spec.parking === "both" || spec.parking === (side > 0 ? "left" : "right");
+  return has ? PARKING_WIDTH[spec.parkingStyle] : 0;
+}
+
+/** From the road's centre to the kerb on one side: the carriageway plus any parking strip. */
+export const kerbOffset = (spec: RoadSpec, side: 1 | -1) => spec.width / 2 + parkingWidth(spec, side);
+
+/** Half-width of the paved road on its wider side (carriageway and parking). */
+export const pavedHalf = (spec: RoadSpec) => Math.max(kerbOffset(spec, 1), kerbOffset(spec, -1));
+
+/** Half-width of a road including parking and sidewalks, on its wider side. */
+export const roadReach = (spec: RoadSpec) => Math.max(kerbOffset(spec, 1) + sidewalkWidth(spec, 1), kerbOffset(spec, -1) + sidewalkWidth(spec, -1));
+
+/** Display name of a road or path: its `name`, or its id in title case. */
+export const displayName = (spec: { id: string; name?: string }) =>
+  spec.name ?? spec.id.split("-").map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w)).join(" ");
 
 /**
  * How far from a junction's centre cars on one leg stop: clear of every other road
@@ -78,7 +98,7 @@ export function junctionStop(net: Pick<RoadNet, "roads">, n: RoadNode, legIndex:
     if (o.road === leg.road) continue;
     const other = net.roads.get(o.road)!;
     const sin = Math.abs(Math.sin(headingAt(other.path, o.s) - h));
-    box = Math.max(box, other.spec.width / 2 / Math.max(sin, 0.4) + 1.5);
+    box = Math.max(box, pavedHalf(other.spec) / Math.max(sin, 0.4) + 1.5);
   }
   return box;
 }
@@ -271,14 +291,14 @@ export function buildRoads(ctx: Ctx): { net: RoadNet | null; issues: Issue[] } {
       if (!e) continue;
       const parent = roads.get(e.road)!;
       const z = profileZ(profiles.get(e.road)!, endAt(e, parent));
-      const half = parent.spec.width / 2;
+      const half = pavedHalf(parent.spec);
       pins.push({ s: k === 0 ? 0 : L, z }, { s: k === 0 ? Math.min(L, half) : Math.max(0, L - half), z });
     }
     for (const c of crossings) if (c.road === id) flat(c.roadS, CROSSING_FLAT, c.z + CROSSING_ROAD_Z);
     for (const c of crossroads) {
       const [mine, other, otherS] = c.a === id ? [c.sa, c.b, c.sb] : c.b === id ? [c.sb, c.a, c.sa] : [NaN, "", 0];
       if (Number.isNaN(mine) || rank.get(other)! > rank.get(id)!) continue;
-      flat(mine, roads.get(other)!.spec.width / 2, profileZ(profiles.get(other)!, otherS));
+      flat(mine, pavedHalf(roads.get(other)!.spec), profileZ(profiles.get(other)!, otherS));
     }
     const { profile, issues: grade } = buildProfile(r, dry, pins, { window: ROAD_SMOOTH, noun: "road", follow: true });
     for (const g of grade) issues.push(error("GRADE_EXCEEDED", g.message, `roads[${r.index}]`, pointAt(r.path, g.s0)));
@@ -349,13 +369,13 @@ export function buildRoads(ctx: Ctx): { net: RoadNet | null; issues: Issue[] } {
       if (!e) continue;
       const parent = roads.get(e.road)!;
       const s = k === 0 ? 0 : r.path.length;
-      const t = trimLen(parent.spec.width, crossAngle(headingAt(r.path, s), headingAt(parent.path, endAt(e, parent))));
+      const t = trimLen(2 * pavedHalf(parent.spec), crossAngle(headingAt(r.path, s), headingAt(parent.path, endAt(e, parent))));
       trims.get(r.id)!.push(k === 0 ? [0, t] : [r.path.length - t, r.path.length]);
     }
   }
   for (const c of crossroads) {
     const [later, s, other] = rank.get(c.a)! > rank.get(c.b)! ? [c.a, c.sa, c.b] : [c.b, c.sb, c.a];
-    const t = trimLen(roads.get(other)!.spec.width, c.angle);
+    const t = trimLen(2 * pavedHalf(roads.get(other)!.spec), c.angle);
     const L = roads.get(later)!.path.length;
     const list = trims.get(later)!;
     // Ranges stay within [0, L]; on a loop, one that wraps is split in two.
@@ -369,7 +389,10 @@ export function buildRoads(ctx: Ctx): { net: RoadNet | null; issues: Issue[] } {
   for (const r of roads.values()) {
     for (const s of sampleS(r.path, POINT_STEP)) {
       const [x, y] = pointAt(r.path, s);
-      points.push({ road: r.id, s, x, y, z: profileZ(profiles.get(r.id)!, s), width: r.spec.width, reach: roadReach(r.spec), ground: structureAt(spans.get(r.id)!, s) === "ground" });
+      points.push({
+        road: r.id, s, x, y, z: profileZ(profiles.get(r.id)!, s), heading: headingAt(r.path, s), width: 2 * pavedHalf(r.spec),
+        left: kerbOffset(r.spec, 1), right: kerbOffset(r.spec, -1), reach: roadReach(r.spec), ground: structureAt(spans.get(r.id)!, s) === "ground",
+      });
     }
   }
   const hash = new SpatialHash<RoadPoint>(10);
@@ -377,6 +400,19 @@ export function buildRoads(ctx: Ctx): { net: RoadNet | null; issues: Issue[] } {
   const net: RoadNet = { roads, order, profiles, spans, nodes, stops, crossings, trims, points, hash };
   issues.push(...checkRoads(ctx, net));
   return { net, issues };
+}
+
+/** Just the roads' paths, parents first (no heights or checks): for placing things beside roads. */
+export function roadGeometry(roads: RoadSpec[]): Map<string, RoadGeom> {
+  const out = new Map<string, RoadGeom>();
+  const { order, cycle } = roadOrder(roads);
+  if (cycle) return out;
+  for (const id of order) {
+    const index = roads.findIndex((r) => r.id === id);
+    const road = buildRoadPath(roads[index], index, out, []);
+    if (road) out.set(id, road);
+  }
+  return out;
 }
 
 /** One road's path: an optional T-junction start/end on a parent, then filleted waypoints. */

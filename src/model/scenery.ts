@@ -47,6 +47,8 @@ export type Placement = {
   scale: number;
   tint: number;          // sRGB hex for its "tint" parts
   smoke: boolean;
+  entry: number;         // index of its layout scenery entry; -1 for station props
+  station?: string;      // the station whose building it is
 };
 
 export type StationGeom = {
@@ -56,7 +58,6 @@ export type StationGeom = {
   s0: number;
   s1: number;
   sides: Array<1 | -1>;                    // +1 = left of the track direction
-  people: Array<{ s: number; side: 1 | -1; lateral: number }>;   // lateral 0..1 across the platform
 };
 
 /** Every object a layout can use: the built-in library, overridden or extended by the layout's own. */
@@ -67,17 +68,48 @@ export function objectCatalog(custom: Record<string, ObjectDef>, season: Season)
 
 export function buildStations(layout: Layout): StationGeom[] {
   return layout.stations.map((st) => {
-    const r = rng(layout.seed, `station-${st.id}`);
     const sides: Array<1 | -1> = st.side === "both" ? [-1, 1] : st.side === "left" ? [1] : [-1];
-    const s0 = st.at - st.length / 2;
-    const s1 = st.at + st.length / 2;
-    const people: StationGeom["people"] = [];
-    for (const sd of sides) {
-      const n = Math.round(st.length / 14);
-      for (let k = 0; k < n; k++) people.push({ s: range(r, s0 + 4, s1 - 4), side: sd, lateral: range(r, 0.25, 0.9) });
-    }
-    return { id: st.id, name: st.name, track: st.track, s0, s1, sides, people };
+    return { id: st.id, name: st.name, track: st.track, s0: st.at - st.length / 2, s1: st.at + st.length / 2, sides };
   });
+}
+
+export type StationEntry = { at: [number, number, number]; side: 1 | -1; s: number };
+
+/**
+ * Where people may step from the town onto each station's platforms: their back
+ * edges (the side away from the track) beside the station building, or at the
+ * middle and near the ends of a platform without one. A station with platforms on
+ * both sides can be entered from either (it has an underpass between them).
+ */
+export function stationEntries(
+  layout: Layout, tracks: Map<string, TrackGeom>, profiles: Map<string, Profile>, objects: Map<string, ObjectInfo>,
+): Map<string, StationEntry[]> {
+  const out = new Map<string, StationEntry[]>();
+  for (const st of layout.stations) {
+    const t = tracks.get(st.track);
+    const prof = profiles.get(st.track);
+    if (!t || !prof) continue;
+    const home: 1 | -1 = st.side === "left" ? 1 : -1;       // the building's side ("both": the right)
+    const L = t.path.length;
+    const at = (s0: number, side: 1 | -1): StationEntry => {
+      const s = t.path.closed ? ((s0 % L) + L) % L : Math.min(Math.max(s0, 0), L);
+      const [px, py] = pointAt(t.path, s);
+      const h = headingAt(t.path, s);
+      const lateral = side * (PLATFORM_OFFSET + PLATFORM_WIDTH / 2);
+      return { at: [px - Math.sin(h) * lateral, py + Math.cos(h) * lateral, profileZ(prof, s) + PLATFORM_TOP], side, s };
+    };
+    const ends = st.length / 2 - 6;
+    const plain = (side: 1 | -1) => [at(st.at, side), at(st.at - ends, side), at(st.at + ends, side)];
+    const building = st.building ? objects.get(st.building) : undefined;
+    const list: StationEntry[] = [];
+    if (building) {
+      const half = Math.min((building.mesh.max[1] - building.mesh.min[1]) / 2 + 3, st.length / 2 - 2);
+      list.push(at(st.at - half, home), at(st.at + half, home));
+    } else list.push(...plain(home));
+    if (st.side === "both") list.push(...plain((-home) as 1 | -1));
+    out.set(st.id, list);
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -128,8 +160,8 @@ export function placeScenery(ctx: Context): { placements: Placement[]; issues: I
 
   const tintFor = (info: ObjectInfo, r: () => number, color?: string) =>
     color ? resolveColor(color, layout.style.season) : pick(r, tintColors(info.def, layout.style.season));
-  const add = (object: string, x: number, y: number, z: number, rotation: number, scale: number, tint: number, smoke: boolean) =>
-    out.push({ object, x, y, z, rotation, scale, tint, smoke });
+  const add = (object: string, x: number, y: number, z: number, rotation: number, scale: number, tint: number, smoke: boolean, entry: number, station?: string) =>
+    out.push({ object, x, y, z, rotation, scale, tint, smoke, entry, ...(station ? { station } : {}) });
 
   // Station buildings and benches are objects too ("station-building", "bench").
   layout.stations.forEach((st, i) => {
@@ -157,14 +189,14 @@ export function placeScenery(ctx: Context): { placements: Placement[]; issues: I
       if (walk && walk.d < 0) {
         issues.push(error("SCENERY_ON_PATH", `the building of station '${st.id}' stands on ${walk.what}; move it away from the platform side, or set "building": null`, `stations[${i}].building`, [p.x, p.y]));
       }
-      add(st.building!, p.x, p.y, z, rot, 1, tintFor(building, r), false);
+      add(st.building!, p.x, p.y, z, rot, 1, tintFor(building, r), false, -1, st.id);
       solids.push({ box, path: `stations[${i}].building`, object: st.building!, flat: false });
     }
     const bench = objects.get("bench");
     for (const sd of bench ? sides : []) {
       for (let s = st.at - st.length * 0.25; s <= st.at + st.length * 0.25; s += 18) {
         const p = at(s, sd * (PLATFORM_OFFSET + 1.1));
-        add("bench", p.x, p.y, profileZ(ctx.profiles.get(st.track)!, s) + PLATFORM_TOP, p.h - sd * (Math.PI / 2), 1, tintFor(bench!, r), false);
+        add("bench", p.x, p.y, profileZ(ctx.profiles.get(st.track)!, s) + PLATFORM_TOP, p.h - sd * (Math.PI / 2), 1, tintFor(bench!, r), false, -1);
       }
     }
   });
@@ -209,7 +241,7 @@ export function placeScenery(ctx: Context): { placements: Placement[]; issues: I
       return;
     }
     const smoke = info.mesh.chimneys.length > 0 && (e.smoke ?? r() < info.def.smoke);
-    add(e.object, x, y, z, rotation, scale, tintFor(info, r, e.color), smoke);
+    add(e.object, x, y, z, rotation, scale, tintFor(info, r, e.color), smoke, i);
     const flat = info.mesh.max[2] * scale < FLAT;
     for (const other of solids) {
       if (flat || other.flat) continue;
@@ -256,7 +288,7 @@ export function placeScenery(ctx: Context): { placements: Placement[]; issues: I
       const walk = nearestWalk(ctx.walkHash, box, z);
       if (walk && walk.d < SCATTER_WALK_GAP + reach * 0.5) continue;
       if (solids.some((sol) => boxDistance(sol.box, x, y) < reach + (sol.flat ? 0 : GARDEN))) continue;
-      add(id, x, y, z, rotation, scale, tintFor(info, r), info.mesh.chimneys.length > 0 && r() < info.def.smoke);
+      add(id, x, y, z, rotation, scale, tintFor(info, r), info.mesh.chimneys.length > 0 && r() < info.def.smoke, i);
       scattered++;
     }
   });
@@ -298,8 +330,11 @@ function nearestRoad(hash: SpatialHash<RoadPoint>, box: Box, z: number): { d: nu
   let best: { d: number; half: number; road: string } | null = null;
   hash.near(box.cx, box.cy, boxRadius(box) + SCATTER_ROAD_GAP + 20, (p) => {
     if (Math.abs(p.z - z) > ROAD_DZ) return;
-    const d = boxDistance(box, p.x, p.y) - p.width / 2;
-    if (!best || d < best.d) best = { d, half: p.width / 2, road: p.road };
+    // The kerb on the object's side (a parking strip may widen only one side).
+    const lat = -(box.cx - p.x) * Math.sin(p.heading) + (box.cy - p.y) * Math.cos(p.heading);
+    const half = lat >= 0 ? p.left : p.right;
+    const d = boxDistance(box, p.x, p.y) - half;
+    if (!best || d < best.d) best = { d, half, road: p.road };
   });
   return best;
 }

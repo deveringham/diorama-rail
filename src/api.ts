@@ -10,6 +10,7 @@ export { LayoutSchema, type Layout, layoutJsonSchema } from "./model/schema";
 export { buildWorld, validate, type World } from "./model/build";
 export type { Issue, Report } from "./model/validate";
 export { Sim, simulate, type SimReport, type SimSnapshot, type SimEvent } from "./sim/sim";
+export { describePerson, describeBuilding, describeVehicle, describeTrain, doing, type Info } from "./sim/describe";
 export { TRAIN_CATALOG } from "./model/catalog";
 export { OBJECT_LIBRARY } from "./model/objectLibrary";
 
@@ -115,9 +116,15 @@ export function query(world: World) {
         }
         for (const c of net.crossings) out.push(`  level crossing ${c.id}: ${c.road} s=${f0(c.roadS)} × ${c.track} s=${f0(c.trackS)} at (${f0(c.at[0])}, ${f0(c.at[1])}), ${f0(c.angle)}°`);
         const cars = L.traffic.cars;
-        out.push(`  traffic: ${cars ?? "auto"} vehicles of [${[...new Set(L.traffic.vehicles)].join(", ")}]`);
+        out.push(`  through traffic: ${cars ?? "auto"} vehicles of [${[...new Set(L.traffic.vehicles)].join(", ")}]`);
         const walked = [...net.roads.values()].filter((r) => r.spec.sidewalks !== "none").map((r) => `${r.id} (${r.spec.sidewalks})`);
         if (walked.length) out.push(`  sidewalks: ${walked.join(", ")}`);
+        const parked = [...net.roads.values()].filter((r) => r.spec.parking !== "none").map((r) => `${r.id} (${r.spec.parking}${r.spec.parkingStyle === "perpendicular" ? ", nose-in" : ""})`);
+        if (parked.length) out.push(`  street parking: ${parked.join(", ")}`);
+        for (const lot of world.town.lots) {
+          const bays = world.town.bays.filter((b) => b.lot === lot.id).length;
+          out.push(`  car park ${lot.id} "${lot.name}" at (${f0(lot.centre[0])}, ${f0(lot.centre[1])}), ${bays} bays, ${f0(lot.length)}×${f0(lot.width)} m, joins ${lot.parent}`);
+        }
       }
       const walks = world.walks;
       if (walks.paths.size) {
@@ -126,7 +133,7 @@ export function query(world: World) {
           const p = walks.paths.get(id)!;
           const ends = (["from", "to"] as const).map((w) => {
             const e = p.spec[w];
-            return e ? `${w} ${e.path ? `path ${e.path}` : `road ${e.road}`}@${e.at}` : "";
+            return e ? (e.station ? `${w} station ${e.station}` : `${w} ${e.path ? `path ${e.path}` : `road ${e.road}`}@${e.at}`) : "";
           }).filter(Boolean);
           const spans = walks.spans.get(id)!.filter((s) => s.kind !== "ground").map((s) => `${s.kind} ${f0(s.s0)}–${f0(s.s1)}`);
           out.push(`  ${id} ${p.spec.kind} ${f0(p.path.length)} m, ${p.spec.width} m ${p.spec.surface}` + (ends.length ? `; ${ends.join(", ")}` : "") + (spans.length ? `; ${spans.join(", ")}` : ""));
@@ -136,7 +143,22 @@ export function query(world: World) {
         const zebras = walks.crossings.filter((c) => c.kind === "zebra");
         for (const c of zebras) out.push(`  zebra crossing on ${c.road} s=${f0(c.roadS)} at (${f0(c.at[0])}, ${f0(c.at[1])})`);
         for (const c of walks.footCrossings) out.push(`  foot crossing ${c.id}: ${c.road} s=${f0(c.roadS)} × ${c.track} s=${f0(c.trackS)} at (${f0(c.at[0])}, ${f0(c.at[1])}), ${f0(c.angle)}°`);
-        out.push(`  pedestrians: ${L.pedestrians.count ?? "auto"}; ${walks.crossings.length - zebras.length} unmarked crossings at road junctions`);
+        out.push(`  ${walks.crossings.length - zebras.length} unmarked crossings at road junctions`);
+      }
+      const town = world.town;
+      if (town.buildings.length) {
+        out.push("Town:");
+        const kinds = new Map<string, number>();
+        for (const b of town.buildings) kinds.set(b.kind, (kinds.get(b.kind) ?? 0) + 1);
+        out.push(`  buildings: ${[...kinds].sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k}×${n}`).join(", ")}`);
+        const placesOf = (fn: string) => town.buildings.filter((b) => b.functions.includes(fn as never) && b.kind !== "House");
+        for (const b of [...new Set([...placesOf("workplace"), ...placesOf("landmark")])]) {
+          out.push(`  ${b.name} (${b.kind}: ${b.functions.join(", ")}${b.jobs.length ? `; ${b.jobs.length} jobs` : ""}) at (${f0(b.at[0])}, ${f0(b.at[1])})${b.access || b.bays.length ? "" : " UNREACHABLE"}`);
+        }
+        const homes = town.buildings.filter((b) => b.residents > 0);
+        out.push(`  homes: ${homes.length} buildings for ${homes.reduce((a, b) => a + b.residents, 0)} people; ${town.people.length} live here, ${town.people.filter((p) => p.job).length} with jobs, ${town.people.filter((p) => p.car).length} with cars (${town.bays.length} parking bays)`);
+        for (const st of town.stations) out.push(`  station ${st.station} entered ${st.entrances.map((e) => `${e.via === "path" ? "by path" : e.via === "building" ? "through its building" : "from the nearest walkway"} (${e.side > 0 ? "left" : "right"} platform)`).join(", ") || "nowhere: no walkway reaches it"}`);
+        out.push(`  places to stroll to: ${town.spots.length}`);
       }
       const counts = new Map<string, number>();
       for (const p of world.scenery) counts.set(p.object, (counts.get(p.object) ?? 0) + 1);
