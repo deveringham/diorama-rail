@@ -188,6 +188,30 @@ const ParkingLot = z.strictObject({
   road: Id.optional().describe("Road its driveway joins; default the nearest"),
 });
 
+const BusStop = z.strictObject({
+  id: Id,
+  name: z.string().min(1).optional().describe('Shown on the stop and in journeys; default from the id ("market-square" → "Market Square")'),
+  road: Id.describe("Road the stop stands beside"),
+  at: z.number().describe("s along the road (m) of the stop's sign; buses stop with their front door beside it"),
+  side: z.enum(["both", "left", "right"]).default("both")
+    .describe("Which side of the road (left/right of increasing s) has a stop; buses drive on the right, so the right side serves buses going toward increasing s"),
+  shelter: z.boolean().default(true).describe("Draw a shelter behind the kerb (left out where something already stands there)"),
+});
+
+const BusLine = z.strictObject({
+  id: Id,
+  name: z.string().min(1).optional().describe('Shown on the buses and in journeys, e.g. "3" or "Harbour Hopper"; default from the id'),
+  stops: z.array(Id).min(2).describe("Bus stop ids in the order the buses call; they take the quickest way along the roads between them"),
+  mode: z.enum(["shuttle", "loop"]).default("shuttle")
+    .describe("shuttle: there and back along the list, turning round after the last stop; loop: from the last stop back to the first"),
+  count: z.int().min(1).max(20).default(1).describe("Buses on the line, spread evenly along it"),
+  dwell: z.number().min(2).max(120).default(12).describe("s a bus waits at each stop (longer while people get on and off)"),
+  capacity: z.int().min(1).max(200).default(40).describe("Passengers a bus takes"),
+  vehicle: Id.default("bus").describe("Object id drawn as the bus"),
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/, "color must be a hex string like #c8553d").optional()
+    .describe("Colour of the line's buses; default one per line"),
+});
+
 export const LayoutSchema = z.strictObject({
   version: z.literal(1),
   name: z.string(),
@@ -209,6 +233,8 @@ export const LayoutSchema = z.strictObject({
   paths: z.array(Path).default([])
     .describe("Footpaths: junctions form automatically, zebra crossings where a path crosses a road, foot crossings over tracks"),
   parking: z.array(ParkingLot).default([]).describe("Car parks: rows of bays along an aisle, joined to a road by a driveway"),
+  busStops: z.array(BusStop).default([]).describe("Bus stops beside roads, on one side or both"),
+  busLines: z.array(BusLine).default([]).describe("Bus lines: buses calling at stops in order along the roads; people ride them like trains"),
   people: z.strictObject({
     count: z.int().min(0).max(2000).optional()
       .describe("How many people live on the board; default as many as the accommodation holds (at most 600)"),
@@ -219,8 +245,8 @@ export const LayoutSchema = z.strictObject({
   traffic: z.strictObject({
     cars: z.int().min(0).max(400).optional()
       .describe("Through traffic: vehicles driving about at random, not owned by residents; default about one per 200 m of road (at most 30)"),
-    vehicles: z.array(Id).min(1).default(["car", "van", "bus", "truck"])
-      .describe("Object ids for through traffic, picked at random (repeat an id to make it more common)"),
+    vehicles: z.array(Id).min(1).default(["car", "car", "van", "truck"])
+      .describe("Object ids for through traffic, picked at random (repeat an id to make it more common); real buses run on busLines"),
   }).prefault({}),
   objects: z.record(Id, ObjectSchema).default({})
     .describe("Custom scenery objects for this layout, by id; they may also redefine built-in ids"),
@@ -244,6 +270,8 @@ export type RoadSpec = Layout["roads"][number];
 export type PathSpec = Layout["paths"][number];
 export type PathEndSpec = NonNullable<PathSpec["from"]>;
 export type ParkingLotSpec = Layout["parking"][number];
+export type BusStopSpec = Layout["busStops"][number];
+export type BusLineSpec = Layout["busLines"][number];
 
 /** Normalises a waypoint to { at, z?, radius? }. */
 export function waypoint(w: WaypointSpec): { at: [number, number]; z?: number; radius?: number } {

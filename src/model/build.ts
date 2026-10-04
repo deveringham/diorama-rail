@@ -12,6 +12,7 @@ import { type RoadNet, buildRoads, emptyRoadNet, roadGeometry } from "./roads";
 import { type WalkNet, buildWalks, emptyWalkNet } from "./walks";
 import { planLots, lotPoints, lotIssue } from "./parking";
 import { type Town, buildTown } from "./town";
+import { type BusNet, buildBusStops, buildBusLines, emptyBusNet } from "./buses";
 import {
   type Issue, type Report, type TrackPoint, error, makeReport, zodIssues, checkReferences, checkJunctionPosition,
   checkBounds, checkConflicts, checkStations, checkServices,
@@ -42,6 +43,7 @@ export type World = {
   roads: RoadNet;
   walks: WalkNet;                     // footpaths, sidewalks and where people cross
   town: Town;                         // buildings, parking bays, station access and the residents
+  buses: BusNet;                      // bus stops and the lines calling at them
   stats: Record<string, number>;
 };
 
@@ -125,6 +127,10 @@ export function buildWorld(json: unknown): { world: World | null; report: Report
     : null;
   if (walked) issues.push(...walked.issues);
   const walks = walked?.net ?? emptyWalkNet();
+  const busCtx = { layout, roads, walks, objects, lots: new Set(planned.lots.map((l) => l.id)) };
+  const bused = built.net ? buildBusStops(busCtx) : null;
+  if (bused) issues.push(...bused.issues);
+  const buses = bused?.net ?? emptyBusNet();
   // Shaping in passes: track beds first, then roads, then paths, each keeping what came before flat.
   const bed = shapeCorridor(terrain, points.map((p) => ({ x: p.x, y: p.y, z: p.z, ground: structureAt(spans.get(p.track)!, p.s) === "ground" })));
   const roadBed = shapeCorridor(terrain, roads.points.map((p) => ({ x: p.x, y: p.y, z: p.z, ground: p.ground, flat: p.reach + 1, depth: ROAD_BED })), bed);
@@ -149,12 +155,15 @@ export function buildWorld(json: unknown): { world: World | null; report: Report
   if (hasErrors(issues)) return { world: null, report: makeReport(issues) };
   const town = buildTown({
     layout, tracks, profiles, spans, trackHash: pointHash, roads, walks, lots: planned.lots, stations, stationEntries: entries, objects,
-    scenery: placed.placements,
+    scenery: placed.placements, buses,
   });
   issues.push(...town.issues);
+  // Bus lines, calling at the sides of stops people can walk to where they can.
+  issues.push(...buildBusLines(busCtx, buses, (side) => town.town.stops[side]?.access != null));
+  if (hasErrors(issues)) return { world: null, report: makeReport(issues) };
   const world: World = {
     layout, tracks, order, junctions, graph, profiles, spans, terrain, points, pointHash, stations, routes, objects,
-    scenery: placed.placements, roads, walks, town: town.town, stats: {},
+    scenery: placed.placements, roads, walks, town: town.town, buses, stats: {},
   };
   world.stats = computeStats(world);
   return { world, report: makeReport(issues, world.stats) };
@@ -183,13 +192,14 @@ function computeStats(w: World): Record<string, number> {
   const ownCars = w.town.people.filter((p) => p.car).length;
   const through = throughTraffic(w);
   const meanTris = (ids: string[]) => ids.reduce((a, id) => a + (w.objects.get(id)?.mesh.triangles ?? 0), 0) / Math.max(1, ids.length);
-  const vehicleTris = through * meanTris(w.layout.traffic.vehicles) + ownCars * meanTris(w.layout.people.vehicles);
+  const vehicleTris = through * meanTris(w.layout.traffic.vehicles) + ownCars * meanTris(w.layout.people.vehicles)
+    + w.buses.lines.reduce((a, l) => a + l.count * meanTris([l.vehicle]), 0);
   // Triangle budget: terrain grid + skirt, scenery objects, track (sleepers, rails, ballast), roads
   // (surface, verges, markings), trains, vehicles, platforms.
   const triangles = 2 * w.terrain.nx * w.terrain.ny + 4 * (w.terrain.nx + w.terrain.ny) + objectTris
     + Math.round(trackLength / 0.65) * 10 + Math.round(trackLength / 2) * 22 + Math.round(roadLength / 2) * 6 + Math.round(roadLength / 6) * 2
     + cars * 60 + Math.round(vehicleTris) + w.stations.length * 300 + (w.roads.crossings.length + w.walks.footCrossings.length) * 400
-    + Math.round((pathLength + sidewalkLength) / 1) * 6 + people * 24 + w.town.bays.length * 4;
+    + Math.round((pathLength + sidewalkLength) / 1) * 6 + people * 24 + w.town.bays.length * 4 + w.buses.sides.length * 60;
   const r1 = (x: number) => Math.round(x);
   return {
     trackLength: r1(trackLength), tracks: w.tracks.size, junctions: w.junctions.length,
@@ -198,6 +208,7 @@ function computeStats(w: World): Record<string, number> {
     levelCrossings: w.roads.crossings.length, pathLength: r1(pathLength), sidewalkLength: r1(sidewalkLength),
     zebras: w.walks.crossings.filter((c) => c.kind === "zebra").length, footCrossings: w.walks.footCrossings.length,
     buildings: w.town.buildings.length, people, cars: ownCars, parkingBays: w.town.bays.length, carParks: w.town.lots.length, throughTraffic: through,
+    busStops: w.buses.stops.length, busLines: w.buses.lines.length, buses: w.buses.lines.reduce((a, l) => a + l.count, 0),
     objects: w.scenery.length, trees, triangles,
   };
 }

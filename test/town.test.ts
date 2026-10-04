@@ -137,7 +137,7 @@ describe("journeys", () => {
 
   it("drives when walking is a bother, along lanes that follow on from each other", () => {
     const owner = town.people.find((p) => p.car)!;
-    const lazy = { ...owner, prefs: { walk: 4, drive: 0.8, train: 1 } };
+    const lazy = { ...owner, prefs: { walk: 4, drive: 0.8, train: 1, bus: 1 } };
     const car = sim.traffic.carOf[owner.id];
     const church = town.buildings.find((b) => b.kind === "Church")!.id;
     const r = sim.people.planner.plan(lazy, { kind: "building", id: owner.home }, { kind: "building", id: church }, owner.car!.bay, car)!;

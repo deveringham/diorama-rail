@@ -10,7 +10,7 @@ export { LayoutSchema, type Layout, layoutJsonSchema } from "./model/schema";
 export { buildWorld, validate, type World } from "./model/build";
 export type { Issue, Report } from "./model/validate";
 export { Sim, simulate, type SimReport, type SimSnapshot, type SimEvent } from "./sim/sim";
-export { describePerson, describeBuilding, describeVehicle, describeTrain, doing, type Info } from "./sim/describe";
+export { describePerson, describeBuilding, describeVehicle, describeTrain, describeBusStop, doing, type Info } from "./sim/describe";
 export { TRAIN_CATALOG } from "./model/catalog";
 export { OBJECT_LIBRARY } from "./model/objectLibrary";
 
@@ -159,6 +159,18 @@ export function query(world: World) {
         out.push(`  homes: ${homes.length} buildings for ${homes.reduce((a, b) => a + b.residents, 0)} people; ${town.people.length} live here, ${town.people.filter((p) => p.job).length} with jobs, ${town.people.filter((p) => p.car).length} with cars (${town.bays.length} parking bays)`);
         for (const st of town.stations) out.push(`  station ${st.station} entered ${st.entrances.map((e) => `${e.via === "path" ? "by path" : e.via === "building" ? "through its building" : "from the nearest walkway"} (${e.side > 0 ? "left" : "right"} platform)`).join(", ") || "nowhere: no walkway reaches it"}`);
         out.push(`  places to stroll to: ${town.spots.length}`);
+      }
+      const buses = world.buses;
+      if (buses.stops.length) {
+        out.push("Buses:");
+        const sideName = (id: number) => `${buses.stops[buses.sides[id].stop].id}${buses.stops[buses.sides[id].stop].sides.length > 1 ? `(${buses.sides[id].side > 0 ? "L" : "R"})` : ""}`;
+        for (const st of buses.stops) {
+          const sides = st.sides.map((k) => `${buses.sides[k].side > 0 ? "left" : "right"}${town.stops[k]?.access ? "" : " UNREACHABLE"}`);
+          out.push(`  stop ${st.id} "${st.name}" on ${st.road} s=${f0(st.s)}, ${sides.join(" + ")} side${sides.length > 1 ? "s" : ""}`);
+        }
+        for (const l of buses.lines) {
+          out.push(`  line ${l.id} "${l.name}" ${l.mode}, ${l.count}× ${l.vehicle} (${l.color}): ${l.visits.map((v) => sideName(v.side)).join(" → ")} → back; round ${f0(l.distance)} m in about ${f0(l.cycle)} s, a bus every ${f0(l.cycle / l.count)} s`);
+        }
       }
       const counts = new Map<string, number>();
       for (const p of world.scenery) counts.set(p.object, (counts.get(p.object) ?? 0) + 1);

@@ -43,7 +43,10 @@ export class VehicleMeshes {
         inst.castShadow = kind !== "glow";
         inst.receiveShadow = true;
         inst.frustumCulled = false;     // instances move; skip stale bounding spheres
-        if (kind === "tint") owners.forEach((v, i) => inst.setColorAt(i, color.setHex(tints[hashString(`${world.layout.seed}-${v}`) % tints.length])));
+        if (kind === "tint") {
+          // Buses in their line's colour; anything else a colour picked per vehicle.
+          owners.forEach((v, i) => inst.setColorAt(i, color.set(snapshot.vehicles[v].color ?? tints[hashString(`${world.layout.seed}-${v}`) % tints.length])));
+        }
         meshes.push(inst);
         this.group.add(inst);
       }

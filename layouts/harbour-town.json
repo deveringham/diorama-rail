@@ -134,7 +134,9 @@
       "surface": "paved",
       "from": { "road": "lighthouse-lane", "at": "end" },
       "points": [[1452, 411], [1474, 405]]
-    }
+    },
+    { "id": "farm-crossing", "from": { "path": "farm-track", "at": "start" }, "points": [[553, 560]] },
+    { "id": "beach-crossing", "from": { "path": "beach-path", "at": "start" }, "points": [[675, 595]] }
   ],
   "parking": [
     {
@@ -150,6 +152,23 @@
       "at": [1300, 447],
       "spaces": 16,
       "rotation": 180
+    }
+  ],
+  "busStops": [
+    { "id": "quay", "name": "Harbour Front", "road": "harbour-front", "at": 150 },
+    { "id": "upper-street-stop", "name": "Upper Street", "road": "upper-street", "at": 175 },
+    { "id": "inland-farm", "name": "Inland Farm", "road": "inland-road", "at": 252 },
+    { "id": "beach-stop", "name": "Beach Path", "road": "inland-road", "at": 372 },
+    { "id": "ostkap-centre", "name": "Ostkap", "road": "ostkap-street", "at": 50 },
+    { "id": "lighthouse", "road": "lighthouse-lane", "at": 190 }
+  ],
+  "busLines": [
+    {
+      "id": "coast-line",
+      "name": "1",
+      "stops": ["quay", "upper-street-stop", "inland-farm", "beach-stop", "ostkap-centre", "lighthouse"],
+      "count": 3,
+      "color": "#4f6f9a"
     }
   ],
   "people": { "cars": 0.3 },

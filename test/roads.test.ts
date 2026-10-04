@@ -207,6 +207,8 @@ describe.each([
     L.roads = [];
     L.paths = [];
     L.parking = [];
+    L.busStops = [];
+    L.busLines = [];
     const plain = new Sim(buildWorld(L).world!);
     for (let i = 0; i < (30 * 60) / DT; i++) plain.step();
     const run = (s: Sim) => s.trains.reduce((a, t) => a + t.odometer, 0);

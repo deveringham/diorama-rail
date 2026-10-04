@@ -4,9 +4,9 @@ A model railway to watch in the browser: low-poly terrain, track, stations,
 roads, footpaths, buildings and trees on a diorama block, with trains running on
 their own and a town that lives around them. Every resident has a name, a home,
 often a job and perhaps a car, and runs errands — to work, home, the shops, a
-stroll — walking, driving from parking bay to parking bay, or taking the train,
-whichever is quickest. Click anyone (or any building, car or train) to see who
-they are and what they are doing. A layout is one JSON file; everything visible is derived
+stroll — walking, driving from parking bay to parking bay, or taking the train
+or the bus, whichever is quickest. Click anyone (or any building, car, bus,
+train or bus stop) to see who they are and what they are doing. A layout is one JSON file; everything visible is derived
 from it plus a seed — including its scenery objects, which are themselves small
 JSON models built from primitives. Layouts and objects can be validated, simulated and screenshotted
 from the command line, so an LLM (or you) can write and repair them in a loop.
@@ -45,7 +45,7 @@ calls and triangles, and this list of controls with the current state of each.
 | `S` | shadows on/off |
 | `H` | hide / show the HUD (shown by default; hidden in screenshots) |
 | `R` | auto-rotate on/off |
-| click | inspect a person, building, car or train (names in the panel are links); `Esc` closes |
+| click | inspect a person, building, car, bus, train or bus stop (names in the panel are links); `Esc` closes |
 
 In the browser console, `dr` holds the API plus `world`, `sim`, `scene`,
 `renderer`, `camera` and `inspector`, e.g. `dr.query(dr.world).describe()` or
@@ -55,7 +55,7 @@ In the browser console, `dr` holds the API plus `world`, `sim`, `scene`,
 
 ```sh
 npm run check -- layouts/valley-loop.json [--json]          # validate; exit 1 on errors
-npm run simulate -- layouts/valley-loop.json --minutes 30   # per-service stops, speed, waits; traffic; people; exit 1 on deadlock
+npm run simulate -- layouts/valley-loop.json --minutes 30   # per-service stops, speed, waits; traffic; buses; people; exit 1 on deadlock
 npm run screenshot -- layouts/valley-loop.json --out shot.png --t 120 --view top --size 1600x1000
 npm run screenshot -- layouts/valley-loop.json --object windmill --out mill.png     # one object alone
 npm run screenshot -- layouts/valley-loop.json --object all --season winter         # every object
@@ -72,8 +72,8 @@ scenery objects (built-in and the layout's own) on a small plinth, labelled.
 The same preview is live in the browser at `?layout=valley-loop&object=*`.
 
 Writing layouts: read [docs/LAYOUT_GUIDE.md](docs/LAYOUT_GUIDE.md) — coordinates,
-roads, parking and traffic, sidewalks and paths, buildings and people, placing
-scenery, designing objects, rules of thumb, every validation code with a fix,
+roads, parking and traffic, sidewalks and paths, buildings and people, buses,
+placing scenery, designing objects, rules of thumb, every validation code with a fix,
 and the authoring loop.
 
 ## How it fits together
@@ -83,9 +83,10 @@ layout.json ─► model/  parse (zod) → refs → track geometry (fillets, jun
                  │     bridges/tunnels → roads (junctions, crossroads, level crossings, heights)
                  │     (car parks as aisle roads) → paths and sidewalks (the walk network: zebras,
                  │     foot crossings, station ends) → terrain shaping → conflicts, stations,
-                 │     routes → scenery → town (buildings, doors, parking bays, residents)
-                 ├───► sim/    blocks, per-service plans, trains, level crossings, road traffic and
-                 │             parked cars, journey planner, people and their errands, fixed 1/30 s
+                 │     routes → bus stops → scenery → town (buildings, doors, parking bays, residents)
+                 │     → bus lines (routes over the lanes)
+                 ├───► sim/    blocks, per-service plans, trains, level crossings, road traffic,
+                 │             parked cars and buses, journey planner, people and their errands, fixed 1/30 s
                  │             step, deadlock check; describe.ts for the inspect panel
                  └───► scene/  three.js meshes built once; trains, vehicles, barriers, people,
                                smoke, light updated per frame
@@ -135,7 +136,7 @@ its centre, `lamp`-coloured parts for headlights) and list it in the layout's
    with `error(code, message, path, at?)` or `warning(...)`.
 2. `src/model/build.ts`: call it where its inputs exist, e.g.
    `issues.push(...checkSomething(layout, tracks));`.
-3. Add the code to `docs/LAYOUT_GUIDE.md` §9 and a failing fixture to
+3. Add the code to `docs/LAYOUT_GUIDE.md` §10 and a failing fixture to
    `test/validate.test.ts`.
 
 ## Notes on v0.1
@@ -235,8 +236,8 @@ households, jobs at the workplaces, and cars parked near home.
 `src/sim/people.ts` gives them errands. Someone with nothing to do thinks of a
 task (work, home, a visit, a stroll), and `src/sim/planner.ts` finds the quickest
 journey in one search over walkways (split where doors, bays, stations and
-strolling spots join them), road lanes and train services (with the expected
-wait), with a layer for "car still parked / driving / car parked again" so a car
+strolling spots join them), road lanes, train services and bus lines (with the
+expected wait), with a layer for "car still parked / driving / car parked again" so a car
 is picked up once and only where it stands. Then they follow it:
 
 - On foot, with the kerb and level-crossing behaviour above.
@@ -249,6 +250,9 @@ is picked up once and only where it stands. Then they follow it:
   end of a path, or from the nearest walkway; both platforms of a two-sided
   station), wait, board the first train of a suitable service heading their way,
   and get off at their stop. Each train keeps its passenger list.
+- By bus: people walk to the stop, wait on the sidewalk by its sign, get on the
+  first bus of a line that calls at their destination stop (if it has room), and
+  get off there. Each bus keeps its passenger list.
 
 At the destination they go inside for the task's duration (or linger at the
 spot), then think of the next thing. `src/sim/describe.ts` turns all of this into
@@ -256,6 +260,29 @@ the panel shown when you click something. Durations are compressed for a diorama
 (work lasts minutes, not hours). Through traffic (`traffic.cars`) still drives
 about at random and is not driven by residents. Cars glide into parallel bays
 rather than reversing in, and people do not avoid each other on walkways.
+
+### Buses
+
+![](docs/buses.png)
+
+`busStops` stand beside roads (`side`: left, right or both), and `busLines` call
+at them in order, there and back or round a loop (`src/model/buses.ts`). Each
+line's route is found over the same lanes the traffic drives: buses drive on the
+right, so they call at the side of a stop on their right, and the side chosen at
+each stop is the one that makes the quickest round (preferring sides people can
+walk to, and on a shuttle's way back the side it did not use on the way out).
+Stops that would leave a waiting bus blocking a junction or a crossing, and lines
+no road connects, are errors; each stop gets a painted box, a sign and, where
+there is room, a shelter, and parked cars keep clear of it.
+
+In the sim the buses are vehicles in the traffic (`src/sim/traffic.ts`) that go
+round their line's itinerary and stop in their lane at each stop — the traffic
+behind waits — for the line's dwell, longer while people get on and off, and a
+bus that has caught up with the one ahead waits a little longer so they stay
+apart. The planner treats a line like a train service: an edge from each side of
+a stop to every later one, costed with half the headway as the expected wait.
+Buses stop in the lane (there are no lay-bys), and turn round at dead ends or off
+the board's edge.
 
 ### Interpretations and limitations
 - **Fixed routes.** A service follows one path through the graph. Two shuttles

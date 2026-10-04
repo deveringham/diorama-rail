@@ -3,14 +3,16 @@
 // time, never stopping where they would block a junction or a crossing. Through
 // traffic picks turns at random; residents' cars stand in parking bays until their
 // owner drives them along a planned route to another bay, pulling out when there
-// is a gap and turning in at the end. Level crossings warn, lower their barriers
+// is a gap and turning in at the end. Buses go round their line's route, stopping
+// in their lane at each stop while people get on and off. Level crossings warn, lower their barriers
 // once the road is clear and stay closed while a train is near; trains stop short
 // of a crossing that is not closed. Pure TypeScript, deterministic from the seed.
 
 import type { World } from "../model/build";
 import { throughTraffic } from "../model/build";
 import { PULL_OUT } from "../model/town";
-import { type RoadGeom, type RoadNode, type LevelCrossing, junctionStop } from "../model/roads";
+import { type BusLineGeom, DOOR_BACK } from "../model/buses";
+import { type RoadGeom, type RoadNode, type LevelCrossing, isPortal, laneTopology, nextNode } from "../model/roads";
 import { type Plan, curveLimit } from "./services";
 import type { Train } from "./trains";
 import { rOnPiece } from "../model/routes";
@@ -37,9 +39,7 @@ const ZEBRA_GAP = 1.0;          // m between a zebra's stop line and its stripes
 const LOCK_REACH = 8;           // m beyond braking distance at which a car asks for a junction
 const REROUTE_AFTER = 4;        // s waiting for room beyond a junction before trying another way
 const QUEUED = 2;               // m/s: slower than this, the car ahead counts as queueing
-const PORTAL_EDGE = 30;         // m: dead ends this close to the board edge lead off the board
 const AWAY: [number, number] = [4, 16];   // s a car stays off the board
-const DEAD_END_TURN = 6;        // m of road a car uses to turn round at a dead end
 const SPAWN_GAP = 10;           // m between spawned cars, beyond their length
 const STUCK_AFTER = 120;        // s stationary before a car counts as stuck
 const BAY_SPEED = 2.5;          // m/s turning into or out of a bay
@@ -47,6 +47,8 @@ const REVERSE_SPEED = 1.4;      // m/s backing out of a nose-in bay
 const MERGE_PATIENCE = 30;      // s waiting to pull out before accepting a shorter gap
 const TURN_IN = 6;              // m before a parallel bay where a car leaves the lane (nose-in: TURN_IN_NOSE)
 const TURN_IN_NOSE = 3.5;
+const HOLD_SHARE = 0.6;         // a bus closer than this share of the even spacing behind the next waits at its stop
+const MAX_HOLD = 45;            // s at most that it waits for that
 
 // Level crossings.
 const WARN = 3;                 // s the lights flash before the barriers drop
@@ -103,7 +105,15 @@ export type { Lane as TrafficLane };
 
 type Car = {
   index: number;
-  owner: number;                // person whose car it is, -1 for through traffic
+  owner: number;                // person whose car it is, -1 for through traffic and buses
+  line: number;                 // the bus line it serves (index into world.buses.lines), -1 if not a bus
+  seqPos: number;               // bus: its line's itinerary entry that the end of its path is
+  nextVisit: number;            // bus: the visit (index into the line's visits) it calls at next
+  dwelling: boolean;            // bus: standing at a stop
+  dwellLeft: number;            // s still to stand there
+  heldFor: number;              // s kept at the stop beyond its dwell to even out the gaps between buses
+  stopCount: number;            // bus: stops made (the people serve each once)
+  skipped: number;              // bus: stops passed without stopping (should stay 0)
   state: "driving" | "parked" | "leaving";   // leaving: in its bay, waiting for a gap to pull out
   bay: number;                  // bay while parked or leaving, else -1
   goal: number;                 // bay it is driving to, -1 for through traffic
@@ -114,6 +124,7 @@ type Car = {
   trailLen: number[];           // how much of each trail segment it drove (its end, for the last lane before a bay)
   object: string;
   length: number;
+  width: number;
   centre: number;               // the object's x-centre offset in its own frame
   pace: number;                 // fraction of the limit this driver keeps to
   path: Seg[];                  // path[0] holds the front
@@ -145,10 +156,16 @@ type Gate = {
 
 type Occupant = { car: Car; front: number; rear: number; virtual?: boolean };
 
-export type VehicleSnapshot = { object: string; x: number; y: number; z: number; heading: number; pitch: number; visible: boolean };
+export type VehicleSnapshot = {
+  object: string; x: number; y: number; z: number; heading: number; pitch: number; visible: boolean;
+  color: string | null;         // a bus's line colour (other vehicles: null, a colour picked per vehicle)
+};
 export type GateSnapshot = { id: string; state: GateState; barrier: number; lights: boolean };
 export type TrafficStats = {
   cars: number;                 // through traffic
+  buses: number;
+  busStops: number;             // stops made by buses in all
+  busSkipped: number;           // stops buses drove past (0 unless something went wrong)
   own: number;                  // residents' cars
   driving: number;              // residents' cars on the road now
   ownDistance: number;          // m driven by residents' cars in all
@@ -165,10 +182,22 @@ export class Traffic {
   bayAt: Array<{ lane: Lane; d: number } | null> = [];
   /** Which car stands in each bay (or is driving to it), -1 if free. */
   readonly bayCar: Int32Array;
+  /** Each bus line's itinerary (lanes and turns round and round, with its stops) and its buses' car indices. */
+  readonly lines: Array<{
+    geom: BusLineGeom;
+    seq: Array<{ seg: Seg; stops: Array<{ d: number; visit: number }> }>;
+    cum: number[];              // m from the itinerary's start to each entry's
+    total: number;              // m round the itinerary
+    visitAt: number[];          // m from the start to each visit's stop
+    buses: number[];
+  }> = [];
+  /** Buses that could not be placed at the start. */
+  busesUnplaced = 0;
   readonly gates: Gate[] = [];
   readonly closed: Uint8Array;
   unplaced = 0;
   private lanes: Lane[] = [];
+  private laneByKey = new Map<string, Lane>();
   private turns = new Map<string, Turn>();
   private aways = new Map<number, Away>();
   private holder: Int32Array;
@@ -209,6 +238,8 @@ export class Traffic {
     this.bayCar = new Int32Array(world.town.bays.length).fill(-1);
     this.buildLanes();
     this.mapBays();
+    this.buildLines();
+    this.spawnBuses();
     this.spawn();
     this.parkOwnCars();
   }
@@ -257,8 +288,9 @@ export class Traffic {
   private newCar(object: string, path: Seg[]): Car {
     const mesh = this.world.objects.get(object)!.mesh;
     return {
-      index: this.cars.length, owner: -1, state: "driving", bay: -1, goal: -1, exitD: NaN, waitMerge: 0, reversing: false, enterD: 0, trailLen: [],
-      object, length: Math.max(1, mesh.max[0] - mesh.min[0]), centre: (mesh.max[0] + mesh.min[0]) / 2, pace: range(this.r, 0.85, 1.02),
+      index: this.cars.length, owner: -1, line: -1, seqPos: 0, nextVisit: 0, dwelling: false, dwellLeft: 0, heldFor: 0, stopCount: 0, skipped: 0,
+      state: "driving", bay: -1, goal: -1, exitD: NaN, waitMerge: 0, reversing: false, enterD: 0, trailLen: [],
+      object, length: Math.max(1, mesh.max[0] - mesh.min[0]), width: mesh.max[1] - mesh.min[1], centre: (mesh.max[0] + mesh.min[0]) / 2, pace: range(this.r, 0.85, 1.02),
       path, d: 0, trail: [], speed: 0, held: [], asking: null, request: NaN, hidden: false, awayLeft: 0, stopped: 0, odometer: 0, maxWait: 0,
     };
   }
@@ -390,38 +422,8 @@ export class Traffic {
 
   // -- network -------------------------------------------------------------------
 
-  private nodeBox(n: RoadNode, legIndex: number): number {
-    const net = this.world.roads;
-    const leg = n.legs[legIndex];
-    const road = net.roads.get(leg.road)!;
-    let box: number;
-    if (n.legs.length === 1) box = this.portal(n) ? 0 : DEAD_END_TURN;
-    else if (n.legs.length === 2) box = 1;
-    else box = junctionStop(net, n, legIndex);
-    // Never more than half way to the next node along this leg.
-    const next = this.nextStop(road, leg.s, leg.dir);
-    if (next) box = Math.min(box, Math.max(0, next.dist / 2 - 0.5));
-    return box;
-  }
-
   private portal(n: RoadNode): boolean {
-    const [W, H] = this.world.layout.terrain.size;
-    return Math.min(n.at[0], n.at[1], W - n.at[0], H - n.at[1]) < PORTAL_EDGE;
-  }
-
-  /** The next node along a road from s in direction dir (wrapping on loops), not counting s itself. */
-  private nextStop(road: RoadGeom, s: number, dir: 1 | -1): { node: number; s: number; dist: number } | null {
-    const list = this.world.roads.stops.get(road.id)!;
-    const L = road.path.length;
-    let best: { node: number; s: number; dist: number } | null = null;
-    for (const x of list) {
-      let dist = (x.s - s) * dir;
-      if (road.path.closed) dist = mod(dist, L);
-      if (dist <= 1e-6 && road.path.closed) dist += L;
-      if (dist <= 1e-6) continue;
-      if (!best || dist < best.dist) best = { node: x.node, s: x.s, dist };
-    }
-    return best;
+    return isPortal(n, this.world.layout.terrain.size);
   }
 
   private buildLanes(): void {
@@ -438,40 +440,15 @@ export class Traffic {
       this.lanes.push(lane);
       return lane;
     };
-    const starts = new Map<string, Lane>();           // node|legIndex -> lane leaving along that leg
-    net.nodes.forEach((n) => {
-      n.legs.forEach((leg, li) => {
-        const road = net.roads.get(leg.road)!;
-        const next = this.nextStop(road, leg.s, leg.dir);
-        if (!next) return;
-        const box0 = this.nodeBox(n, li);
-        const m = net.nodes[next.node];
-        const back = m.legs.findIndex((l) => l.road === leg.road && l.dir === -leg.dir && Math.abs(mod(l.s - next.s + 1, road.path.length || Infinity) - 1) < 1e-3);
-        const box1 = back >= 0 ? this.nodeBox(m, back) : 0;
-        const L = road.path.length;
-        const s0 = road.path.closed ? mod(leg.s + leg.dir * box0, L) : leg.s + leg.dir * box0;
-        starts.set(`${n.id}|${li}`, make(road, leg.dir, s0, Math.max(0.5, next.dist - box0 - box1), next.node));
-      });
-    });
-    // Loop roads with no nodes: one lane each way that runs into itself.
-    for (const road of net.roads.values()) {
-      if (!road.path.closed || net.stops.get(road.id)!.length) continue;
-      for (const dir of [1, -1] as const) {
-        const lane = make(road, dir, dir > 0 ? 0 : road.path.length, road.path.length, null);
-        lane.next = [lane];
-      }
+    // The network's lanes, each starting and ending clear of its nodes' junction areas.
+    const topo = laneTopology(net, this.world.layout.terrain.size);
+    for (const t of topo) {
+      const road = net.roads.get(t.road)!;
+      const L = road.path.length;
+      const s0 = t.end === null ? t.s : road.path.closed ? mod(t.s + t.dir * t.box0, L) : t.s + t.dir * t.box0;
+      this.laneByKey.set(t.key, make(road, t.dir, s0, t.end === null ? t.dist : Math.max(0.5, t.dist - t.box0 - t.box1), t.end));
     }
-    // Where each lane may continue: any leg of its end node except straight back, unless that is all there is.
-    for (const lane of this.lanes) {
-      if (lane.end === null) continue;
-      const n = net.nodes[lane.end];
-      const endS = this.laneS(lane, lane.length + this.boxBeyond(lane));
-      const outs = n.legs.map((leg, li) => ({ leg, lane: starts.get(`${n.id}|${li}`) })).filter((o) => o.lane);
-      const reverse = (o: (typeof outs)[number]) => o.leg.road === lane.road.id && o.leg.dir === -lane.dir
-        && Math.abs(mod(o.leg.s - endS + 1, lane.road.path.length || Infinity) - 1) < 0.5;
-      const forward = outs.filter((o) => !reverse(o));
-      lane.next = (forward.length ? forward : outs).map((o) => o.lane!);
-    }
+    for (const t of topo) this.laneByKey.get(t.key)!.next = t.next.map((k) => this.laneByKey.get(k)!);
     // Level crossings on each lane: stop line and the end of the zone, as lane offsets.
     this.gates.forEach((g, gi) => {
       const c = g.crossing;
@@ -513,7 +490,7 @@ export class Traffic {
   /** Distance from a lane's end to its end node's centre. */
   private boxBeyond(lane: Lane): number {
     if (lane.end === null) return 0;
-    const next = this.nextStop(lane.road, lane.s0, lane.dir);
+    const next = nextNode(this.world.roads, lane.road, lane.s0, lane.dir);
     return next ? next.dist - lane.length : 0;
   }
 
@@ -619,6 +596,182 @@ export class Traffic {
     return this.pose;
   }
 
+  // -- buses -----------------------------------------------------------------------
+
+  /**
+   * Each line's itinerary: the lanes from stop to stop (with the turns between them)
+   * as one repeating list, every stop marked on the lane where the bus stands.
+   */
+  private buildLines(): void {
+    const net = this.world.buses;
+    for (const geom of net.lines) {
+      const place = (side: number) => {
+        const st = net.sides[side];
+        return { lane: this.laneByKey.get(st.lane)!, d: st.d - net.lanes.get(st.lane)!.box0 };
+      };
+      const m = geom.visits.length;
+      const v0 = place(geom.visits[0].side);
+      const passes: Array<{ lane: Lane; stops: Array<{ d: number; visit: number }> }> = [{ lane: v0.lane, stops: [{ d: v0.d, visit: 0 }] }];
+      geom.legs.forEach((keys, i) => {
+        for (let k = 1; k < keys.length; k++) passes.push({ lane: this.laneByKey.get(keys[k])!, stops: [] });
+        const to = (i + 1) % m;
+        passes[passes.length - 1].stops.push({ d: place(geom.visits[to].side).d, visit: to });
+      });
+      // The round ends on the first visit's lane again: that pass is the first one.
+      const last = passes.pop()!;
+      passes[0].stops.unshift(...last.stops.filter((x) => x.visit !== 0));
+      const seq: Array<{ seg: Seg; stops: Array<{ d: number; visit: number }> }> = [];
+      passes.forEach((p, k) => {
+        p.stops.sort((a, b) => a.d - b.d);
+        seq.push({ seg: p.lane, stops: p.stops });
+        const next = passes[(k + 1) % passes.length].lane;
+        if (p.lane.end !== null) seq.push({ seg: this.turn(p.lane, next), stops: [] });
+      });
+      const cum: number[] = [];
+      let total = 0;
+      for (const e of seq) { cum.push(total); total += e.seg.length; }
+      const visitAt = geom.visits.map(() => 0);
+      seq.forEach((e, k) => { for (const x of e.stops) visitAt[x.visit] = cum[k] + x.d; });
+      this.lines.push({ geom, seq, cum, total, visitAt, buses: [] });
+    }
+  }
+
+  /** Each line's buses, spread evenly round its itinerary where there is room. */
+  private spawnBuses(): void {
+    this.lines.forEach((line, li) => {
+      const { seq, geom } = line;
+      const total = seq.reduce((a, e) => a + e.seg.length, 0);
+      for (let k = 0; k < geom.count; k++) {
+        let placed = false;
+        for (let tries = 0; tries * 5 < total && !placed; tries++) {
+          let x = mod(k * total / geom.count + tries * 5, total);
+          let idx = 0;
+          while (x > seq[idx].seg.length) { x -= seq[idx].seg.length; idx++; }
+          const lane = seq[idx].seg;
+          if (lane.kind !== "lane") continue;
+          const car = this.newCar(geom.vehicle, [lane]);
+          const d = Math.max(x, car.length + 0.5);
+          if (d > lane.length) continue;
+          if (lane.crossings.some((c) => d > c.from - 2 && d - car.length < c.zoneEnd + 2)) continue;
+          if (lane.zebras.some((c) => d > c.stop - 1 && d - car.length < c.zoneEnd + 1)) continue;
+          if (this.cars.some((o) => o.path[0] === lane && Math.abs(o.d - d) < Math.max(o.length, car.length) + SPAWN_GAP)) continue;
+          car.line = li;
+          car.pace = 0.95;
+          car.seqPos = idx;
+          car.d = d;
+          car.nextVisit = this.visitAhead(line.seq, idx, d);
+          this.plan(car);
+          this.cars.push(car);
+          line.buses.push(car.index);
+          placed = true;
+        }
+        if (!placed) this.busesUnplaced++;
+      }
+    });
+  }
+
+  /** The first visit marked after offset d of itinerary entry idx. */
+  private visitAhead(seq: Traffic["lines"][number]["seq"], idx: number, d: number): number {
+    for (let k = 0; k <= seq.length; k++) {
+      const e = seq[(idx + k) % seq.length];
+      const stop = e.stops.find((x) => k > 0 || x.d > d + 0.1);
+      if (stop) return stop.visit;
+    }
+    return 0;
+  }
+
+  /** The itinerary entry of a bus's path segment k. */
+  private seqAt(car: Car, k: number): Traffic["lines"][number]["seq"][number] {
+    const seq = this.lines[car.line].seq;
+    return seq[mod(car.seqPos - (car.path.length - 1 - k), seq.length)];
+  }
+
+  /** How far ahead of a bus's front its next stop is, or null if not within its path. */
+  private busStopAhead(car: Car): number | null {
+    let cum = -car.d;
+    for (let k = 0; k < car.path.length; k++) {
+      const stop = this.seqAt(car, k).stops.find((x) => x.visit === car.nextVisit);
+      if (stop && (k > 0 || stop.d >= car.d - 1)) return cum + stop.d;
+      cum += car.path[k].length;
+    }
+    return null;
+  }
+
+  /**
+   * A bus at its stop starts to wait; one done waiting moves on (and one that drove
+   * past its stop this tick, from `before`, goes on to the next).
+   */
+  private stepBus(car: Car, dt: number, before: number): void {
+    const line = this.lines[car.line];
+    const m = line.geom.visits.length;
+    if (car.dwelling) {
+      car.dwellLeft -= dt;
+      if (car.dwellLeft > 0) return;
+      // Too close behind the bus ahead: wait a little longer, so the buses keep apart.
+      if (line.buses.length > 1 && car.heldFor < MAX_HOLD) {
+        const me = this.busAt(car);
+        const gap = Math.min(...line.buses.filter((ci) => ci !== car.index).map((ci) => mod(this.busAt(this.cars[ci]) - me, line.total)));
+        if (gap < HOLD_SHARE * line.total / line.buses.length) {
+          car.heldFor += dt;
+          car.dwellLeft = dt;
+          return;
+        }
+      }
+      car.dwelling = false;
+      car.heldFor = 0;
+      car.nextVisit = (car.nextVisit + 1) % m;
+      return;
+    }
+    const stop = this.seqAt(car, 0).stops.find((x) => x.visit === car.nextVisit);
+    if (!stop) return;
+    if (car.d >= stop.d - 0.3 && car.d <= stop.d + 1 && car.speed < 0.3) {
+      car.dwelling = true;
+      car.dwellLeft = line.geom.dwell;
+      car.speed = 0;
+      car.stopCount++;
+    } else if (car.d > stop.d + 1 && before <= stop.d + 1) {
+      car.skipped++;
+      car.nextVisit = (car.nextVisit + 1) % m;
+    }
+  }
+
+  /** How far round its line's itinerary a bus is (m from the start). */
+  private busAt(car: Car): number {
+    const line = this.lines[car.line];
+    const k = mod(car.seqPos - (car.path.length - 1), line.seq.length);
+    return line.cum[k] + Math.min(car.d, line.seq[k].seg.length);
+  }
+
+  /** About how many seconds until bus ci stands at visit v (0 if it is there now). */
+  busDue(ci: number, v: number): number {
+    const car = this.cars[ci];
+    const line = this.lines[car.line];
+    if (car.dwelling && car.nextVisit === v) return 0;
+    const ahead = mod(line.visitAt[v] - this.busAt(car), line.total);
+    return (ahead / line.total) * line.geom.cycle;
+  }
+
+  /** Keeps a bus at its stop at least `seconds` longer (while people get on and off). */
+  holdBus(ci: number, seconds: number): void {
+    const car = this.cars[ci];
+    if (car.dwelling) car.dwellLeft = Math.max(car.dwellLeft, seconds);
+  }
+
+  /** The visit a bus is standing at, or -1. */
+  busVisit(ci: number): number {
+    const car = this.cars[ci];
+    return car.line >= 0 && car.dwelling ? car.nextVisit : -1;
+  }
+
+  /** Where people get on and off a bus: beside its front door, on the kerb side. */
+  busDoor(ci: number): [number, number, number] {
+    const car = this.cars[ci];
+    const p = this.along(car, DOOR_BACK);
+    const h = p.h;
+    const w = car.width / 2 + 0.35;
+    return [p.x + Math.sin(h) * w, p.y - Math.cos(h) * w, p.z];
+  }
+
   // -- spawning -------------------------------------------------------------------
 
   private spawn(): void {
@@ -654,6 +807,17 @@ export class Traffic {
   /** Extends a through-traffic car's path at least LOOK metres ahead, choosing turns at random. */
   private plan(car: Car): void {
     if (car.owner >= 0) return;
+    if (car.line >= 0) {
+      // A bus follows its line's itinerary.
+      const seq = this.lines[car.line].seq;
+      let ahead = car.path.reduce((a, x) => a + x.length, 0) - car.d;
+      while (ahead < LOOK + 20 && car.path.length < 12) {
+        car.seqPos = (car.seqPos + 1) % seq.length;
+        car.path.push(seq[car.seqPos].seg);
+        ahead += seq[car.seqPos].seg.length;
+      }
+      return;
+    }
     let ahead = car.path.reduce((a, s) => a + s.length, 0) - car.d;
     while (ahead < LOOK && car.path.length < 8) {
       const last = car.path[car.path.length - 1] as Lane;
@@ -826,8 +990,12 @@ export class Traffic {
       }
       const v = this.control(car);
       car.speed = car.speed < v ? Math.min(v, car.speed + ACCEL * dt) : v;
+      const before = car.d;
+      const seg = car.path[0];
       this.advance(car, car.speed * dt);
-      if (car.speed < 0.05) {
+      if (car.line >= 0 && !car.hidden) this.stepBus(car, dt, car.path[0] === seg ? before : -Infinity);
+      if (car.dwelling) car.stopped = 0;
+      else if (car.speed < 0.05) {
         car.stopped += dt;
         car.maxWait = Math.max(car.maxWait, car.stopped);
       } else car.stopped = 0;
@@ -843,7 +1011,7 @@ export class Traffic {
       if (this.holder[turn.node] !== -1) continue;
       if (this.roomBeyond(car, turn) < car.length + MIN_GAP) {
         // Kept waiting because the way it chose is full: take another way out if one has room.
-        if (this.time - car.request < REROUTE_AFTER || !this.reroute(car, turn)) continue;
+        if (this.time - car.request < REROUTE_AFTER || car.line >= 0 || !this.reroute(car, turn)) continue;
         turn = car.asking!;
         if (this.roomBeyond(car, turn) < car.length + MIN_GAP) continue;
       }
@@ -972,6 +1140,7 @@ export class Traffic {
 
   /** The highest speed the car may have this tick. */
   private control(car: Car): number {
+    if (car.dwelling) return 0;
     const v = car.speed;
     const lane0 = car.path[0];
     let cap = lane0.kind === "lane" ? lane0.limit[Math.min(lane0.limit.length - 1, Math.round(car.d / SPEED_STEP))] * car.pace
@@ -1004,6 +1173,10 @@ export class Traffic {
         Math.max(0, leader.speed + FOLLOW_GAIN * (gap - HEADWAY * leader.speed)));
       if (gap <= ARRIVE) cap = 0;
     }
+
+    // A bus stops at its next stop (and asks for no junction beyond it until it has).
+    const busHalt = car.line >= 0 ? this.busStopAhead(car) : null;
+    if (busHalt !== null) stopAt(busHalt);
 
     // Crossings for people that the car is already on (on any of its lanes): it carries on over them.
     const onZebras = new Set<number>();
@@ -1057,7 +1230,7 @@ export class Traffic {
         slowTo(seg.speed, cum);
         if (seg.junction && !car.held.includes(seg)) {
           // Ask for the junction when close, first in the queue and not held up before it.
-          if (clear && cum < brake + LOCK_REACH && (!leader || leader.rel > cum)) {
+          if (clear && cum < brake + LOCK_REACH && (!leader || leader.rel > cum) && (busHalt === null || busHalt > cum)) {
             if (car.asking !== seg) { car.asking = seg; car.request = this.time; }
           }
           stopAt(cum - 0.5);
@@ -1077,6 +1250,11 @@ export class Traffic {
     while (car.path.length > 1 && car.d >= doneAt(car.path[0]) && car.path[0].kind !== "away") {
       const seg = car.path[0];
       const len = this.segLen(car, 0);
+      if (car.line >= 0 && this.seqAt(car, 0).stops.some((x) => x.visit === car.nextVisit && x.d > car.d - move)) {
+        // Past its stop without stopping (should not happen): on to the next one.
+        car.skipped++;
+        car.nextVisit = (car.nextVisit + 1) % this.lines[car.line].geom.visits.length;
+      }
       car.d -= len;
       car.path.shift();
       car.enterD = 0;
@@ -1226,8 +1404,9 @@ export class Traffic {
 
   snapshotCars(out: VehicleSnapshot[]): VehicleSnapshot[] {
     this.cars.forEach((car, i) => {
-      const s = out[i] ?? (out[i] = { object: car.object, x: 0, y: 0, z: 0, heading: 0, pitch: 0, visible: true });
+      const s = out[i] ?? (out[i] = { object: car.object, x: 0, y: 0, z: 0, heading: 0, pitch: 0, visible: true, color: null });
       s.object = car.object;
+      s.color = car.line >= 0 ? this.lines[car.line].geom.color : null;
       s.visible = !car.hidden;
       if (car.hidden) return;
       if (car.state !== "driving") {
@@ -1268,11 +1447,15 @@ export class Traffic {
   }
 
   stats(): TrafficStats {
-    const through = this.cars.filter((c) => c.owner < 0);
+    const through = this.cars.filter((c) => c.owner < 0 && c.line < 0);
     const own = this.cars.filter((c) => c.owner >= 0);
+    const buses = this.cars.filter((c) => c.line >= 0);
     const n = through.length;
     return {
       cars: n,
+      buses: buses.length,
+      busStops: buses.reduce((a, c) => a + c.stopCount, 0),
+      busSkipped: buses.reduce((a, c) => a + c.skipped, 0),
       own: own.length,
       driving: own.filter((c) => c.state === "driving").length,
       ownDistance: own.reduce((a, c) => a + c.odometer, 0),

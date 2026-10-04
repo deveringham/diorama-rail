@@ -112,6 +112,20 @@
     { "id": "chapel-path", "from": { "road": "bergdorf-lane", "at": 77 }, "points": [[982, 865], [975, 861]] }
   ],
   "parking": [{ "id": "station-car-park", "name": "Station Car Park", "at": [568, 148], "spaces": 24, "rotation": 90 }],
+  "busStops": [
+    { "id": "westfeld", "road": "country-west", "at": 316, "side": "right" },
+    { "id": "market-square", "road": "market-street", "at": 70 },
+    { "id": "lindenau-station", "name": "Lindenau Station", "road": "station-street", "at": 100 },
+    { "id": "ostend", "road": "country-east", "at": 155, "side": "right" }
+  ],
+  "busLines": [
+    {
+      "id": "line-2",
+      "name": "2",
+      "stops": ["westfeld", "market-square", "lindenau-station", "ostend"],
+      "count": 2
+    }
+  ],
   "people": { "cars": 0.3 },
   "traffic": { "cars": 10 },
   "objects": {
@@ -296,6 +310,21 @@
     { "object": "poplar", "at": [556, 439], "rotation": 0 },
     { "object": "poplar", "at": [556, 453], "rotation": 2 },
     { "object": "windmill", "at": [430, 470], "rotation": 300, "name": "Lindenau Windmill", "building": { "functions": ["landmark", "workplace"], "jobs": 2, "titles": ["Miller", "Apprentice miller"], "kind": "Windmill", "door": [4.6, 0] } },
+    { "object": "house", "at": [262, 289], "rotation": 87 },
+    { "object": "house", "at": [278, 289], "rotation": 89 },
+    { "object": "house", "at": [294, 289], "rotation": 91 },
+    { "object": "house", "at": [338, 289], "rotation": 93 },
+    { "object": "house", "at": [354, 289], "rotation": 88 },
+    { "object": "house", "at": [370, 289], "rotation": 90 },
+    { "object": "pub", "at": [396, 287.5], "rotation": 90, "name": "The Plough" },
+    { "object": "house", "at": [918, 289], "rotation": 87 },
+    { "object": "house", "at": [934, 289], "rotation": 89 },
+    { "object": "house", "at": [950, 289], "rotation": 91 },
+    { "object": "house", "at": [966, 289], "rotation": 93 },
+    { "object": "house", "at": [1004, 289], "rotation": 88 },
+    { "object": "house", "at": [1020, 289], "rotation": 90 },
+    { "object": "house", "at": [1036, 289], "rotation": 92 },
+    { "object": "shop", "at": [1058, 288.5], "rotation": 90, "name": "Ostend Farm Shop" },
     { "scatter": ["hay-bale"], "at": [560, 420], "radius": 45, "spacing": 11, "scale": [0.9, 1.1] },
     { "object": "house", "at": [991.5, 797.5], "rotation": -3 },
     { "object": "house", "at": [991.5, 812.5], "rotation": -1 },

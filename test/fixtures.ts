@@ -87,3 +87,18 @@ export function withTown(): Fixture {
   L.people = { cars: 0.4 };
   return L;
 }
+
+/**
+ * The town plus a bus line: stops on both sides of the cross road among the houses, of
+ * the main road by the shops and up by the church, served there and back by two buses.
+ */
+export function withBuses(): Fixture {
+  const L = withTown();
+  L.busStops = [
+    { id: "houses", name: "The Houses", road: "cross", at: 200 },
+    { id: "shops", road: "north-south", at: 270 },
+    { id: "church-stop", name: "St. Peter's", road: "north-south", at: 640 },
+  ];
+  L.busLines = [{ id: "town-bus", name: "7", stops: ["houses", "shops", "church-stop"], count: 2 }];
+  return L;
+}

@@ -79,9 +79,11 @@ roads[]: { id, kind "line"|"loop", points [[x,y] | {at,z?,radius?}], width 6, mi
 paths[]: { id, kind "line"|"loop", points [[x,y] | {at,z?,radius?}], width 2, surface "gravel"|"paved", minRadius 3,
            maxGrade 0.12, name?, from? {path | road, at (s) | "start" | "end"} | {station}, to? {…} }   (§4)
 parking[]: { id, at [x,y], spaces 20, rotation?, road?, name? }                                  car parks (§3)
+busStops[]: { id, name?, road, at (s of the sign), side "both"|"left"|"right", shelter true }      bus stops (§6)
+busLines[]: { id, name?, stops [bus stop ids], mode "shuttle"|"loop", count 1, dwell 12, capacity 40, vehicle "bus", color? }
 people: { count? (default: as many as the homes hold, ≤ 600), cars 0.45, vehicles ["car","car","car","van"] }   (§5)
-traffic: { cars? (through traffic; default ≈ 1 per 200 m of road, ≤ 30), vehicles ["car","van","bus","truck"] }
-objects: { <id>: { description?, building?, parts [part…], tint "walls", smoke 0, maxSlope 30 } }   custom objects (§7)
+traffic: { cars? (through traffic; default ≈ 1 per 200 m of road, ≤ 30), vehicles ["car","car","van","truck"] }
+objects: { <id>: { description?, building?, parts [part…], tint "walls", smoke 0, maxSlope 30 } }   custom objects (§8)
 scenery[]: { object, at [x,y], rotation 0 | face "track"|"road"|[x,y], scale 1, z?, color?, smoke?, name?, building? }
          | { scatter [ids], spacing, at? [x,y], radius?, scale [0.8, 1.2] }                     many, randomly
 building: { functions ["accommodation"|"workplace"|"landmark"], residents 3, jobs 3, titles ["Employee"], kind?, door? [x,y] }
@@ -113,7 +115,7 @@ Train lengths: `regional-3` 66 m, `express-6` 145 m, `freight-10` 158 m, `tram-2
 
 Roads are a second network built the way track is — waypoints with filleted
 corners, heights held to a grade, bridges, tunnels and terrain shaping — and cars,
-vans, buses and lorries drive on them. Where a road meets a track at the same
+vans and lorries drive on them, and buses on their lines (§6). Where a road meets a track at the same
 height there is a **level crossing**, with flashing lights and barriers that come
 down for every train.
 
@@ -180,7 +182,7 @@ down for every train.
   is a gap, along the quickest lanes, into a free bay near where they are going.
   On top of that, `traffic.cars` vehicles of **through traffic** (default about
   one per 200 m of road, at most 30) are picked from `traffic.vehicles` — object
-  ids, so the built-in `car`, `van`, `bus` and `truck` or your own (front toward
+  ids, so the built-in `car`, `van` and `truck` or your own (front toward
   +x, origin at the centre, like any object; parts coloured `lamp` are
   headlights) — and drive about at random (straight on is twice as likely). All
   keep their distance, take a junction only when it is free and there is room
@@ -259,8 +261,8 @@ somewhere people live (`accommodation`), work (`workplace`) or go to visit
 homes — each has a name, a home, usually a job and perhaps a car — and run
 errands: go to work, go home, visit a shop or a friend, stroll along a footpath.
 For each they take the quickest way by their own lights: on foot, in their own
-car, by train, or a mix (driving to the station and taking the train is
-common). At the destination they go inside for a while, then think of the next
+car, by train, by bus (§6), or a mix (driving to the station and taking the
+train is common). At the destination they go inside for a while, then think of the next
 thing to do and come out again.
 
 ```jsonc
@@ -274,14 +276,14 @@ thing to do and come out again.
 "people": { "cars": 0.3 }
 ```
 
-- **Buildings:** built-in buildings come with their uses (table in §6): a house is
+- **Buildings:** built-in buildings come with their uses (table in §7): a house is
   a home for 3, a terrace for 7, flats for 20; the church, barn (a farm), station
   building, shop, office block and inn have jobs. A placement's `building`
   overrides any of `functions`, `residents`, `jobs`, `titles` (the first job gets
   the first title, the last title fills the rest), `kind` (what sort of place it
   is, shown with its name) and `door` ([x, y] in the object frame; default the
   middle of its front). A custom object becomes a building with a `building`
-  block in its definition (§7). Scattered objects are buildings too, if their
+  block in its definition (§8). Scattered objects are buildings too, if their
   object is.
 - **Names and addresses:** `name` names a placed building. Otherwise it gets an
   address on the nearest street within 60 m — numbered along the street, odd on
@@ -314,15 +316,80 @@ thing to do and come out again.
   `both` sides can be entered from either (by the station's underpass). A station
   that trains stop at but no walkway reaches gets `STATION_UNREACHABLE`. People
   wait on the platform and every train keeps a list of who is aboard.
-- **Click to inspect:** in the viewer, click a person, building, car or train to
-  see who they are and what they are doing: a person's home, job, car, current
-  errand and journey; who lives, works and is inside a building; whose car it is
-  and where it is going; a train's passengers and where each is going. Names in
-  the panel can be clicked in turn; Esc closes it. The same descriptions are in
-  `describePerson`, `describeBuilding`, `describeVehicle` and `describeTrain`
+- **Click to inspect:** in the viewer, click a person, building, car, bus, train
+  or bus stop to see who they are and what they are doing: a person's home, job,
+  car, current errand and journey; who lives, works and is inside a building;
+  whose car it is and where it is going; a bus's line, next stops and passengers;
+  a train's passengers and where each is going; the lines calling at a stop, when
+  the next bus is due and who is waiting. Names in the panel can be clicked in
+  turn; Esc closes it. The same descriptions are in `describePerson`,
+  `describeBuilding`, `describeVehicle`, `describeTrain` and `describeBusStop`
   (`src/sim/describe.ts`).
 
-## 6. Scenery: buildings, trees and other objects
+## 6. Buses
+
+Buses are trains for the roads: a **bus stop** stands beside a road, and a
+**bus line** calls at a list of stops in order, there and back (`shuttle`, the
+default) or round and round (`loop`). The buses drive in the traffic like any
+car, taking the quickest way along the roads from stop to stop, and stop in
+their lane at each stop (the traffic behind waits) while people get off and on.
+People plan bus legs like train legs: they walk to the stop, wait, board the
+first bus of a line that calls at their destination stop, and get off there.
+
+```jsonc
+"busStops": [
+  { "id": "westfeld", "road": "country-west", "at": 316, "side": "right" },
+  { "id": "market-square", "road": "market-street", "at": 70 },
+  { "id": "lindenau-station", "name": "Lindenau Station", "road": "station-street", "at": 100 }
+],
+"busLines": [
+  { "id": "line-2", "name": "2", "stops": ["westfeld", "market-square", "lindenau-station"], "count": 2 }
+]
+```
+
+- **Stops:** `at` is the s of the stop's sign along `road`; the bus stops with its
+  front door beside it (its front 2 m past the sign, its body behind). `side`
+  (left/right of increasing s, default `both`) says which sides have a stop.
+  Buses drive on the right and call at the stop on their right-hand side: the
+  right side serves buses going toward increasing s, the left side buses coming
+  back. People wait on the sidewalk by the sign (or just off the road where there
+  is none), so each side needs a sidewalk or path within 45 m that it can reach
+  without crossing the road — else `BUS_STOP_UNREACHABLE`. A stop has a yellow
+  box painted in the lane, a sign at the kerb and (`shelter`, default true) a
+  shelter behind the kerb, left out where a building or tree already stands.
+  Parked cars keep clear of the box. Ids share the one namespace with roads,
+  paths and stations, so name a stop `"market-square"` rather than after its
+  street; its `name` (default from the id) is what people and the panel see.
+- **Where stops may go:** a waiting bus must not block anything, so the bus's
+  whole length (11 m for the built-in `bus`) plus a margin must lie between a
+  road's junctions (3 m clear of a junction's area), 6 m clear of a level
+  crossing's zone, 3 m clear of a zebra or pedestrian crossing, short of a dead
+  end's turning space, out of tunnels, and clear of another stop on the same side.
+  `BUS_STOP_POSITION` says what is in the way and suggests an `at` that works.
+- **Lines:** list at least two stops. A `shuttle` runs to the last stop and back
+  the same way, calling at each stop in between again on the way back (on its
+  other side where it has both); a `loop` returns from the last stop to the
+  first. Between stops the buses take the quickest roads, turning round at dead
+  ends or off the board's edge (where a road leads off it) when they must, so
+  the order of the stops matters: list them in the order a bus passes them. A
+  stop with one side is called at once, by the buses passing it on that side. If
+  no road leads from one stop to the next (on a side buses can serve), the line
+  gets `BUS_ROUTE`. `describe()` lists each line's calls (with the side of a
+  two-sided stop) and how long a round takes.
+- **Buses:** `count` buses (default 1) spread evenly along the line, in its
+  `color` (default one per line) and drawn as `vehicle` (default `bus`). Each
+  waits `dwell` s (default 12) at every stop, longer while people get on and
+  off; a bus that has caught up with the one ahead waits a little longer, so
+  they stay apart. A bus takes `capacity` passengers (default 40); the rest
+  wait for the next. A line whose round holds fewer buses than `count` (about
+  one per 70 m) gets a `CAPACITY` warning.
+- **Riding:** buses do best where walking is slow: between towns or out to
+  hamlets, along roads without sidewalks, to places by the road like a farm or a
+  beach path. People combine buses with walking, trains and their cars. Through
+  traffic (`traffic.vehicles`) no longer includes buses; list `"bus"` there only
+  for buses that never stop.
+
+## 7. Scenery: buildings, trees and other objects
 
 Everything beside the track — houses, churches, trees, lamps, boats — is an
 **object**: a small low-poly model described in JSON. Many are built in (below);
@@ -385,7 +452,7 @@ placed through `scenery`.
 | `paving` | 10 × 10 m paved square | 10 × 10 |
 | `car` | small car (traffic, residents' cars) | 4.3 × 1.8 |
 | `van` | delivery van (traffic) | 5.1 × 2 |
-| `bus` | single-deck bus, windows lit at night (traffic) | 11.1 × 2.6 |
+| `bus` | single-deck bus, windows lit at night (bus lines) | 11.1 × 2.6 |
 | `truck` | box lorry (traffic) | 8 × 2.5 |
 | `conifer` | spruce, ~10 m, snow on top in winter | 4.6 × 5.4 |
 | `deciduous` | broadleaf tree, ~8 m, autumn colours, bare in winter | 5.4 × 5.4 |
@@ -395,7 +462,7 @@ placed through `scenery`.
 
 See them all with `npm run screenshot -- layouts/valley-loop.json --object all --out objects.png`.
 
-## 7. Designing objects (`objects`)
+## 8. Designing objects (`objects`)
 
 An object is a list of **parts**, each a low-poly primitive in the object's own
 frame: **x = front, y = left, z = up**, metres, origin on the ground at the
@@ -468,7 +535,7 @@ lights the part warmly at night; `smoke: true` marks a chimney, and the object's
 - Budget: a house is ~60 triangles; keep objects under ~500. Every object type
   in use costs 2–3 draw calls, however many times it is placed.
 
-## 8. Rules of thumb (avoid most errors)
+## 9. Rules of thumb (avoid most errors)
 
 1. Keep waypoints at least `2·minRadius` apart where the track turns.
 2. Put junctions on straights (`at` well away from curves); turnouts on curves
@@ -495,14 +562,17 @@ lights the part warmly at night; `smoke: true` marks a chimney, and the object's
     Town section for anything unreachable.
 15. Give the streets where people live parking (`parking`, with houses set back
     a further 2.4 m), and a car park by each station for park and ride.
+16. Put bus stops in the middle of a stretch between junctions, list a line's
+    stops in the order a bus passes them, and give each stop's sides a sidewalk;
+    run buses where walking is slow (between towns, out to hamlets).
 
-## 9. Validation codes
+## 10. Validation codes
 
 | Code | Severity | Fix |
 |---|---|---|
 | `SCHEMA` | error | Match `schema.json`: fix the type, add the missing field, or remove the unknown key. |
-| `DUPLICATE_ID` | error | Rename one of the two; ids are shared by tracks, roads, paths, car parks, stations and services (objects have their own namespace). |
-| `UNKNOWN_REF` | error | Use an existing id (the message lists the known ones): track, road, path, station, train type or object (also in `traffic.vehicles` and `people.vehicles`). |
+| `DUPLICATE_ID` | error | Rename one of the two; ids are shared by tracks, roads, paths, car parks, stations, services, bus stops and bus lines (objects have their own namespace). |
+| `UNKNOWN_REF` | error | Use an existing id (the message lists the known ones): track, road, path, station, bus stop, train type or object (also in `traffic.vehicles`, `people.vehicles` and a bus line's `vehicle`). |
 | `TRACK_REF_CYCLE` | error | A branch can't (indirectly) be its own parent; make one track (road, path) a plain line/loop. |
 | `OUT_OF_BOUNDS` | error | Move waypoints inward (track must stay 20 m inside the terrain, roads 5 m, paths 3 m), or move a placed object onto the board. |
 | `FILLET_OVERLAP` | error | Spread the two named waypoints apart or lower `minRadius` / waypoint `radius`. |
@@ -518,7 +588,7 @@ lights the part warmly at night; `smoke: true` marks a chimney, and the object's
 | `ROUTE_NOT_CLOSED` | error | Use `mode: "shuttle"` or add tracks that lead back to the first one. |
 | `STOP_NOT_ON_ROUTE` | error | Add the station's track to the route or drop the stop. |
 | `TRAIN_TOO_LONG` | warning | Lengthen the platform or use a shorter train. |
-| `CAPACITY` | warning | Fewer trains, or a longer route. (`simulate`: also vehicles that found no room on the roads — lower `traffic.cars`. And `people.count` above what the homes hold.) |
+| `CAPACITY` | warning | Fewer trains (or buses), or a longer route. (`simulate`: also vehicles that found no room on the roads — lower `traffic.cars`. And `people.count` above what the homes hold.) |
 | `ROAD_CONFLICT` | error | A road crosses a track (or road) 3–6.5 m (5.5 m) apart in height, runs too close beside a track, or overlaps another road without a junction: make it a level crossing / crossroads, clear it in height with a waypoint `z`, move it, or join the roads with `from`/`to`. |
 | `LEVEL_CROSSING_POSITION` | error | Move the crossing onto plain ground, off the platform, 35 m from railway junctions and 25 m from road junctions and road ends — or take the road over or under the line. The same for a path's foot crossing (without the road rules). |
 | `LEVEL_CROSSING_ANGLE` | warning / error | Cross the track at 30° or more (ideally square) so the crossing stays short; below 15° it is an error. Also for paths. |
@@ -530,19 +600,24 @@ lights the part warmly at night; `smoke: true` marks a chimney, and the object's
 | `PARKING_POSITION` | error | A car park has no road within 300 m, is more than 60 m from the road it joins, or overlaps a road or track: move it beside the road, clear of both. |
 | `BUILDING_UNREACHABLE` | warning | Nobody can reach the building's door: run a sidewalk or path within 45 m of it (in a straight line not crossing a road or track), turn its door toward the street, or give it parking beside it. |
 | `STATION_UNREACHABLE` | warning | No walkway reaches the station: end a path at it (`"to": { "station": id }`) or run a sidewalk past its building or platform. |
+| `BUS_STOP_POSITION` | error | A bus waiting at the stop would reach into a junction, a crossing or a dead end's turning space, stand in a tunnel, overlap another stop on the same side, or the stop is off the road: move `at` (the message suggests where). |
+| `BUS_ROUTE` | error | A bus line can't get by road from one stop to the next on a side it serves (connect the roads, give the stop both sides, or reorder the stops), lists a stop twice in a row, or is a loop ending at its first stop (leave the last one out). |
+| `BUS_STOP_UNREACHABLE` | warning | Nobody can walk to that side of the stop: give the road a sidewalk on that side, run a path to it, or give the stop the other side only. |
+| `BUS_STOP_UNUSED` | warning | No line calls at the stop: add it to a line's `stops` or remove it. |
 | `DEADLOCK` | error | (`simulate` only) Trains wait on each other: add a passing loop, fewer trains, or different routes. |
 
 Every issue has `path` (JSON path such as `tracks[1].points[2]`), a one-sentence
 `message` with numbers and a suggested fix, and often `at` (map coordinates).
 
-## 10. Authoring loop
+## 11. Authoring loop
 
 1. Write the JSON (start from an example).
 2. `npm run check -- my.json --json` → fix every error (warnings are advisory).
 3. `npm run simulate -- my.json --minutes 30` → every service should stop
    regularly, no `DEADLOCK`, and `max wait` should be modest; road traffic and
    people should show nobody stuck and a longest wait under a minute or two, and
-   the journeys line shows how people got about (walk, drive, train and mixes).
+   the journeys line shows how people got about (walk, drive, train, bus and
+   mixes); buses should make stops and miss none.
 4. New objects: `npm run screenshot -- my.json --object <id> --out obj.png` and
    look at it from the front-right before placing it.
 5. `npm run screenshot -- my.json --view top --out top.png` to verify geometry
@@ -553,10 +628,10 @@ Every issue has `path` (JSON path such as `tracks[1].points[2]`), a one-sentence
 6. Iterate. Use `query(world).describe()` from `src/api.ts` for a compact text
    summary (track, road and path lengths, structures, junctions, level, zebra
    and foot crossings, parking, the town's buildings, homes and station
-   entrances, placed objects) when choosing `at` values; `query(world).roadAt(x, y)` and
+   entrances, bus stops and lines, placed objects) when choosing `at` values; `query(world).roadAt(x, y)` and
    `trackAt(x, y)` give the `s` of a point near a road or track.
 
-## 11. Examples
+## 12. Examples
 
 Both examples are in `layouts/`. Their tracks and services are short; most of
 each file is the scenery list, one placement per line.
@@ -590,6 +665,11 @@ each file is the scenery list, one placement per line.
   farms to the west and east.
 - Bergdorf: a village lane below the station, with church and barn, in a
   clearing of the hill forest.
+- Hamlets on the country roads, Westfeld (with The Plough inn) to the west and
+  Ostend (with a farm shop) to the east, and bus line 2 between them through the
+  town: Westfeld, Market Square, Lindenau Station, Ostend and back, two buses.
+  Both hamlet stops are on the sidewalk side only, so the buses turn round off
+  the board's edge beyond them.
 - Custom objects defined in the layout: `windmill` (a tapered tower, cap and four
   sails made from rotated boxes) and `hay-bale` (a cylinder on its side,
   scattered over a field):
@@ -629,6 +709,10 @@ each file is the scenery list, one placement per line.
   the church, the farm and the lighthouse; street parking in Westhafen, a car
   park there and one by Ostkap station — people drive to Ostkap, park, and take
   the train to Westhafen, and back.
+- Bus line 1, the coast line: three buses from Harbour Front through Westhafen
+  and over the inland road (calling at the farm and the beach path, where short
+  paths with zebras reach both sides of the road) to Ostkap and the lighthouse,
+  and back. It is the busiest way between the towns after walking.
 - Custom objects: `lighthouse` (stacked red and white cylinders using `grid`
   steps, a glowing `lamp` lantern) and `fishing-boat` (an upside-down tapered
   box as the hull, a cabin, a mast; tinted per boat).

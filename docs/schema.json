@@ -841,6 +841,129 @@
         "additionalProperties": false
       }
     },
+    "busStops": {
+      "default": [],
+      "description": "Bus stops beside roads, on one side or both",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$"
+          },
+          "name": {
+            "description": "Shown on the stop and in journeys; default from the id (\"market-square\" → \"Market Square\")",
+            "type": "string",
+            "minLength": 1
+          },
+          "road": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$",
+            "description": "Road the stop stands beside"
+          },
+          "at": {
+            "type": "number",
+            "description": "s along the road (m) of the stop's sign; buses stop with their front door beside it"
+          },
+          "side": {
+            "default": "both",
+            "description": "Which side of the road (left/right of increasing s) has a stop; buses drive on the right, so the right side serves buses going toward increasing s",
+            "type": "string",
+            "enum": [
+              "both",
+              "left",
+              "right"
+            ]
+          },
+          "shelter": {
+            "default": true,
+            "description": "Draw a shelter behind the kerb (left out where something already stands there)",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "road",
+          "at"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "busLines": {
+      "default": [],
+      "description": "Bus lines: buses calling at stops in order along the roads; people ride them like trains",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$"
+          },
+          "name": {
+            "description": "Shown on the buses and in journeys, e.g. \"3\" or \"Harbour Hopper\"; default from the id",
+            "type": "string",
+            "minLength": 1
+          },
+          "stops": {
+            "minItems": 2,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]*$"
+            },
+            "description": "Bus stop ids in the order the buses call; they take the quickest way along the roads between them"
+          },
+          "mode": {
+            "default": "shuttle",
+            "description": "shuttle: there and back along the list, turning round after the last stop; loop: from the last stop back to the first",
+            "type": "string",
+            "enum": [
+              "shuttle",
+              "loop"
+            ]
+          },
+          "count": {
+            "default": 1,
+            "description": "Buses on the line, spread evenly along it",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20
+          },
+          "dwell": {
+            "default": 12,
+            "description": "s a bus waits at each stop (longer while people get on and off)",
+            "type": "number",
+            "minimum": 2,
+            "maximum": 120
+          },
+          "capacity": {
+            "default": 40,
+            "description": "Passengers a bus takes",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200
+          },
+          "vehicle": {
+            "default": "bus",
+            "description": "Object id drawn as the bus",
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$"
+          },
+          "color": {
+            "description": "Colour of the line's buses; default one per line",
+            "type": "string",
+            "pattern": "^#[0-9a-fA-F]{6}$"
+          }
+        },
+        "required": [
+          "id",
+          "stops"
+        ],
+        "additionalProperties": false
+      }
+    },
     "people": {
       "default": {},
       "type": "object",
@@ -889,11 +1012,11 @@
         "vehicles": {
           "default": [
             "car",
+            "car",
             "van",
-            "bus",
             "truck"
           ],
-          "description": "Object ids for through traffic, picked at random (repeat an id to make it more common)",
+          "description": "Object ids for through traffic, picked at random (repeat an id to make it more common); real buses run on busLines",
           "minItems": 1,
           "type": "array",
           "items": {

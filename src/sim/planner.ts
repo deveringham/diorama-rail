@@ -1,7 +1,8 @@
 // Journey planning for the residents: one shortest-time search over walking,
-// driving and riding trains. Walkways are split wherever a door, parking bay,
-// station or place to stroll joins them; each road lane is a node for driving;
-// trains join stations served by a common service (with the expected wait). States
+// driving, riding trains and taking buses. Walkways are split wherever a door,
+// parking bay, station, bus stop or place to stroll joins them; each road lane is a
+// node for driving; trains join stations served by a common service, and buses the
+// sides of stops on a common line (each with the expected wait). States
 // carry a layer: 0 on foot with one's own car still parked, 1 driving, 2 on foot
 // with no car to use (none owned, or parked again), so a car is picked up at most
 // once and only where it stands. Costs are seconds, scaled by the person's tastes.
@@ -22,6 +23,7 @@ const GET_IN = 60;                      // s of bother getting the car out (keys
 const PARK = 45;                        // s of bother finding the bay, parking and getting out
 const JUNCTION = 3;                     // s per junction driven through
 const BOARD = 25;                       // s for buying a ticket and boarding
+const BUS_BOARD = 15;                   // s for paying the driver and finding a seat
 const DRIVE_FACTOR = 0.75;              // share of the speed limit cars average
 
 /** Where a journey starts or ends. */
@@ -37,18 +39,20 @@ export type WalkStep = { kind: "way"; way: number; from: number; to: number } | 
 export type Leg =
   | { mode: "walk"; steps: WalkStep[] }
   | { mode: "drive"; car: number; from: number; to: number; lanes: TrafficLane[] }      // from and to are bays
-  | { mode: "train"; from: number; to: number; services: string[] };                    // stations (indices into town.stations)
+  | { mode: "train"; from: number; to: number; services: string[] }                     // stations (indices into town.stations)
+  | { mode: "bus"; from: number; to: number; lines: string[] };                         // sides of bus stops (indices into world.buses.sides)
 
 export type Route = { legs: Leg[]; cost: number; modes: string };
 
 type Edge = {
   to: number;
   cost: number;                         // seconds before the person's tastes
-  mode: "walk" | "drive" | "train" | "getIn" | "getOut";
+  mode: "walk" | "drive" | "train" | "bus" | "getIn" | "getOut";
   step?: WalkStep;                      // walk
   lane?: TrafficLane;                   // drive: the lane it enters (null when it stays on the same lane)
   bay?: number;                         // getIn / getOut / drive edges ending at a bay
   train?: { from: number; to: number; services: string[] };
+  bus?: { from: number; to: number; lines: string[] };
 };
 
 /** A binary min-heap of (key, value) pairs. */
@@ -96,6 +100,7 @@ export class Planner {
   readonly buildingNode: number[] = [];
   readonly spotNode: number[] = [];
   readonly stationNode: number[] = [];
+  readonly stopNode: number[] = [];       // per side of a bus stop
   readonly kerbNode: number[] = [];       // per bay: its driver's side, on foot
   private bayStart: number[] = [];        // per bay: a car pulling out of it
   private bayArrive: number[] = [];       // per bay: a car pulling into it
@@ -144,6 +149,12 @@ export class Planner {
       // Through the station building people go in at its door (and come out on the platform).
       for (const e of st.entrances) linkPlace(n, { ...e.access, link: e.via === "building" ? e.access.link : [e.entry, ...e.access.link.slice(1)] });
     }
+    world.buses.sides.forEach((side) => {
+      const n = node();
+      this.stopNode.push(n);
+      const a = town.stops[side.id]?.access;
+      if (a) linkPlace(n, a);
+    });
     for (const bay of town.bays) {
       const k = node();
       this.kerbNode.push(k);
@@ -235,6 +246,28 @@ export class Planner {
         }
       }
     }
+
+    // Buses: from each side of a stop to every other a line calls at, with half its headway as the wait.
+    world.buses.lines.forEach((line, li) => {
+      const running = traffic.lines[li]?.buses.length ?? 0;
+      if (!running) return;
+      const wait = line.cycle / running / 2;
+      for (const a of line.visits) {
+        for (const b of line.visits) {
+          if (a.side === b.side) continue;
+          const ride = mod(b.t - a.t, line.cycle);
+          const cost = wait + ride + BUS_BOARD;
+          const from = this.stopNode[a.side];
+          const existing = this.adj[from].find((e) => e.mode === "bus" && e.bus!.to === b.side);
+          if (existing) {
+            if (!existing.bus!.lines.includes(line.id)) existing.bus!.lines.push(line.id);
+            existing.cost = Math.min(existing.cost, cost);
+          } else {
+            link(from, this.stopNode[b.side], { cost, mode: "bus", bus: { from: a.side, to: b.side, lines: [line.id] } });
+          }
+        }
+      }
+    });
   }
 
   /** The node of a place. */
@@ -282,6 +315,9 @@ export class Planner {
           case "train":
             if (layer === 1) continue;
             to = e.to * 3 + layer; cost = e.cost * prefs.train; break;
+          case "bus":
+            if (layer === 1) continue;
+            to = e.to * 3 + layer; cost = e.cost * prefs.bus; break;
           case "drive":
             if (layer !== 1) continue;
             to = e.to * 3 + 1; cost = e.cost * prefs.drive; break;
@@ -314,6 +350,8 @@ export class Planner {
         else legs.push({ mode: "walk", steps: [e.step!] });
       } else if (e.mode === "train") {
         legs.push({ mode: "train", from: e.train!.from, to: e.train!.to, services: e.train!.services.slice() });
+      } else if (e.mode === "bus") {
+        legs.push({ mode: "bus", from: e.bus!.from, to: e.bus!.to, lines: e.bus!.lines.slice() });
       } else if (e.mode === "getIn") {
         const at = this.traffic.bayAt[e.bay!]!;
         drive = { from: e.bay!, to: -1, lanes: [at.lane] };

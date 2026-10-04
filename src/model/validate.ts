@@ -60,7 +60,7 @@ export function checkReferences(layout: Layout): Issue[] {
   const seen = new Map<string, string>();
   const note = (id: string, path: string) => {
     const prev = seen.get(id);
-    if (prev) issues.push(error("DUPLICATE_ID", `id '${id}' is used twice (also at ${prev}); ids must be unique across tracks, roads, paths, car parks, stations and services`, path));
+    if (prev) issues.push(error("DUPLICATE_ID", `id '${id}' is used twice (also at ${prev}); ids must be unique across tracks, roads, paths, car parks, stations, services, bus stops and bus lines`, path));
     else seen.set(id, path);
   };
   layout.tracks.forEach((t, i) => note(t.id, `tracks[${i}].id`));
@@ -69,6 +69,8 @@ export function checkReferences(layout: Layout): Issue[] {
   layout.roads.forEach((r, i) => note(r.id, `roads[${i}].id`));
   layout.paths.forEach((p, i) => note(p.id, `paths[${i}].id`));
   layout.parking.forEach((p, i) => note(p.id, `parking[${i}].id`));
+  layout.busStops.forEach((p, i) => note(p.id, `busStops[${i}].id`));
+  layout.busLines.forEach((p, i) => note(p.id, `busLines[${i}].id`));
 
   const trackIds = new Set(layout.tracks.map((t) => t.id));
   const stationIds = new Set(layout.stations.map((s) => s.id));
@@ -109,6 +111,18 @@ export function checkReferences(layout: Layout): Issue[] {
   layout.traffic.vehicles.forEach((id, k) => { if (!objectIds.has(id)) unknown("object", id, `traffic.vehicles[${k}]`, known()); });
   layout.people.vehicles.forEach((id, k) => { if (!objectIds.has(id)) unknown("object", id, `people.vehicles[${k}]`, known()); });
   layout.parking.forEach((p, i) => { if (p.road && !roadIds.has(p.road)) unknown("road", p.road, `parking[${i}].road`, roadIds); });
+  layout.busStops.forEach((b, i) => { if (!roadIds.has(b.road)) unknown("road", b.road, `busStops[${i}].road`, roadIds); });
+  const stopIds = new Set(layout.busStops.map((b) => b.id));
+  layout.busLines.forEach((l, i) => {
+    l.stops.forEach((id, k) => {
+      if (!stopIds.has(id)) unknown("bus stop", id, `busLines[${i}].stops[${k}]`, stopIds);
+      else if (k > 0 && l.stops[k - 1] === id) issues.push(error("BUS_ROUTE", `bus line '${l.id}' calls at stop '${id}' twice in a row; list each stop once per visit`, `busLines[${i}].stops[${k}]`));
+    });
+    if (l.mode === "loop" && l.stops.length > 1 && l.stops[0] === l.stops[l.stops.length - 1]) {
+      issues.push(error("BUS_ROUTE", `bus line '${l.id}' is a loop but ends where it starts ('${l.stops[0]}'); a loop returns to its first stop by itself, so leave the last one out`, `busLines[${i}].stops[${l.stops.length - 1}]`));
+    }
+    if (!objectIds.has(l.vehicle)) unknown("object", l.vehicle, `busLines[${i}].vehicle`, known());
+  });
   const pathIds = new Set(layout.paths.map((p) => p.id));
   layout.paths.forEach((p, i) => {
     for (const w of ["from", "to"] as const) {

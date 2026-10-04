@@ -1,7 +1,7 @@
 // Road rendering: asphalt strips with sloping verges (one merged mesh), dashed
-// centre lines and level-crossing panels (a second mesh drawn just above), the
-// fixed crossing furniture (posts, St Andrew's crosses, signal housings) and the
-// moving parts: barrier arms and flashing lights. Junction areas are drawn by one
+// centre lines, bus stop boxes and level-crossing panels (a second mesh drawn just
+// above), the fixed furniture (crossing posts, St Andrew's crosses, signal housings,
+// bus stop signs and shelters) and the moving parts: barrier arms and flashing lights. Junction areas are drawn by one
 // road only (see model/roads.ts trims); deep tunnel interiors are skipped.
 
 import * as THREE from "three";
@@ -11,6 +11,7 @@ import { pointAt, headingAt, sampleS } from "../model/geometry";
 import { profileZ, structureAt } from "../model/heights";
 import { CROSSING_ROAD_Z, sidewalkWidth, kerbOffset, pavedHalf, type LevelCrossing } from "../model/roads";
 import { LOT_AISLE, BAY_DEPTH, lotFrame } from "../model/parking";
+import { FRONT_PAST } from "../model/buses";
 import { PALETTE } from "./palette";
 import { GeoBuilder, flatMaterial, toThree, type P3 } from "./geo";
 import { type Frame, side } from "./trackMesh";
@@ -151,6 +152,7 @@ export function roadMeshes(world: World): THREE.Object3D[] {
   }
 
   parking(world, g, marks);
+  busStops(world, g, marks);
 
   const roads = new THREE.Mesh(g.build(), flatMaterial());
   roads.name = "roads";
@@ -210,6 +212,65 @@ function parking(world: World, g: GeoBuilder, marks: GeoBuilder): void {
     } else {
       for (const k of [1, -1]) line(bay.x + n[0] * k * bay.width / 2, bay.y + n[1] * k * bay.width / 2, u[0], u[1], bay.length);
     }
+  }
+}
+
+/** Each bus stop: a painted box where the bus stands, a sign at the kerb and a shelter behind it. */
+function busStops(world: World, g: GeoBuilder, marks: GeoBuilder): void {
+  const net = world.buses;
+  for (const st of net.sides) {
+    const stop = net.stops[st.stop];
+    const road = world.roads.roads.get(stop.road)!;
+    const L = road.path.length;
+    const wrap = (s: number) => (road.path.closed ? ((s % L) + L) % L : Math.min(Math.max(s, 0), L));
+    // The box: from just behind the bus to just ahead of it, across the lane on the stop's side.
+    const front = st.s + st.dir * (FRONT_PAST + 1);
+    const back = st.s - st.dir * (st.reach - FRONT_PAST + 1);
+    const [s0, s1] = [Math.min(front, back), Math.max(front, back)];
+    const inner = st.side * 0.35;
+    const outer = st.side * (road.spec.width / 2 - 0.2);
+    const n = Math.max(2, Math.ceil((s1 - s0) / STEP));
+    const frames = Array.from({ length: n + 1 }, (_, i) => roadFrame(world, stop.road, wrap(s0 + ((s1 - s0) * i) / n)));
+    const strip = (lat: number) => {
+      for (let i = 0; i < n; i++) {
+        const [a, b] = [frames[i], frames[i + 1]];
+        marks.quad(side(a, lat - BAY_LINE * 1.5, MARK_LIFT), side(b, lat - BAY_LINE * 1.5, MARK_LIFT), side(b, lat + BAY_LINE * 1.5, MARK_LIFT), side(a, lat + BAY_LINE * 1.5, MARK_LIFT), PALETTE.busMark);
+      }
+    };
+    strip(inner);
+    strip(outer);
+    for (const f of [frames[0], frames[n]]) {
+      const [lo, hi] = [Math.min(inner, outer), Math.max(inner, outer)];
+      const a = side(f, lo, MARK_LIFT);
+      const b = side(f, hi, MARK_LIFT);
+      const dx = Math.cos(f.h) * BAY_LINE * 1.5;
+      const dy = Math.sin(f.h) * BAY_LINE * 1.5;
+      marks.quad([a[0] - dx, a[1] - dy, a[2]], [a[0] + dx, a[1] + dy, a[2]], [b[0] + dx, b[1] + dy, b[2]], [b[0] - dx, b[1] - dy, b[2]], PALETTE.busMark);
+    }
+    // The sign: a post with a plate facing the traffic.
+    const h = st.heading;
+    g.box(st.sign[0], st.sign[1], st.sign[2], 0.09, 0.09, 2.7, h, PALETTE.busPost);
+    g.box(st.sign[0], st.sign[1], st.sign[2] + 2.15, 0.05, 0.6, 0.6, h, PALETTE.busSign, PALETTE.busSign);
+    g.box(st.sign[0], st.sign[1], st.sign[2] + 2.0, 0.05, 0.6, 0.12, h, PALETTE.busMark);
+    if (!world.town.stops[st.id]?.shelter || !st.shelter) continue;
+    // The shelter: glass back and ends, a roof and a bench, its open side to the road.
+    const [c, sn] = [Math.cos(h), Math.sin(h)];
+    const at = (k: number, along: number): [number, number] => [st.shelter![0] + sn * k + c * along, st.shelter![1] - c * k + sn * along];
+    const z = st.shelter[2];
+    const [bx, by] = at(0.62, 0);
+    g.box(bx, by, z, 3.2, 0.08, 2.25, h, PALETTE.shelterGlass);
+    for (const e of [-1.6, 1.6]) {
+      const [ex, ey] = at(0.1, e);
+      g.box(ex, ey, z, 0.08, 1.1, 2.25, h, PALETTE.shelterGlass);
+    }
+    for (const e of [-1.6, 1.6]) for (const k of [-0.62, 0.62]) {
+      const [px, py] = at(k, e);
+      g.box(px, py, z, 0.1, 0.1, 2.3, h, PALETTE.shelterFrame);
+    }
+    const [rx, ry] = at(0, 0);
+    g.box(rx, ry, z + 2.3, 3.5, 1.6, 0.1, h, PALETTE.shelterFrame);
+    const [qx, qy] = at(0.38, 0);
+    g.box(qx, qy, z, 2.2, 0.38, 0.45, h, PALETTE.shelterFrame);
   }
 }
 

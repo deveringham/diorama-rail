@@ -102,6 +102,94 @@ export function junctionStop(net: Pick<RoadNet, "roads">, n: RoadNode, legIndex:
   }
   return box;
 }
+
+export const PORTAL_EDGE = 30;   // m: dead ends this close to the board edge lead off the board
+const DEAD_END_TURN = 6;         // m of road a car uses to turn round at a dead end
+
+/** Whether a node is a dead end near the board's edge, where roads lead off the board. */
+export function isPortal(n: RoadNode, size: readonly [number, number]): boolean {
+  return n.legs.length === 1 && Math.min(n.at[0], n.at[1], size[0] - n.at[0], size[1] - n.at[1]) < PORTAL_EDGE;
+}
+
+/** The next node along a road from s in direction dir (wrapping on loops), not counting s itself. */
+export function nextNode(net: Pick<RoadNet, "stops">, road: RoadGeom, s: number, dir: 1 | -1): { node: number; s: number; dist: number } | null {
+  const list = net.stops.get(road.id)!;
+  const L = road.path.length;
+  let best: { node: number; s: number; dist: number } | null = null;
+  for (const x of list) {
+    let dist = (x.s - s) * dir;
+    if (road.path.closed) dist = mod(dist, L);
+    if (dist <= 1e-6 && road.path.closed) dist += L;
+    if (dist <= 1e-6) continue;
+    if (!best || dist < best.dist) best = { node: x.node, s: x.s, dist };
+  }
+  return best;
+}
+
+/**
+ * One direction of a road between two nodes: the stretch a lane of traffic drives.
+ * `s` is the start node's s and `dist` the road distance to the end node; the lane
+ * itself leaves `box0` after the start node and stops `box1` before the end one
+ * (the junction areas, or room to turn round at a dead end). A loop road without
+ * nodes has one lane each way that runs into itself (`end` null, no boxes). `next`
+ * holds the lanes a vehicle may take at the end: any but straight back, unless
+ * that is all there is.
+ */
+export type LaneTopo = {
+  key: string; road: string; dir: 1 | -1; s: number; dist: number; end: number | null; box0: number; box1: number; next: string[];
+};
+
+/** Every lane of the road network, in a fixed order (the traffic sim's lanes are built from these). */
+export function laneTopology(net: RoadNet, size: readonly [number, number]): LaneTopo[] {
+  const nodeBox = (n: RoadNode, legIndex: number): number => {
+    const leg = n.legs[legIndex];
+    const road = net.roads.get(leg.road)!;
+    let box: number;
+    if (n.legs.length === 1) box = isPortal(n, size) ? 0 : DEAD_END_TURN;
+    else if (n.legs.length === 2) box = 1;
+    else box = junctionStop(net, n, legIndex);
+    // Never more than half way to the next node along this leg.
+    const next = nextNode(net, road, leg.s, leg.dir);
+    if (next) box = Math.min(box, Math.max(0, next.dist / 2 - 0.5));
+    return box;
+  };
+  const out: LaneTopo[] = [];
+  const byKey = new Map<string, LaneTopo>();
+  net.nodes.forEach((n) => {
+    n.legs.forEach((leg, li) => {
+      const road = net.roads.get(leg.road)!;
+      const next = nextNode(net, road, leg.s, leg.dir);
+      if (!next) return;
+      const m = net.nodes[next.node];
+      const back = m.legs.findIndex((l) => l.road === leg.road && l.dir === -leg.dir && Math.abs(mod(l.s - next.s + 1, road.path.length || Infinity) - 1) < 1e-3);
+      const t: LaneTopo = {
+        key: `${n.id}|${li}`, road: leg.road, dir: leg.dir, s: leg.s, dist: next.dist, end: next.node,
+        box0: nodeBox(n, li), box1: back >= 0 ? nodeBox(m, back) : 0, next: [],
+      };
+      out.push(t);
+      byKey.set(t.key, t);
+    });
+  });
+  for (const road of net.roads.values()) {
+    if (!road.path.closed || net.stops.get(road.id)!.length) continue;
+    for (const dir of [1, -1] as const) {
+      const key = `loop|${road.id}|${dir}`;
+      out.push({ key, road: road.id, dir, s: dir > 0 ? 0 : road.path.length, dist: road.path.length, end: null, box0: 0, box1: 0, next: [key] });
+    }
+  }
+  for (const t of out) {
+    if (t.end === null) continue;
+    const n = net.nodes[t.end];
+    const L = net.roads.get(t.road)!.path.length;
+    const endS = net.roads.get(t.road)!.path.closed ? mod(t.s + t.dir * t.dist, L) : t.s + t.dir * t.dist;
+    const outs = n.legs.map((leg, li) => ({ leg, key: `${n.id}|${li}` })).filter((o) => byKey.has(o.key));
+    const reverse = (o: (typeof outs)[number]) => o.leg.road === t.road && o.leg.dir === -t.dir && Math.abs(mod(o.leg.s - endS + 1, L || Infinity) - 1) < 0.5;
+    const forward = outs.filter((o) => !reverse(o));
+    t.next = (forward.length ? forward : outs).map((o) => o.key);
+  }
+  return out;
+}
+
 export type RoadNet = {
   roads: Map<string, RoadGeom>;
   order: string[];
