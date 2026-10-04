@@ -3,9 +3,13 @@
 // as ground, bridge or tunnel. Runs per track, parents first.
 
 import type { TrackGeom } from "./trackGraph";
+import type { WaypointSpec } from "./schema";
 import { pointAt } from "./geometry";
 import { waypoint } from "./schema";
 import { mod } from "../util/vec";
+
+/** Anything with a path and waypoints: a track or a road. */
+export type Profiled = Pick<TrackGeom, "path" | "waypointS"> & { spec: { id: string; points: WaypointSpec[]; maxGrade: number } };
 
 export const PROFILE_STEP = 5;          // m between profile samples
 const SMOOTH_WINDOW = 120;              // m, moving average of terrain for the base profile
@@ -38,11 +42,12 @@ export function profileZ(p: Profile, s: number): number {
 }
 
 /**
- * Builds the height profile of one track. `ground` is the unmodified terrain;
- * `pins` are junction heights taken from parent tracks (hard constraints).
+ * Builds the height profile of one track (or road). `ground` is the unmodified
+ * terrain; `pins` are junction heights taken from parent tracks (hard constraints).
  */
 export function buildProfile(
-  t: TrackGeom, ground: (x: number, y: number) => number, pins: Pin[],
+  t: Profiled, ground: (x: number, y: number) => number, pins: Pin[],
+  opts: { window?: number; noun?: string; follow?: boolean } = {},
 ): { profile: Profile; issues: GradeIssue[] } {
   const { path, spec } = t;
   const L = path.length;
@@ -55,7 +60,9 @@ export function buildProfile(
     .map((w, i) => ({ s: t.waypointS[i], z: waypoint(w).z }))
     .filter((c): c is Pin => c.z !== undefined)
     .sort((a, b) => a.s - b.s);
-  if (fixed.length > 0) {
+  // Tracks with explicit z interpolate between them; roads (`follow`) keep to the
+  // smoothed ground and treat explicit z as pins like any other.
+  if (fixed.length > 0 && !opts.follow) {
     // Junction pins are known heights too, so they join the interpolation anchors.
     const anchors = [...fixed, ...pins].sort((a, b) => a.s - b.s);
     for (let i = 0; i < n; i++) p.z[i] = interpolate(anchors, profileS(p, i), L, closed);
@@ -64,7 +71,7 @@ export function buildProfile(
       const [x, y] = pointAt(path, profileS(p, i));
       return ground(x, y);
     });
-    const half = Math.max(1, Math.round(SMOOTH_WINDOW / 2 / p.step));
+    const half = Math.max(1, Math.round((opts.window ?? SMOOTH_WINDOW) / 2 / p.step));
     for (let i = 0; i < n; i++) {
       let sum = 0;
       let cnt = 0;
@@ -98,7 +105,7 @@ export function buildProfile(
       const s1 = Math.min(b * p.step, L);
       issues.push({
         s0, s1, grade,
-        message: `track '${spec.id}' must change height by ${dz.toFixed(1)} m between s=${s0.toFixed(0)} and s=${s1.toFixed(0)} (${(grade * 100).toFixed(1)}%), above its maxGrade ${(spec.maxGrade * 100).toFixed(1)}%; make that stretch at least ${(dz / spec.maxGrade).toFixed(0)} m long, change the z target, or raise maxGrade`,
+        message: `${opts.noun ?? "track"} '${spec.id}' must change height by ${dz.toFixed(1)} m between s=${s0.toFixed(0)} and s=${s1.toFixed(0)} (${(grade * 100).toFixed(1)}%), above its maxGrade ${(spec.maxGrade * 100).toFixed(1)}%; make that stretch at least ${(dz / spec.maxGrade).toFixed(0)} m long, change the z target, or raise maxGrade`,
       });
     }
   }
@@ -142,7 +149,7 @@ function interpolate(fixed: Pin[], s: number, L: number, closed: boolean): numbe
 }
 
 /** 5. Classify the track against the unmodified ground into ground/bridge/tunnel spans. */
-export function classify(t: TrackGeom, p: Profile, ground: (x: number, y: number) => number): Span[] {
+export function classify(t: Profiled, p: Profile, ground: (x: number, y: number) => number): Span[] {
   const n = p.z.length;
   const spans: Span[] = [];
   for (let i = 0; i < n; i++) {

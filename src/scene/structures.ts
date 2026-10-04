@@ -1,35 +1,46 @@
 // Structures (§8.3): bridge decks with piers and parapets, tunnel portals at
-// every ground↔tunnel transition, and station platforms, canopies, buildings
-// and benches. All merged into one static mesh.
+// every ground↔tunnel transition (for tracks, roads and paths alike), and station
+// platforms and canopies. All merged into one static mesh. (Station buildings and
+// benches are scenery objects.)
 
 import * as THREE from "three";
 import type { World } from "../model/build";
 import { groundZ, baseZ } from "../model/terrain";
-import { PLATFORM_OFFSET, PLATFORM_WIDTH } from "../model/scenery";
+import { PLATFORM_OFFSET, PLATFORM_WIDTH, PLATFORM_TOP } from "../model/scenery";
 import { PALETTE } from "./palette";
 import { GeoBuilder, flatMaterial } from "./geo";
 import { type Frame, frameAt, side } from "./trackMesh";
+import { roadFrame, pathFrame } from "./roadMesh";
+import { roadReach } from "../model/roads";
+import type { Span } from "../model/heights";
 
 const STEP = 2;
 const DECK_HALF = 2.8;
 const DECK_TOP = -0.7;            // deck top relative to track z (under the ballast)
 const DECK_THICK = 1.1;
 const PIER_SPACING = 25;
-const PLATFORM_TOP = 0.9;         // above track z
 const CANOPY_HEIGHT = 4.2;        // above platform top
+const TRACK_CLEAR = 2.4;          // half the width of a tunnel mouth
+
+/** A bridge deck's half-width, top (relative to the path's z) and pier width. */
+type Deck = { half: number; top: number; pier: number };
+const TRACK_DECK: Deck = { half: DECK_HALF, top: DECK_TOP, pier: 4.4 };
 
 export function structureMeshes(world: World): THREE.Object3D[] {
   const g = new GeoBuilder();
   for (const t of world.tracks.values()) {
-    const spans = world.spans.get(t.id)!;
-    spans.forEach((sp, k) => {
-      if (sp.kind === "bridge") bridge(world, g, t.id, sp.s0, sp.s1);
-      // A portal wherever ground meets tunnel, facing out of the hill.
-      const prev = spans[k - 1];
-      if (sp.kind === "tunnel" && prev?.kind !== "tunnel" && (k > 0 || !t.path.closed)) portal(g, frameAt(world, t.id, sp.s0), 0);
-      const next = spans[k + 1];
-      if (sp.kind === "tunnel" && next && next.kind !== "tunnel") portal(g, frameAt(world, t.id, sp.s1), Math.PI);
-    });
+    spanStructures(world, g, world.spans.get(t.id)!, t.path.closed, (s) => frameAt(world, t.id, s), TRACK_DECK, TRACK_CLEAR);
+  }
+  for (const r of world.roads.roads.values()) {
+    const w = r.spec.width;
+    const reach = roadReach(r.spec);
+    spanStructures(world, g, world.roads.spans.get(r.id)!, r.path.closed, (s) => roadFrame(world, r.id, s),
+      { half: Math.max(w / 2 + 0.8, reach + 0.5), top: -0.03, pier: w * 0.6 }, reach + 0.6);
+  }
+  for (const p of world.walks.paths.values()) {
+    const w = p.spec.width;
+    spanStructures(world, g, world.walks.spans.get(p.id)!, p.path.closed, (s) => pathFrame(world, p.id, s),
+      { half: w / 2 + 0.45, top: 0, pier: 1.2 }, w / 2 + 0.6);
   }
   for (const st of world.stations) station(world, g, st);
   const mesh = new THREE.Mesh(g.build(), flatMaterial());
@@ -39,57 +50,72 @@ export function structureMeshes(world: World): THREE.Object3D[] {
   return [mesh];
 }
 
-function bridge(world: World, g: GeoBuilder, track: string, s0: number, s1: number): void {
+/** Bridges over every bridge span and a portal wherever ground meets tunnel, facing out of the hill. */
+function spanStructures(world: World, g: GeoBuilder, spans: Span[], closed: boolean, frame: (s: number) => Frame, deck: Deck, clear: number): void {
+  spans.forEach((sp, k) => {
+    if (sp.kind === "bridge") bridge(world, g, frame, sp.s0, sp.s1, deck);
+    const prev = spans[k - 1];
+    if (sp.kind === "tunnel" && prev?.kind !== "tunnel" && (k > 0 || !closed)) portal(g, frame(sp.s0), 0, clear);
+    const next = spans[k + 1];
+    if (sp.kind === "tunnel" && next && next.kind !== "tunnel") portal(g, frame(sp.s1), Math.PI, clear);
+  });
+}
+
+function bridge(world: World, g: GeoBuilder, frame: (s: number) => Frame, s0: number, s1: number, deck: Deck): void {
+  const { half, top: deckTop } = deck;
   const n = Math.max(1, Math.round((s1 - s0) / STEP));
-  const fr: Frame[] = Array.from({ length: n + 1 }, (_, i) => frameAt(world, track, s0 + ((s1 - s0) * i) / n));
+  const fr: Frame[] = Array.from({ length: n + 1 }, (_, i) => frame(s0 + ((s1 - s0) * i) / n));
   for (let i = 0; i < n; i++) {
     const [a, b] = [fr[i], fr[i + 1]];
-    const top = (f: Frame, l: number) => side(f, l, DECK_TOP);
-    const bot = (f: Frame, l: number) => side(f, l, DECK_TOP - DECK_THICK);
-    g.quad(top(a, DECK_HALF), top(b, DECK_HALF), bot(b, DECK_HALF), bot(a, DECK_HALF), PALETTE.bridge, 0.9);
-    g.quad(bot(a, -DECK_HALF), bot(b, -DECK_HALF), top(b, -DECK_HALF), top(a, -DECK_HALF), PALETTE.bridge, 0.9);
-    g.quad(bot(a, DECK_HALF), bot(b, DECK_HALF), bot(b, -DECK_HALF), bot(a, -DECK_HALF), PALETTE.bridge, 0.7);
-    g.quad(top(a, -DECK_HALF), top(b, -DECK_HALF), top(b, DECK_HALF), top(a, DECK_HALF), PALETTE.bridge);
+    const top = (f: Frame, l: number) => side(f, l, deckTop);
+    const bot = (f: Frame, l: number) => side(f, l, deckTop - DECK_THICK);
+    g.quad(top(a, half), top(b, half), bot(b, half), bot(a, half), PALETTE.bridge, 0.9);
+    g.quad(bot(a, -half), bot(b, -half), top(b, -half), top(a, -half), PALETTE.bridge, 0.9);
+    g.quad(bot(a, half), bot(b, half), bot(b, -half), bot(a, -half), PALETTE.bridge, 0.7);
+    g.quad(top(a, -half), top(b, -half), top(b, half), top(a, half), PALETTE.bridge);
     // Parapets: low walls along both edges.
-    for (const l of [DECK_HALF - 0.15, -DECK_HALF + 0.15]) {
+    for (const l of [half - 0.15, -half + 0.15]) {
       const p = (f: Frame, d: number, z: number) => side(f, l + d, z);
       g.quad(p(a, -0.15, 0.9), p(b, -0.15, 0.9), p(b, 0.15, 0.9), p(a, 0.15, 0.9), PALETTE.parapet);
-      g.quad(p(a, 0.15, 0.9), p(b, 0.15, 0.9), p(b, 0.15, DECK_TOP), p(a, 0.15, DECK_TOP), PALETTE.parapet, 0.92);
-      g.quad(p(a, -0.15, DECK_TOP), p(b, -0.15, DECK_TOP), p(b, -0.15, 0.9), p(a, -0.15, 0.9), PALETTE.parapet, 0.92);
+      g.quad(p(a, 0.15, 0.9), p(b, 0.15, 0.9), p(b, 0.15, deckTop), p(a, 0.15, deckTop), PALETTE.parapet, 0.92);
+      g.quad(p(a, -0.15, deckTop), p(b, -0.15, deckTop), p(b, -0.15, 0.9), p(a, -0.15, 0.9), PALETTE.parapet, 0.92);
     }
   }
   // Piers down to the ground (or the sea floor), plus abutments at both ends.
   const sea = world.terrain.seaLevel;
   for (let s = s0 + PIER_SPACING; s < s1 - PIER_SPACING / 3; s += PIER_SPACING) {
-    const f = frameAt(world, track, s);
+    const f = frame(s);
     const bottom = Math.min(groundZ(world.terrain, f.x, f.y), baseZ(world.terrain, f.x, f.y), sea ?? Infinity) - 1;
-    const top = f.z + DECK_TOP - DECK_THICK;
-    if (top > bottom) g.box(f.x, f.y, bottom, 2.2, 4.4, top - bottom, f.h, PALETTE.pier);
+    const top = f.z + deckTop - DECK_THICK;
+    if (top > bottom) g.box(f.x, f.y, bottom, 2.2, deck.pier, top - bottom, f.h, PALETTE.pier);
   }
   for (const s of [s0, s1]) {
-    const f = frameAt(world, track, s);
-    g.box(f.x, f.y, f.z - 6, 3, 7, 6 + DECK_TOP, f.h, PALETTE.pier, PALETTE.bridge);
+    const f = frame(s);
+    g.box(f.x, f.y, f.z - 6, 3, half * 2.5, 6 + deckTop, f.h, PALETTE.pier, PALETTE.bridge);
   }
 }
 
-/** Stone portal; `into` turns f.h to point into the tunnel. The mouth is a dark recessed wall. */
-function portal(g: GeoBuilder, f: Frame, into: number): void {
+/**
+ * Stone portal; `into` turns f.h to point into the tunnel; `clear` is half the
+ * width of the mouth, a dark recessed wall.
+ */
+function portal(g: GeoBuilder, f: Frame, into: number, clear: number): void {
   const h = f.h + into;
   const at = (lat: number, fwd: number): [number, number] => {
     const [x, y] = side(f, lat, 0);
     return [x + Math.cos(h) * fwd, y + Math.sin(h) * fwd];
   };
   const z0 = f.z - 1.2;
-  for (const lat of [3.6, -3.6]) {
+  for (const lat of [clear + 1.2, -clear - 1.2]) {
     const [x, y] = at(lat, 0);
     g.box(x, y, z0, 2.4, 2.4, 8.4, h, PALETTE.portal);
   }
   const [lx, ly] = at(0, 0);
-  g.box(lx, ly, f.z + 6.0, 2.4, 9.6, 1.6, h, PALETTE.portal);
+  g.box(lx, ly, f.z + 6.0, 2.4, 2 * clear + 4.8, 1.6, h, PALETTE.portal);
   const [bx, by] = at(0, 2.5);
-  g.box(bx, by, z0, 0.4, 4.8, 7.2, h, PALETTE.portalDark);
+  g.box(bx, by, z0, 0.4, 2 * clear, 7.2, h, PALETTE.portalDark);
   // Wing walls holding back the hillside.
-  for (const lat of [6.5, -6.5]) {
+  for (const lat of [clear + 4.1, -clear - 4.1]) {
     const [x, y] = at(lat, -0.6);
     g.box(x, y, z0, 1.6, 4.2, 7.0, h, PALETTE.portal);
   }
@@ -124,12 +150,4 @@ function station(world: World, g: GeoBuilder, st: World["stations"][number]): vo
       g.box(x, y, z, (c1 - c0) / m + 0.05, PLATFORM_WIDTH + 0.4, 0.3, f.h, PALETTE.canopy);
     }
   }
-  for (const b of st.benches) {
-    const [x, y, z] = side(frameAt(world, st.track, b.s), b.side * (PLATFORM_OFFSET + 1.1), PLATFORM_TOP);
-    g.box(x, y, z, 1.8, 0.6, 0.5, frameAt(world, st.track, b.s).h, PALETTE.bench);
-  }
-  // Station building: a long two-storey house with a hipped-look gable roof.
-  const bd = st.building;
-  g.box(bd.x, bd.y, bd.z - 3, 9, 16, 9.5, bd.rotation, PALETTE.stationWall);
-  g.gable(bd.x, bd.y, bd.z + 6.5, 16, 9, 3.6, bd.rotation + Math.PI / 2, PALETTE.stationRoof);
 }

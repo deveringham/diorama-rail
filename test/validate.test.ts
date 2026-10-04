@@ -2,9 +2,10 @@
 // passing cleanly. Each fixture starts from a valid base layout and breaks one thing.
 
 import { describe, it, expect } from "vitest";
-import { validate } from "../src/model/build";
+import { validate, buildWorld } from "../src/model/build";
+import { query } from "../src/api";
 import { simulate } from "../src/sim/sim";
-import { base, withBranch, example, type Fixture } from "./fixtures";
+import { base, withBranch, withRoads, example, type Fixture } from "./fixtures";
 
 type Case = [code: string, severity: "error" | "warning", make: () => Fixture];
 
@@ -70,6 +71,37 @@ const cases: Case[] = [
   }],
   ["TRAIN_TOO_LONG", "warning", () => { const L = base(); L.services[0].train = "express-6"; return L; }],
   ["CAPACITY", "warning", () => { const L = base(); L.services[0].count = 12; return L; }],
+  ["SCENERY_ON_TRACK", "error", () => { const L = base(); L.scenery = [{ object: "house", at: [400, 203] }]; return L; }],
+  ["SCENERY_OVERLAP", "warning", () => {
+    const L = base();
+    L.scenery = [{ object: "house", at: [400, 300] }, { object: "barn", at: [402, 302] }];
+    return L;
+  }],
+  ["SCENERY_ON_ROAD", "error", () => { const L = withRoads(); L.scenery = [{ object: "house", at: [684, 300] }]; return L; }],
+  ["ROAD_CONFLICT", "error", () => { const L = base(); L.roads = [{ id: "r", points: [[300, 204], [420, 204]] }]; return L; }],
+  ["LEVEL_CROSSING_POSITION", "error", () => { const L = base(); L.roads = [{ id: "r", points: [[510, 100], [510, 300]] }]; return L; }],
+  ["LEVEL_CROSSING_ANGLE", "warning", () => { const L = base(); L.roads = [{ id: "r", points: [[590, 160], [740, 215]] }]; return L; }],
+  ["LEVEL_CROSSING_ANGLE", "error", () => { const L = base(); L.roads = [{ id: "r", points: [[560, 185], [760, 215]] }]; return L; }],
+];
+
+/** Road variants of codes that tracks also use. */
+const roadCases: Array<[code: string, path: string, make: () => Fixture]> = [
+  ["UNKNOWN_REF", "roads[2].from.road", () => { const L = withRoads(); L.roads![2].from!.road = "nowhere"; return L; }],
+  ["UNKNOWN_REF", "traffic.vehicles[0]", () => { const L = withRoads(); L.traffic = { vehicles: ["hovercar"] }; return L; }],
+  ["DUPLICATE_ID", "roads[0].id", () => { const L = withRoads(); L.roads![0].id = "main"; return L; }],
+  ["TRACK_REF_CYCLE", "roads[3]", () => {
+    const L = withRoads();
+    L.roads!.push({ id: "x", from: { road: "y", at: 10 }, points: [[350, 700]] }, { id: "y", from: { road: "x", at: 10 }, points: [[450, 700]] });
+    return L;
+  }],
+  ["JUNCTION_POSITION", "roads[3].from.at", () => { const L = withRoads(); L.roads!.push({ id: "x", from: { road: "cross", at: 900 }, points: [[350, 700]] }); return L; }],
+  ["JUNCTION_POSITION", "roads[1]", () => { const L = withRoads(); L.roads!.push({ id: "x", from: { road: "cross", at: 130 }, points: [[420, 300]] }); return L; }],
+  ["GRADE_EXCEEDED", "roads[0]", () => {
+    const L = base();
+    L.roads = [{ id: "r", points: [[300, 300], { at: [350, 300], z: 0 }, { at: [370, 300], z: 10 }, [450, 300]] }];
+    return L;
+  }],
+  ["OUT_OF_BOUNDS", "roads[0].points", () => { const L = withRoads(); L.roads![0].points = [[680, 2], [680, 740]]; return L; }],
 ];
 
 describe("validation codes", () => {
@@ -87,6 +119,23 @@ describe("validation codes", () => {
     expect(hit!.path).toMatch(/^[a-z]/);
     if (severity === "error") expect(report.ok).toBe(false);
     else expect(report.ok).toBe(true);
+  });
+
+  it("accepts the road fixture", () => expect(validate(withRoads()).issues).toEqual([]));
+
+  it.each(roadCases)("%s for roads at %s", (code, path, make) => {
+    const report = validate(make());
+    const hit = report.issues.find((i) => i.code === code && i.path === path);
+    expect(hit, JSON.stringify(report.issues, null, 1)).toBeDefined();
+    expect(report.ok).toBe(false);
+  });
+
+  it("CAPACITY (warning, from simulate) when vehicles do not fit on the roads", () => {
+    const L = withRoads();
+    L.traffic = { cars: 400 };
+    const res = simulate(L, 10);
+    expect(res.report.issues.find((i) => i.code === "CAPACITY" && i.path === "traffic.cars")?.severity).toBe("warning");
+    expect(res.traffic!.cars).toBeLessThan(400);
   });
 
   it("DEADLOCK (error, from simulate)", () => {
@@ -120,5 +169,52 @@ describe.each(["valley-loop", "harbour-town"])("example %s", (name) => {
     expect(report.issues).toEqual([]);
     expect(report.ok).toBe(true);
     expect(report.stats.triangles).toBeLessThan(600_000);
+  });
+});
+
+describe("scenery placement", () => {
+  const world = (scenery: Fixture["scenery"], tweak: (L: Fixture) => void = () => {}) => {
+    const L = base();
+    L.scenery = scenery;
+    tweak(L);
+    return buildWorld(L);
+  };
+
+  it("reports unknown objects, positions off the board and malformed entries", () => {
+    const unknown = world([{ object: "spaceship", at: [400, 300] }]).report.issues;
+    expect(unknown.find((i) => i.code === "UNKNOWN_REF")?.path).toBe("scenery[0].object");
+    const schema = world([{ object: "house", scatter: ["conifer"], at: [400, 300] }]).report.issues;
+    expect(schema.filter((i) => i.code === "SCHEMA").map((i) => i.path)).toContain("scenery[0].scatter");
+    const bounds = world([{ object: "house", at: [1200, 300] }]).report.issues;
+    expect(bounds.find((i) => i.code === "OUT_OF_BOUNDS")?.path).toBe("scenery[0].at");
+  });
+
+  it("turns objects to face the track or a point", () => {
+    const { world: w } = world([{ object: "house", at: [400, 260], face: "track" }, { object: "house", at: [400, 400], face: [500, 400] }]);
+    const houses = w!.scenery.filter((p) => p.object === "house");
+    expect(houses[0].rotation).toBeCloseTo(-Math.PI / 2, 1);
+    expect(houses[1].rotation).toBeCloseTo(0, 6);
+  });
+
+  it("stands objects placed on a platform on its surface", () => {
+    const { world: w } = world([{ object: "lamp-post", at: [510, 196.3] }]);
+    const lamp = w!.scenery.find((p) => p.object === "lamp-post")!;
+    expect(lamp.z).toBeCloseTo(query(w!).pointAt("main", 250).z + 0.9, 1);
+  });
+
+  it("builds a station building unless it is set to null", () => {
+    expect(world([]).world!.scenery.some((p) => p.object === "station-building")).toBe(true);
+    expect(world([], (L) => { L.stations[0].building = null; }).world!.scenery.some((p) => p.object === "station-building")).toBe(false);
+  });
+
+  it("keeps scattered items off the track and uses custom objects", () => {
+    const { world: w, report } = world(
+      [{ scatter: ["conifer", "kiosk"], spacing: 15 }, { object: "kiosk", at: [500, 400], rotation: 45 }],
+      (L) => { L.objects = { kiosk: { parts: [{ shape: "box", size: [3, 2, 2.5] }, { shape: "pyramid", at: [0, 0, 2.5], size: [3.4, 2.4, 1], color: "roof" }] } }; },
+    );
+    expect(report.ok).toBe(true);
+    expect(w!.scenery.filter((p) => p.object === "kiosk").length).toBeGreaterThan(10);
+    const q = query(w!);
+    for (const p of w!.scenery.filter((s) => s.object === "conifer")) expect(q.trackAt(p.x, p.y, 6)).toBeNull();
   });
 });

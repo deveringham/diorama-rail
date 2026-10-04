@@ -28,25 +28,35 @@ export const PALETTE = {
   platformEdge: 0xe9e3c9,
   canopy: 0x6f8a8c,
   canopyPost: 0x4e5a5c,
-  bench: 0x6a4a35,
-  stationWall: 0xe4d4b4,
-  stationRoof: 0x8e4a3a,
   bridge: 0xa8a196,
   pier: 0x918a7f,
   parapet: 0xb7b0a4,
   portal: 0x8f877b,
   portalDark: 0x2a2724,
+  road: { summer: 0x7d7a75, autumn: 0x7b7873, winter: 0xc8cdd1 },
+  parking: { summer: 0x8a8781, autumn: 0x88857f, winter: 0xd2d6d9 },
+  verge: { summer: 0x9d9686, autumn: 0x9b9282, winter: 0xe2e7ea },
+  roadLine: 0xece8dc,
+  sidewalk: { summer: 0xbab5ab, autumn: 0xb7b1a6, winter: 0xe4e8eb },
+  kerb: 0x9a958c,
+  gravel: { summer: 0xc8b996, autumn: 0xc0ad8a, winter: 0xe6e8ea },
+  pathEdge: { summer: 0xa3966f, autumn: 0x9e8f6b, winter: 0xd5d9dc },
+  boards: 0x7a5c44,
+  crossingPanel: 0x5a5651,
+  signalPost: 0xdedbd3,
+  signalRed: 0xc23a2e,
+  signalWhite: 0xf3f1ec,
+  signalBack: 0x2b2b2d,
+  lampOn: 0xff3b22,
+  lampOff: 0x4a1d18,
   walls: [0xf0e7d5, 0xe8d2a6, 0xdfbba6, 0xcbd5d6, 0xf4f0e8, 0xe4c99d, 0xd6c3b0],
   roofs: { house: 0xa9573f, terrace: 0x6e5c58, flats: 0x8b8a86, church: 0x5d6672 },
-  window: 0x3c4651,
   windowLit: 0xffc477,
-  trunk: 0x6b5140,
   trees: {
     summer: { deciduous: [0x6f9a4f, 0x7aa457, 0x648f48, 0x86ad5e], conifer: [0x4f7a4f, 0x587f52, 0x46704a] },
     autumn: { deciduous: [0xd0873e, 0xc8603a, 0xdcae4a, 0xa94f34, 0xb9a043], conifer: [0x4f7350, 0x557852] },
     winter: { deciduous: [0x8d847c, 0x81786f], conifer: [0x4c6b55, 0x52705a] },
   },
-  snowCap: 0xf6f8fa,
   people: [0xc0504d, 0x4f81bd, 0x9bbb59, 0xf2c14e, 0x8064a2, 0x4bacc6, 0xf79646, 0x5b5b5b, 0xe6e0d0],
   skin: 0xe8c4a8,
   smoke: 0xe9e6e1,
@@ -54,7 +64,19 @@ export const PALETTE = {
   trainUnder: 0x3a3a3c,
   trainRoof: 0xb9b6b0,
   freightLoco: 0xb8473a,
-  chimney: 0x575350,
+} as const;
+
+/**
+ * Named colours scenery objects may use instead of hex (see model/objects.ts).
+ * "foliage" and "needles" are seasonal and come from PALETTE.trees.
+ */
+export const OBJECT_COLORS = {
+  wall: 0xf0e7d5, plaster: 0xe8d2a6, brick: 0xa65d47, stone: 0x9b948a, concrete: 0xb5b1a8,
+  wood: 0x8a6446, timber: 0x5d4636, metal: 0x7d8288, dark: 0x3a3a3c, white: 0xf4f2ee,
+  red: 0xb8473a, yellow: 0xe2b33c, blue: 0x4f6f9a, green: 0x5f8a4e,
+  roof: 0xa9573f, "roof-slate": 0x5d6672, "roof-dark": 0x6e5c58, "roof-grey": 0x8b8a86,
+  chimney: 0x575350, trunk: 0x6b5140, window: 0x3c4651, lamp: 0xf3e3b8,
+  snow: 0xf6f8fa, sand: 0xd9cb9c, water: 0x5c97ad, grass: 0x93b36b,
 } as const;
 
 /** Sky, fog and light keyframes over the day, interpolated by hour. */

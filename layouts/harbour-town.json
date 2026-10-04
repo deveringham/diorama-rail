@@ -37,20 +37,267 @@
     { "id": "ostkap", "name": "Ostkap", "track": "coast", "at": 1270, "length": 120, "side": "left" }
   ],
   "services": [
-    { "id": "east-west", "train": "regional-3", "route": ["coast"], "mode": "shuttle", "stops": ["westhafen", "ostkap"] },
-    { "id": "west-east", "train": "regional-3", "color": "#3d7d8c", "route": ["coast", "passing", "coast"], "mode": "shuttle", "stops": ["ostkap", "westhafen"] }
+    {
+      "id": "east-west",
+      "train": "regional-3",
+      "route": ["coast"],
+      "mode": "shuttle",
+      "stops": ["westhafen", "ostkap"]
+    },
+    {
+      "id": "west-east",
+      "train": "regional-3",
+      "color": "#3d7d8c",
+      "route": ["coast", "passing", "coast"],
+      "mode": "shuttle",
+      "stops": ["ostkap", "westhafen"]
+    }
   ],
-  "scenery": {
-    "towns": [
-      { "near": "westhafen", "radius": 160, "density": 0.75 },
-      { "near": "ostkap", "radius": 120, "density": 0.6 },
-      { "near": [560, 620], "radius": 70, "density": 0.4 }
-    ],
-    "forests": [
-      { "at": [1250, 820], "radius": 210, "density": 0.75 },
-      { "at": [380, 860], "radius": 220, "density": 0.5 }
-    ],
-    "scatterTrees": 0.12
+  "style": { "season": "autumn", "timeOfDay": 16.5, "dayLengthSeconds": 600 },
+  "roads": [
+    { "id": "harbour-front", "points": [[100, 400], [330, 400]], "sidewalks": "both", "parking": "left" },
+    { "id": "upper-street", "points": [[100, 528], [330, 528]], "sidewalks": "both", "parking": "both" },
+    {
+      "id": "west-road",
+      "from": { "road": "harbour-front", "at": "start" },
+      "points": [{ "at": [60, 412], "radius": 15 }, { "at": [60, 512], "radius": 15 }],
+      "to": { "road": "upper-street", "at": "start" },
+      "parking": "right",
+      "sidewalks": "left"
+    },
+    {
+      "id": "middle-street",
+      "from": { "road": "west-road", "at": 75 },
+      "points": [[110, 474.345], [335, 466.5825]],
+      "sidewalks": "both",
+      "parking": "right"
+    },
+    {
+      "id": "church-lane",
+      "from": { "road": "middle-street", "at": 160 },
+      "points": [[220, 580]],
+      "sidewalks": "both",
+      "parking": "both"
+    },
+    {
+      "id": "inland-road",
+      "from": { "road": "upper-street", "at": "end" },
+      "speed": 16,
+      "points": [
+        { "at": [450, 555], "radius": 60 },
+        { "at": [560, 575], "radius": 60 },
+        { "at": [700, 580], "radius": 80 },
+        { "at": [900, 590], "radius": 80 },
+        { "at": [1100, 580], "radius": 80 },
+        { "at": [1200, 545], "radius": 60 },
+        [1300, 509]
+      ]
+    },
+    {
+      "id": "ostkap-street",
+      "from": { "road": "inland-road", "at": "end" },
+      "points": [[1470, 530]],
+      "sidewalks": "both"
+    },
+    {
+      "id": "ostkap-lane",
+      "from": { "road": "ostkap-street", "at": 101 },
+      "points": [[1400, 610]],
+      "sidewalks": "both"
+    },
+    {
+      "id": "lighthouse-lane",
+      "width": 5,
+      "speed": 9,
+      "from": { "road": "inland-road", "at": 945 },
+      "points": [[1256, 485], { "at": [1252, 438], "radius": 15 }, { "at": [1300, 428], "radius": 20 }, [1428, 420]],
+      "sidewalks": "both",
+      "sidewalkWidth": 1.5
+    }
+  ],
+  "paths": [
+    {
+      "id": "pier",
+      "width": 2.5,
+      "surface": "paved",
+      "from": { "road": "harbour-front", "at": 105 },
+      "points": [[205, 316]]
+    },
+    {
+      "id": "beach-path",
+      "from": { "road": "inland-road", "at": 355 },
+      "points": [[678, 520], { "at": [676, 434], "z": 4.1 }, [672, 398]]
+    },
+    { "id": "farm-track", "from": { "road": "inland-road", "at": 236 }, "points": [[561, 604]] },
+    {
+      "id": "lighthouse-path",
+      "surface": "paved",
+      "from": { "road": "lighthouse-lane", "at": "end" },
+      "points": [[1452, 411], [1474, 405]]
+    }
+  ],
+  "parking": [
+    {
+      "id": "westhafen-car-park",
+      "name": "Westhafen Car Park",
+      "at": [175, 585],
+      "spaces": 16,
+      "rotation": 0
+    },
+    {
+      "id": "ostkap-car-park",
+      "name": "Ostkap Station Car Park",
+      "at": [1300, 447],
+      "spaces": 16,
+      "rotation": 180
+    }
+  ],
+  "people": { "cars": 0.3 },
+  "traffic": { "cars": 8 },
+  "objects": {
+    "lighthouse": {
+      "description": "Red and white striped lighthouse with a glowing lantern, 24 m",
+      "parts": [
+        { "shape": "cylinder", "at": [0, 0, -1], "size": [9, 9, 2], "sides": 10, "color": "stone" },
+        { "shape": "cylinder", "at": [0, 0, 1], "size": [5, 5, 3.5], "sides": 10, "color": "white", "grid": [1, 1, 3], "step": [0, 0, 7] },
+        { "shape": "cylinder", "at": [0, 0, 4.5], "size": [5, 5, 3.5], "sides": 10, "color": "red", "grid": [1, 1, 3], "step": [0, 0, 7] },
+        { "shape": "cylinder", "at": [0, 0, 22], "size": [6.4, 6.4, 0.5], "sides": 10, "color": "dark" },
+        { "shape": "cylinder", "at": [0, 0, 22.5], "size": [3.4, 3.4, 2.4], "sides": 10, "color": "lamp" },
+        { "shape": "cone", "at": [0, 0, 24.9], "size": [4.2, 4.2, 2.2], "sides": 10, "color": "red", "winter": "snow" },
+        { "shape": "panel", "at": [2.45, 0, 1], "size": [0.1, 1.1, 2], "color": "timber" }
+      ]
+    },
+    "fishing-boat": {
+      "description": "Small fishing boat, 9 m, bow toward +x; place with z at sea level",
+      "tint": ["#3d6fa8", "#b8473a", "#2f6b5a", "#e2b33c"],
+      "parts": [
+        { "shape": "box", "at": [0, 0, 1.2], "size": [8, 3, 1.8], "rotate": [180, 0, 0], "taper": [0.8, 0.45] },
+        { "shape": "box", "at": [0, 0, 1.15], "size": [7.6, 2.6, 0.1], "color": "wood" },
+        { "shape": "box", "at": [-1.2, 0, 1.2], "size": [2.4, 2, 2], "color": "white" },
+        { "shape": "panel", "at": [-0.05, 0, 2.1], "size": [0.1, 1.4, 0.6], "color": "window" },
+        { "shape": "cylinder", "at": [1.5, 0, 1.2], "size": [0.15, 0.15, 5], "sides": 4, "color": "timber" }
+      ]
+    }
   },
-  "style": { "season": "autumn", "timeOfDay": 16.5, "dayLengthSeconds": 600 }
+  "scenery": [
+    { "object": "house", "at": [120.1, 412.9], "rotation": 267 },
+    { "object": "terrace", "at": [136, 412.9], "rotation": 269 },
+    { "object": "shop", "at": [152, 414.1], "rotation": 271, "name": "Harbour Fish", "building": { "kind": "Fishmonger", "titles": ["Fishmonger", "Shop assistant"] } },
+    { "object": "house", "at": [167.9, 412.9], "rotation": 273 },
+    { "object": "house", "at": [184.1, 412.9], "rotation": 268 },
+    { "object": "terrace", "at": [200, 412.9], "rotation": 270 },
+    { "object": "house", "at": [215.9, 412.9], "rotation": 272 },
+    { "object": "pub", "at": [232.2, 414.9], "rotation": 267, "name": "The Anchor" },
+    { "object": "house", "at": [248, 412.9], "rotation": 269 },
+    { "object": "terrace", "at": [264, 412.9], "rotation": 271 },
+    { "object": "shop", "at": [279.8, 414.1], "rotation": 273, "name": "Westhafen Chandlery", "building": { "kind": "Chandler", "titles": ["Chandler"], "jobs": 1 } },
+    { "object": "house", "at": [296.1, 412.9], "rotation": 268 },
+    { "object": "house", "at": [312, 412.9], "rotation": 270 },
+    { "object": "house", "at": [119.4, 484.5], "rotation": 265 },
+    { "object": "terrace", "at": [136.3, 483.9], "rotation": 267 },
+    { "object": "house", "at": [153.3, 483.4], "rotation": 269 },
+    { "object": "house", "at": [170.3, 482.8], "rotation": 271 },
+    { "object": "house", "at": [238.3, 480.4], "rotation": 265 },
+    { "object": "house", "at": [255.3, 479.8], "rotation": 267 },
+    { "object": "house", "at": [289.3, 478.7], "rotation": 271 },
+    { "object": "terrace", "at": [306.2, 478.1], "rotation": 266 },
+    { "object": "house", "at": [323.2, 477.5], "rotation": 268 },
+    { "object": "house", "at": [117.9, 515.1], "rotation": 87 },
+    { "object": "house", "at": [133, 515.1], "rotation": 89 },
+    { "object": "house", "at": [148, 515.1], "rotation": 91 },
+    { "object": "house", "at": [163.1, 515.1], "rotation": 93 },
+    { "object": "house", "at": [177.9, 515.1], "rotation": 88 },
+    { "object": "shop", "at": [193, 513.9], "rotation": 90, "name": "Westhafen Bakery", "building": { "kind": "Bakery", "titles": ["Baker", "Shop assistant"] } },
+    { "object": "house", "at": [242.9, 515.1], "rotation": 87 },
+    { "object": "house", "at": [258, 515.1], "rotation": 89 },
+    { "object": "house", "at": [273, 515.1], "rotation": 91 },
+    { "object": "house", "at": [288.1, 515.1], "rotation": 93 },
+    { "object": "house", "at": [302.9, 515.1], "rotation": 88 },
+    { "object": "house", "at": [318, 515.1], "rotation": 90 },
+    { "object": "house", "at": [118.1, 540.9], "rotation": 267 },
+    { "object": "house", "at": [133, 540.9], "rotation": 269 },
+    { "object": "terrace", "at": [148, 540.9], "rotation": 271 },
+    { "object": "house", "at": [162.9, 540.9], "rotation": 273 },
+    { "object": "house", "at": [178.1, 540.9], "rotation": 268 },
+    { "object": "terrace", "at": [193, 540.9], "rotation": 270 },
+    { "object": "terrace", "at": [243.1, 540.9], "rotation": 267 },
+    { "object": "shop", "at": [258, 542.1], "rotation": 269, "name": "Upper Street Stores", "building": { "kind": "Grocer", "titles": ["Grocer", "Shop assistant"] } },
+    { "object": "house", "at": [273, 540.9], "rotation": 271 },
+    { "object": "terrace", "at": [287.9, 540.9], "rotation": 273 },
+    { "object": "house", "at": [303.1, 540.9], "rotation": 268 },
+    { "object": "house", "at": [318, 540.9], "rotation": 270 },
+    { "object": "church", "at": [220, 600], "rotation": 270, "name": "St. Nicholas' Church" },
+    { "object": "lamp-post", "at": [125, 406.9], "rotation": 270 },
+    { "object": "lamp-post", "at": [155, 406.9], "rotation": 270 },
+    { "object": "lamp-post", "at": [185, 406.9], "rotation": 270 },
+    { "object": "lamp-post", "at": [215, 406.9], "rotation": 270 },
+    { "object": "lamp-post", "at": [245, 406.9], "rotation": 270 },
+    { "object": "lamp-post", "at": [275, 406.9], "rotation": 270 },
+    { "object": "lamp-post", "at": [305, 406.9], "rotation": 270 },
+    { "object": "lamp-post", "at": [140, 395.5], "rotation": 90 },
+    { "object": "lamp-post", "at": [170, 395.5], "rotation": 90 },
+    { "object": "lamp-post", "at": [200, 395.5], "rotation": 90 },
+    { "object": "lamp-post", "at": [230, 395.5], "rotation": 90 },
+    { "object": "lamp-post", "at": [260, 395.5], "rotation": 90 },
+    { "object": "lamp-post", "at": [290, 395.5], "rotation": 90 },
+    { "object": "fishing-boat", "at": [196, 352], "rotation": 265, "z": 0 },
+    { "object": "fishing-boat", "at": [214, 340], "rotation": 95, "z": 0 },
+    { "object": "fishing-boat", "at": [196, 333], "rotation": 280, "z": 0 },
+    { "object": "fishing-boat", "at": [262, 318], "rotation": 200, "z": 0 },
+    { "object": "fishing-boat", "at": [140, 300], "rotation": 330, "z": 0 },
+    { "object": "deciduous", "at": [150, 555] },
+    { "object": "deciduous", "at": [180, 560] },
+    { "object": "deciduous", "at": [265, 552] },
+    { "object": "deciduous", "at": [300, 557] },
+    { "object": "deciduous", "at": [150, 500] },
+    { "object": "deciduous", "at": [290, 497] },
+    { "object": "house", "at": [1306.6, 520.5], "rotation": 274 },
+    { "object": "house", "at": [1321.5, 522.4], "rotation": 276 },
+    { "object": "terrace", "at": [1336.4, 524.3], "rotation": 278 },
+    { "object": "house", "at": [1351.3, 526.1], "rotation": 280 },
+    { "object": "house", "at": [1366.2, 528], "rotation": 275 },
+    { "object": "shop", "at": [1381, 531], "rotation": 277, "name": "Ostkap Stores", "building": { "kind": "Grocer", "titles": ["Shopkeeper", "Shop assistant"] } },
+    { "object": "house", "at": [1410.8, 533.6], "rotation": 274 },
+    { "object": "house", "at": [1425.7, 535.4], "rotation": 276 },
+    { "object": "house", "at": [1440.6, 537.3], "rotation": 278 },
+    { "object": "terrace", "at": [1455.5, 539.1], "rotation": 280 },
+    { "object": "house", "at": [1331.1, 502.4], "rotation": 94 },
+    { "object": "terrace", "at": [1346.9, 504.4], "rotation": 96 },
+    { "object": "house", "at": [1362.8, 506.4], "rotation": 98 },
+    { "object": "house", "at": [1378.7, 508.4], "rotation": 100 },
+    { "object": "terrace", "at": [1394.6, 510.4], "rotation": 95 },
+    { "object": "pub", "at": [1410.7, 510.3], "rotation": 97, "name": "The Lighthouse Inn" },
+    { "object": "house", "at": [1426.3, 514.3], "rotation": 99 },
+    { "object": "terrace", "at": [1442.2, 516.3], "rotation": 94 },
+    { "object": "house", "at": [1458.1, 518.3], "rotation": 96 },
+    { "object": "house", "at": [1389.5, 544.1], "rotation": -3 },
+    { "object": "house", "at": [1389.5, 559.1], "rotation": -1 },
+    { "object": "house", "at": [1389.5, 574.1], "rotation": 1 },
+    { "object": "house", "at": [1389.5, 589.1], "rotation": 3 },
+    { "object": "house", "at": [1410.5, 547.6], "rotation": 177 },
+    { "object": "house", "at": [1410.5, 591.6], "rotation": 181 },
+    { "object": "lighthouse", "at": [1482, 404], "name": "Ostkap Lighthouse", "building": { "functions": ["landmark", "workplace"], "jobs": 1, "titles": ["Lighthouse keeper"], "kind": "Lighthouse", "door": [-4, 0] } },
+    { "object": "house", "at": [1462, 418], "rotation": 180 },
+    { "object": "fence", "at": [1450, 404], "rotation": 0 },
+    { "object": "lamp-post", "at": [1316.3, 515.7], "rotation": 277 },
+    { "object": "lamp-post", "at": [1350, 519.9], "rotation": 277 },
+    { "object": "lamp-post", "at": [1383.8, 524.1], "rotation": 277 },
+    { "object": "lamp-post", "at": [1417.5, 528.4], "rotation": 277 },
+    { "object": "lamp-post", "at": [1451.3, 532.6], "rotation": 277 },
+    { "object": "lamp-post", "at": [1334.3, 508.9], "rotation": 97 },
+    { "object": "lamp-post", "at": [1368, 513.1], "rotation": 97 },
+    { "object": "lamp-post", "at": [1401.8, 517.3], "rotation": 97 },
+    { "object": "lamp-post", "at": [1435.5, 521.5], "rotation": 97 },
+    { "object": "barn", "at": [560, 628], "rotation": 270, "name": "Inland Farm" },
+    { "object": "house", "at": [538, 606], "rotation": 0 },
+    { "object": "house", "at": [585, 600], "rotation": 180 },
+    { "object": "fence", "at": [540, 640], "rotation": 0 },
+    { "object": "fence", "at": [545, 650], "rotation": 90 },
+    { "object": "poplar", "at": [520, 620] },
+    { "object": "poplar", "at": [600, 625] },
+    { "scatter": ["conifer", "deciduous", "deciduous"], "at": [1250, 820], "radius": 210, "spacing": 7.5 },
+    { "scatter": ["deciduous", "conifer", "deciduous"], "at": [380, 860], "radius": 220, "spacing": 10 },
+    { "scatter": ["deciduous", "conifer", "deciduous", "bush"], "spacing": 90 },
+    { "object": "office", "at": [24, 455], "rotation": 0, "name": "Harbour Office", "building": { "kind": "Harbour office", "jobs": 6, "titles": ["Harbour master", "Pilot", "Clerk"] } }
+  ]
 }

@@ -1,5 +1,5 @@
-// Static catalogs: train types, building and tree variants, plus the few global
-// tuning constants the model and sim share. Add a new train type here (see README).
+// Train catalog plus the few global tuning constants the model and sim share.
+// Add a new train type here (see README). Scenery objects live in objectLibrary.ts.
 
 export type CarShape = "multiple-unit" | "loco-hauled" | "tram" | "freight";
 
@@ -36,17 +36,3 @@ export const trainLength = (t: TrainType): number => carLengths(t).reduce((a, b)
 
 /** Simulation speed multiplier applied to the fixed 1/30 s step. */
 export const TIME_SCALE = 1;
-
-export const HOUSE_VARIANTS = ["house", "terrace", "flats", "church"] as const;
-export type HouseVariant = (typeof HOUSE_VARIANTS)[number];
-/** Footprint radius (m) used to keep buildings apart, and rough triangle cost for stats. */
-export const HOUSE_INFO: Record<HouseVariant, { radius: number; tris: number }> = {
-  house: { radius: 6, tris: 40 },
-  terrace: { radius: 11, tris: 60 },
-  flats: { radius: 9, tris: 60 },
-  church: { radius: 13, tris: 80 },
-};
-
-export const TREE_VARIANTS = ["conifer", "deciduous", "bare", "conifer-snow"] as const;
-export type TreeVariant = (typeof TREE_VARIANTS)[number];
-export const TREE_TRIS = 24;

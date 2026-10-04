@@ -9,6 +9,7 @@ import type { Span } from "./heights";
 import type { RoutePath } from "./routes";
 import { radiusAt, pointAt } from "./geometry";
 import { isTrainType, TRAIN_CATALOG, trainLength } from "./catalog";
+import { OBJECT_LIBRARY } from "./objectLibrary";
 import { SpatialHash } from "../util/spatial";
 import { mod, round } from "../util/vec";
 
@@ -42,9 +43,10 @@ export function jsonPath(parts: ReadonlyArray<PropertyKey>): string {
   return parts.reduce<string>((acc, p) => (typeof p === "number" ? `${acc}[${p}]` : acc ? `${acc}.${String(p)}` : String(p)), "");
 }
 
-export function zodIssues(err: ZodError): Issue[] {
+/** Zod issues as SCHEMA errors; `prefix` places a sub-schema's paths inside the layout. */
+export function zodIssues(err: ZodError, prefix: PropertyKey[] = []): Issue[] {
   return err.issues.map((i) => {
-    const where = jsonPath(i.path) || "(root)";
+    const where = jsonPath([...prefix, ...i.path]) || "(root)";
     let msg = i.message;
     if (i.code === "unrecognized_keys") msg = `unknown key${i.keys.length > 1 ? "s" : ""} ${i.keys.map((k) => `"${k}"`).join(", ")}; check spelling against docs/schema.json`;
     else if (i.code === "invalid_type" && i.input === undefined) msg = `missing required field (expected ${i.expected})`;
@@ -58,12 +60,15 @@ export function checkReferences(layout: Layout): Issue[] {
   const seen = new Map<string, string>();
   const note = (id: string, path: string) => {
     const prev = seen.get(id);
-    if (prev) issues.push(error("DUPLICATE_ID", `id '${id}' is used twice (also at ${prev}); ids must be unique across tracks, stations and services`, path));
+    if (prev) issues.push(error("DUPLICATE_ID", `id '${id}' is used twice (also at ${prev}); ids must be unique across tracks, roads, paths, car parks, stations and services`, path));
     else seen.set(id, path);
   };
   layout.tracks.forEach((t, i) => note(t.id, `tracks[${i}].id`));
   layout.stations.forEach((s, i) => note(s.id, `stations[${i}].id`));
   layout.services.forEach((s, i) => note(s.id, `services[${i}].id`));
+  layout.roads.forEach((r, i) => note(r.id, `roads[${i}].id`));
+  layout.paths.forEach((p, i) => note(p.id, `paths[${i}].id`));
+  layout.parking.forEach((p, i) => note(p.id, `parking[${i}].id`));
 
   const trackIds = new Set(layout.tracks.map((t) => t.id));
   const stationIds = new Set(layout.stations.map((s) => s.id));
@@ -84,8 +89,35 @@ export function checkReferences(layout: Layout): Issue[] {
     s.route.forEach((r, k) => { if (!trackIds.has(r)) unknown("track", r, `services[${i}].route[${k}]`, trackIds); });
     s.stops.forEach((r, k) => { if (!stationIds.has(r)) unknown("station", r, `services[${i}].stops[${k}]`, stationIds); });
   });
-  layout.scenery.towns.forEach((t, i) => {
-    if (typeof t.near === "string" && !stationIds.has(t.near)) unknown("station", t.near, `scenery.towns[${i}].near`, stationIds);
+  const objectIds = new Set([...Object.keys(OBJECT_LIBRARY), ...Object.keys(layout.objects)]);
+  const known = () => new Set([...objectIds].sort());
+  layout.stations.forEach((s, i) => {
+    if (s.building && !objectIds.has(s.building)) unknown("object", s.building, `stations[${i}].building`, known());
+  });
+  layout.scenery.forEach((e, i) => {
+    if (e.object && !objectIds.has(e.object)) unknown("object", e.object, `scenery[${i}].object`, known());
+    e.scatter?.forEach((id, k) => { if (!objectIds.has(id)) unknown("object", id, `scenery[${i}].scatter[${k}]`, known()); });
+  });
+  const roadIds = new Set(layout.roads.map((r) => r.id));
+  layout.roads.forEach((r, i) => {
+    for (const w of ["from", "to"] as const) {
+      const end = r[w];
+      if (end && !roadIds.has(end.road)) unknown("road", end.road, `roads[${i}].${w}.road`, roadIds);
+      if (end && end.road === r.id) issues.push(error("TRACK_REF_CYCLE", `road '${r.id}' cannot branch from itself`, `roads[${i}].${w}.road`));
+    }
+  });
+  layout.traffic.vehicles.forEach((id, k) => { if (!objectIds.has(id)) unknown("object", id, `traffic.vehicles[${k}]`, known()); });
+  layout.people.vehicles.forEach((id, k) => { if (!objectIds.has(id)) unknown("object", id, `people.vehicles[${k}]`, known()); });
+  layout.parking.forEach((p, i) => { if (p.road && !roadIds.has(p.road)) unknown("road", p.road, `parking[${i}].road`, roadIds); });
+  const pathIds = new Set(layout.paths.map((p) => p.id));
+  layout.paths.forEach((p, i) => {
+    for (const w of ["from", "to"] as const) {
+      const end = p[w];
+      if (end?.path && !pathIds.has(end.path)) unknown("path", end.path, `paths[${i}].${w}.path`, pathIds);
+      if (end?.road && !roadIds.has(end.road)) unknown("road", end.road, `paths[${i}].${w}.road`, roadIds);
+      if (end?.station && !stationIds.has(end.station)) unknown("station", end.station, `paths[${i}].${w}.station`, stationIds);
+      if (end?.path === p.id) issues.push(error("TRACK_REF_CYCLE", `path '${p.id}' cannot branch from itself`, `paths[${i}].${w}.path`));
+    }
   });
   return issues;
 }

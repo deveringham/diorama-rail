@@ -2,6 +2,7 @@
 // runs the fixed-step loop, handles keys, HUD, hot reload and screenshot mode.
 // URL: ?layout=valley-loop&seed=N&t=SECONDS&view=overview|top|follow&shot=1
 //      &cam=x,y,z,tx,ty,tz (optional eye and target in model metres, for close-up shots)
+//      &object=id[,id...]|* (preview scenery objects alone; &season=summer|autumn|winter)
 
 import * as THREE from "three";
 import * as api from "./api";
@@ -10,7 +11,12 @@ import { Sim, DT, type SimSnapshot } from "./sim/sim";
 import { buildScene, type DioramaScene } from "./scene/buildScene";
 import { CameraRig } from "./scene/camera";
 import { Hud } from "./scene/hud";
-import { LIGHT } from "./scene/palette";
+import { Inspector } from "./scene/inspect";
+import { LIGHT, type Season } from "./scene/palette";
+import { buildPreview } from "./scene/objectPreview";
+import { LayoutSchema } from "./model/schema";
+import { objectCatalog } from "./model/scenery";
+import { type Issue, error, zodIssues } from "./model/validate";
 
 const MAX_STEPS_PER_FRAME = 8;
 const SPEEDS = { Digit1: 1, Digit2: 2, Digit3: 4 } as const;
@@ -31,6 +37,7 @@ const shot = params.get("shot") === "1";
 const view = params.get("view") ?? "overview";
 const startAt = Number(params.get("t") ?? 0);
 const cam = params.get("cam")?.split(",").map(Number);
+const objectParam = params.get("object");
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance", preserveDrawingBuffer: shot });
 renderer.setPixelRatio(shot ? 1 : Math.min(devicePixelRatio, 1.5));
@@ -42,25 +49,68 @@ document.body.append(renderer.domElement);
 
 const rig = new CameraRig(renderer.domElement, innerWidth / innerHeight);
 const hud = new Hud(document.body);
-if (shot) rig.controls.autoRotate = false;
+const inspector = new Inspector(document.body);
+if (shot) {
+  rig.controls.autoRotate = false;
+  hud.hideAll();
+}
 
 let world: World | null = null;
 let sim: Sim | null = null;
 let dscene: DioramaScene | null = null;
-const snap: SimSnapshot = { time: 0, trains: [], switches: [], blocks: [] };
+const snap: SimSnapshot = { time: 0, trains: [], switches: [], blocks: [], vehicles: [], gates: [], people: [] };
 let paused = false;
 let speed = 1;
 let shadows = true;
 let follow = -1;            // followed train index, kept across hot reloads
 
+/** Loads the layout JSON. Errors carry a message written for the person reading the page. */
 async function fetchLayout(): Promise<unknown> {
   const res = await fetch(layoutUrl, { cache: "no-store" });
-  if (!res.ok) throw new Error(`could not load ${layoutUrl}: HTTP ${res.status}`);
-  const json = await res.json();
+  const text = await res.text();
+  // A missing file is a 404 from our dev/preview server, or an HTML page from a
+  // static host with an SPA fallback; either way, say which layouts do exist.
+  if (!res.ok || /^\s*</.test(text)) throw new Error(await notFound());
+  let json: unknown;
+  try {
+    json = JSON.parse(text);
+  } catch (err) {
+    throw new Error(`${layoutUrl} is not valid JSON: ${(err as Error).message}`);
+  }
   const seed = params.get("seed");
   if (seed !== null && json && typeof json === "object") (json as { seed?: number }).seed = Number(seed);
   return json;
 }
+
+async function notFound(): Promise<string> {
+  let names: unknown = [];
+  try {
+    names = await (await fetch("layouts/index.json", { cache: "no-store" })).json();
+  } catch {
+    // No index available (e.g. a plain static host): just report the path.
+  }
+  if (!Array.isArray(names) || names.length === 0 || layoutUrl === layoutName) return `no layout file at ${layoutUrl}`;
+  const guess = closest(layoutName, names.map(String));
+  return `no layout named '${layoutName}' (looked for ${layoutUrl}); available: ${names.join(", ")}${guess ? `. Did you mean '${guess}'?` : ""}`;
+}
+
+/** The option within a few typing edits of `name` (harbor → harbour), if any. */
+function closest(name: string, options: string[]): string | null {
+  const edits = (a: string, b: string) => {
+    let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+    for (let i = 1; i <= a.length; i++) {
+      const cur = [i];
+      for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = cur;
+    }
+    return prev[b.length];
+  };
+  const best = options.map((o) => ({ o, d: edits(name, o) })).sort((x, y) => x.d - y.d)[0];
+  return best && best.d <= Math.max(2, name.length / 3) ? best.o : null;
+}
+
+const loadIssue = (err: unknown) =>
+  ({ code: "LOAD", severity: "error" as const, message: err instanceof Error ? err.message : String(err), path: layoutUrl });
 
 /** Build everything from JSON. On errors keep whatever is showing and list the issues. */
 function rebuild(json: unknown, preStep: number): boolean {
@@ -78,13 +128,18 @@ function rebuild(json: unknown, preStep: number): boolean {
   if (sim.unplaced.length) console.warn(`no room to place trains: ${sim.unplaced.join(", ")}`);
   for (let i = 0; i < Math.round(preStep / DT); i++) sim.step();
   snap.trains.length = 0;
+  snap.vehicles.length = 0;
+  snap.gates.length = 0;
+  snap.people.length = 0;
   sim.snapshot(snap);
   dscene = buildScene(world, snap);
   dscene.lighting.setShadows(shadows);
+  dscene.scene.add(inspector.marker);
+  inspector.setWorld(world);
   rig.setWorld(world, first);
   if (pose) rig.setPose(pose);
   if (follow >= 0) rig.follow = Math.min(follow, snap.trains.length - 1);
-  window.dr = { ...api, world, sim, scene: dscene.scene, renderer };
+  window.dr = { ...api, world, sim, scene: dscene.scene, renderer, camera: rig.camera, rig, inspector };
   return true;
 }
 
@@ -116,11 +171,13 @@ function frame(now: number): void {
   sim.snapshot(snap);
   dscene.update(snap, simDt, hourNow());
   rig.update(dt, snap);
+  inspector.update(sim, snap, rig.camera, simDt, now);
   renderer.render(dscene.scene, rig.camera);
   fps += (1 / Math.max(dt, 1e-3) - fps) * 0.05;
   const tr = rig.follow !== null ? snap.trains[rig.follow] : undefined;
   hud.update({
-    name: world!.layout.name, time: sim.time, hour: hourNow(), speed, paused, fps,
+    name: world!.layout.name, time: sim.time, hour: hourNow(), speed, paused, shadows,
+    autoRotate: rig.controls.autoRotate, fps,
     calls: renderer.info.render.calls, triangles: renderer.info.render.triangles,
     follow: tr ? { service: tr.service, nextStop: tr.nextStop } : null,
   }, now);
@@ -132,10 +189,22 @@ addEventListener("keydown", (e) => {
   if (e.code === "Space") { paused = !paused; e.preventDefault(); }
   else if (e.code in SPEEDS) speed = SPEEDS[e.code as keyof typeof SPEEDS];
   else if (e.code === "KeyF") { rig.cycleFollow(snap.trains.length); follow = rig.follow ?? -1; }
-  else if (e.code === "Escape") { rig.stopFollow(); follow = -1; }
+  else if (e.code === "Escape") { rig.stopFollow(); follow = -1; inspector.select(null); }
   else if (e.code === "KeyS") { shadows = !shadows; dscene?.lighting.setShadows(shadows); }
   else if (e.code === "KeyH") hud.toggle();
   else if (e.code === "KeyR") rig.controls.autoRotate = !rig.controls.autoRotate;
+});
+// --- click to inspect (a click, not the end of a drag) ----------------------------------
+let press: { x: number; y: number; t: number } | null = null;
+renderer.domElement.addEventListener("pointerdown", (e) => { press = { x: e.clientX, y: e.clientY, t: performance.now() }; });
+renderer.domElement.addEventListener("pointerup", (e) => {
+  if (!press || !dscene || e.button !== 0) return;
+  const moved = Math.hypot(e.clientX - press.x, e.clientY - press.y);
+  const quick = performance.now() - press.t < 400;
+  press = null;
+  if (moved > 5 || !quick) return;
+  const rect = renderer.domElement.getBoundingClientRect();
+  inspector.select(inspector.pick(e.clientX - rect.left, e.clientY - rect.top, renderer.domElement, rig.camera, snap, dscene.scene));
 });
 addEventListener("resize", () => {
   renderer.setSize(innerWidth, innerHeight);
@@ -149,7 +218,7 @@ if (import.meta.hot) {
     try {
       rebuild(await fetchLayout(), sim?.time ?? 0);
     } catch (err) {
-      console.error(err);
+      hud.showIssues([loadIssue(err)]);     // e.g. a half-saved file; keep the current scene
     }
   });
 }
@@ -164,8 +233,9 @@ async function start(): Promise<void> {
       return;
     }
   } catch (err) {
-    hud.showIssues([{ code: "LOAD", severity: "error", message: String(err), path: layoutUrl }]);
-    window.__drError = String(err);
+    const issue = loadIssue(err);
+    hud.showIssues([issue]);
+    window.__drError = issue.message;
     window.__drReady = shot;
     return;
   }
@@ -183,4 +253,66 @@ async function start(): Promise<void> {
     requestAnimationFrame(frame);
   }
 }
-void start();
+// --- object preview ------------------------------------------------------------
+const LABEL_CSS = "position:fixed;transform:translate(-50%,-100%);padding:1px 6px;border-radius:4px;"
+  + "background:rgba(24,26,30,.7);color:#eef0f2;font:12px ui-monospace,Menlo,Consolas,monospace;pointer-events:none;white-space:nowrap";
+
+function failPreview(issues: Issue[]): void {
+  hud.showIssues(issues);
+  window.__drError = issues.map((i) => `${i.code} ${i.path}: ${i.message}`).join("\n");
+  window.__drReady = shot;
+}
+
+/** Renders scenery objects alone: the layout's own objects plus the built-in library. */
+async function startPreview(which: string): Promise<void> {
+  hud.hideAll();
+  let json: Record<string, unknown> = {};
+  try {
+    json = (await fetchLayout()) as Record<string, unknown>;
+  } catch {
+    // No layout: built-in objects only.
+  }
+  const parsed = LayoutSchema.shape.objects.safeParse(json.objects ?? {});
+  if (!parsed.success) return failPreview(zodIssues(parsed.error, ["objects"]));
+  const style = (json.style ?? {}) as { season?: string };
+  const season = (params.get("season") ?? style.season ?? "summer") as Season;
+  if (!["summer", "autumn", "winter"].includes(season)) return failPreview([error("SCHEMA", `unknown season '${season}'`, "season")]);
+  const objects = objectCatalog(parsed.data, season);
+  const ids = which === "*" ? [...objects.keys()].sort() : which.split(",").map((id) => id.trim());
+  const missing = ids.find((id) => !objects.has(id));
+  if (missing) return failPreview([error("UNKNOWN_REF", `unknown object '${missing}'; known: ${[...objects.keys()].sort().join(", ")}`, "object")]);
+
+  const preview = buildPreview(objects, ids, season);
+  rig.controls.target.copy(preview.frame(rig.camera));
+  rig.controls.autoRotate = !shot;
+  rig.controls.update();
+  const labels = preview.labels.map((l) => {
+    const el = document.createElement("div");
+    el.textContent = l.id;
+    el.style.cssText = LABEL_CSS;
+    document.body.append(el);
+    return { el, at: l.at };
+  });
+  const v = new THREE.Vector3();
+  const draw = () => {
+    rig.controls.update();
+    renderer.render(preview.scene, rig.camera);
+    for (const l of labels) {
+      v.copy(l.at).project(rig.camera);
+      l.el.style.left = `${((v.x + 1) / 2) * innerWidth}px`;
+      l.el.style.top = `${((1 - v.y) / 2) * innerHeight}px`;
+      l.el.style.display = ids.length > 1 && v.z < 1 ? "block" : "none";
+    }
+  };
+  if (shot) {
+    draw();
+    draw();
+    window.__drStats = { calls: renderer.info.render.calls, triangles: renderer.info.render.triangles };
+    requestAnimationFrame(() => { window.__drReady = true; });
+  } else {
+    const loop = () => { requestAnimationFrame(loop); draw(); };
+    loop();
+  }
+}
+
+void (objectParam ? startPreview(objectParam) : start());

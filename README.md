@@ -1,10 +1,15 @@
 # Diorama Rail
 
-A model railway to watch in the browser: low-poly terrain, track, stations, towns
-and forests on a diorama block, with trains running on their own. A layout is one
-JSON file; everything visible is derived from it plus a seed. Layouts can be
-validated, simulated and screenshotted from the command line, so an LLM (or you)
-can write and repair them in a loop.
+A model railway to watch in the browser: low-poly terrain, track, stations,
+roads, footpaths, buildings and trees on a diorama block, with trains running on
+their own and a town that lives around them. Every resident has a name, a home,
+often a job and perhaps a car, and runs errands — to work, home, the shops, a
+stroll — walking, driving from parking bay to parking bay, or taking the train,
+whichever is quickest. Click anyone (or any building, car or train) to see who
+they are and what they are doing. A layout is one JSON file; everything visible is derived
+from it plus a seed — including its scenery objects, which are themselves small
+JSON models built from primitives. Layouts and objects can be validated, simulated and screenshotted
+from the command line, so an LLM (or you) can write and repair them in a loop.
 
 ![](docs/valley-loop.png)
 
@@ -15,15 +20,21 @@ npm install
 npm run dev                      # http://localhost:5173/?layout=valley-loop
 ```
 
-Open `?layout=harbour-town` for the second example. Edit a file in `layouts/`
-while `npm run dev` is running and the page rebuilds the world in place (camera
-kept). Layout errors appear in a red panel.
+Open `?layout=harbour-town` for the second example (an unknown name lists the
+available layouts and suggests the closest one). Edit a file in `layouts/` while
+`npm run dev` is running and the page rebuilds the world in place (camera kept).
+Layout errors appear in a red panel.
 
 URL parameters: `layout=<name>` (file in `layouts/`), `seed=N` (override the
 seed), `t=SECONDS` (pre-run the simulation), `view=overview|top|follow`, `shot=1`
-(screenshot mode), `cam=x,y,z,tx,ty,tz` (eye and target in model metres).
+(screenshot mode), `cam=x,y,z,tx,ty,tz` (eye and target in model metres),
+`object=<id>[,<id>…]` or `object=*` (preview scenery objects alone, with
+`season=summer|autumn|winter`).
 
 ### Controls
+
+The HUD in the bottom-left corner shows the layout, simulated time, fps, draw
+calls and triangles, and this list of controls with the current state of each.
 
 | Key | Action |
 |---|---|
@@ -32,18 +43,22 @@ seed), `t=SECONDS` (pre-run the simulation), `view=overview|top|follow`, `shot=1
 | `1` `2` `3` | time scale 1×, 2×, 4× |
 | `F` | follow the next train; `Esc` stops following |
 | `S` | shadows on/off |
-| `H` | HUD (time, fps, draw calls, triangles, followed train) |
+| `H` | hide / show the HUD (shown by default; hidden in screenshots) |
 | `R` | auto-rotate on/off |
+| click | inspect a person, building, car or train (names in the panel are links); `Esc` closes |
 
-In the browser console, `dr` holds the API plus `world`, `sim`, `scene` and
-`renderer`, e.g. `dr.query(dr.world).describe()`.
+In the browser console, `dr` holds the API plus `world`, `sim`, `scene`,
+`renderer`, `camera` and `inspector`, e.g. `dr.query(dr.world).describe()` or
+`dr.describePerson(dr.sim, 12)`.
 
 ## Command line
 
 ```sh
 npm run check -- layouts/valley-loop.json [--json]          # validate; exit 1 on errors
-npm run simulate -- layouts/valley-loop.json --minutes 30   # per-service stops, speed, waits; exit 1 on deadlock
+npm run simulate -- layouts/valley-loop.json --minutes 30   # per-service stops, speed, waits; traffic; people; exit 1 on deadlock
 npm run screenshot -- layouts/valley-loop.json --out shot.png --t 120 --view top --size 1600x1000
+npm run screenshot -- layouts/valley-loop.json --object windmill --out mill.png     # one object alone
+npm run screenshot -- layouts/valley-loop.json --object all --season winter         # every object
 npm run schema                                              # writes docs/schema.json
 npm test                                                    # vitest: geometry, validation, sim invariants
 npm run typecheck
@@ -52,18 +67,28 @@ npm run typecheck
 `screenshot` builds the app, serves it with `vite preview` on a free port (or
 uses `--url http://localhost:5173` to reuse a running dev server), renders in
 headless Chromium with SwiftShader WebGL and prints draw calls and triangles.
-Layout files outside `layouts/` work too.
+Layout files outside `layouts/` work too. With `--object` it renders just those
+scenery objects (built-in and the layout's own) on a small plinth, labelled.
+The same preview is live in the browser at `?layout=valley-loop&object=*`.
 
 Writing layouts: read [docs/LAYOUT_GUIDE.md](docs/LAYOUT_GUIDE.md) — coordinates,
-rules of thumb, every validation code with a fix, and the authoring loop.
+roads, parking and traffic, sidewalks and paths, buildings and people, placing
+scenery, designing objects, rules of thumb, every validation code with a fix,
+and the authoring loop.
 
 ## How it fits together
 
 ```
 layout.json ─► model/  parse (zod) → refs → track geometry (fillets, junctions) → heights,
-                 │     bridges/tunnels → terrain shaping → conflicts, stations, routes → scenery
-                 ├───► sim/    blocks, per-service plans, trains, fixed 1/30 s step, deadlock check
-                 └───► scene/  three.js meshes built once; trains, people, smoke, light updated per frame
+                 │     bridges/tunnels → roads (junctions, crossroads, level crossings, heights)
+                 │     (car parks as aisle roads) → paths and sidewalks (the walk network: zebras,
+                 │     foot crossings, station ends) → terrain shaping → conflicts, stations,
+                 │     routes → scenery → town (buildings, doors, parking bays, residents)
+                 ├───► sim/    blocks, per-service plans, trains, level crossings, road traffic and
+                 │             parked cars, journey planner, people and their errands, fixed 1/30 s
+                 │             step, deadlock check; describe.ts for the inspect panel
+                 └───► scene/  three.js meshes built once; trains, vehicles, barriers, people,
+                               smoke, light updated per frame
 cli/ check | simulate | schema | screenshot        api.ts: the stable public API (also window.dr)
 ```
 
@@ -84,20 +109,33 @@ Use it as a service's `train`. Meshes come from `shape` (`multiple-unit`,
 `loco-hauled`, `tram`, `freight`); `locoLength` sets a different first vehicle.
 Run `npm run schema` so the schema description lists it.
 
-**A new building variant** —
-1. `src/model/catalog.ts`: add the name to `HOUSE_VARIANTS` and its footprint
-   radius and triangle estimate to `HOUSE_INFO`.
-2. `src/scene/palette.ts`: add its roof colour to `PALETTE.roofs`.
-3. `src/scene/sceneryMesh.ts`: add a `case` to `houseGeometry()` building walls
-   (white, tinted per house), roof and windows with `GeoBuilder`.
-4. `src/model/scenery.ts`: add it to a town `wish` list in `placeScenery()`.
+**A new building, tree or other object** — describe it as parts in the layout's
+`objects` and place it in `scenery`; no code changes:
+
+```jsonc
+"objects": { "kiosk": { "tint": ["#3d7d8c"], "parts": [
+  { "shape": "box", "size": [3, 2, 2.4] },
+  { "shape": "pyramid", "at": [0, 0, 2.4], "size": [3.6, 2.6, 0.8], "color": "roof" } ] } },
+"scenery": [ { "object": "kiosk", "at": [700, 215], "face": "track" } ]
+```
+
+Preview it with `npm run screenshot -- my.json --object kiosk`. To make it
+available to every layout, add the same entry to `src/model/objectLibrary.ts`.
+
+Give it a `building` block (`functions`, `residents`, `jobs`, `titles`, `kind`,
+`door`) and every placement becomes a building people live in, work at or visit.
+
+**A new vehicle** — it is an object too: define it (front toward +x, origin at
+its centre, `lamp`-coloured parts for headlights) and list it in the layout's
+`traffic.vehicles` (through traffic) or `people.vehicles` (residents' cars), e.g.
+`"traffic": { "vehicles": ["van", "tractor"] }`.
 
 **A new validation rule** —
 1. `src/model/validate.ts`: write `checkSomething(...)` returning `Issue[]` built
    with `error(code, message, path, at?)` or `warning(...)`.
 2. `src/model/build.ts`: call it where its inputs exist, e.g.
    `issues.push(...checkSomething(layout, tracks));`.
-3. Add the code to `docs/LAYOUT_GUIDE.md` §4 and a failing fixture to
+3. Add the code to `docs/LAYOUT_GUIDE.md` §9 and a failing fixture to
    `test/validate.test.ts`.
 
 ## Notes on v0.1
@@ -117,7 +155,107 @@ The spec's layout did not validate as written, so it was adjusted minimally:
 
 The intent is kept: an oval round a valley, a branch climbing to a hill village
 through a tunnel (and, as a bonus, crossing the main line on a viaduct), three
-services and two towns.
+services and two towns. Bergdorf's platform is on the west (`left`) side, where
+the hillside is level with the track.
+
+### Scenery: objects instead of towns and forests
+The spec's procedural `towns`, `forests` and `scatterTrees` are replaced by
+explicit scenery: every building and tree is an object (a JSON model of
+primitive parts), placed one by one or scattered over an area. Built-in objects
+live in `src/model/objectLibrary.ts`; a layout can add or override objects in
+its `objects` section. Both example layouts now lay out their towns along their
+roads and define a few objects of their own (windmill, hay bale, lighthouse,
+fishing boat).
+
+### Roads and traffic
+
+![](docs/level-crossing.png)
+
+Roads are a network of their own, built like the track (`src/model/roads.ts`):
+filleted waypoints, heights that follow the smoothed ground within `maxGrade`
+(a waypoint `z` pins one point), bridges, tunnels and terrain shaping, T-junctions
+and corners via `from`/`to`, crossroads wherever two roads cross at about the
+same height, and level crossings wherever a road meets a track within 3 m of its
+height. The sim (`src/sim/traffic.ts`) drives vehicles on two right-hand lanes:
+
+- Cars follow the car ahead (a time gap plus a minimum distance), slow for
+  curves and turns, and choose turns at random. They pass a junction one at a
+  time, and only when there is room beyond it, so they never block one; nor do
+  they stop on a level crossing. Dead ends near the board edge lead off the
+  board; elsewhere cars turn round.
+- A level crossing starts flashing when a train could arrive within about 11 s
+  (a pessimistic estimate: the line's speed limits, accelerating from its
+  current speed, after any remaining dwell) or is too close to brake comfortably,
+  lowers its barriers once no car is on it, and opens when the tail has passed.
+  Trains stop short of a crossing that is not closed — a safety net that the
+  examples never need.
+- Crossings close together on one road (a road over double track) work as one:
+  they flash, close and open together, with barriers only outside the group.
+- Limitations: no traffic lights, overtaking, parking or right of way between
+  junction approaches beyond first come, first served (a car kept waiting
+  because its way out is full takes another); one vehicle at a time in a
+  junction.
+
+### Sidewalks, paths and people
+
+![](docs/people.png)
+
+Roads can have sidewalks (`sidewalks: "both" | "left" | "right"`), and a layout's
+`paths` are footpaths built like roads (`src/model/walks.ts`): filleted
+waypoints, heights within `maxGrade`, bridges and tunnels, T-junctions via
+`from`/`to` (on another path, or at a road's edge, joining its sidewalk) and
+automatic junctions. Together they form one walk network: sidewalks round the
+corners of road junctions and across their legs, zebra crossings where a path
+crosses a road, foot crossings (lights and a barrier) where a path crosses a
+track, and piers where a path runs out over the sea. People walk it:
+
+- They keep right at their own pace.
+- At a zebra they wait at the kerb until every car coming can stop (cars stop for
+  anyone on it or waiting); if a car has waited a few seconds they let it through.
+  Over a junction's leg (unmarked) they wait for a gap, and after a while step out
+  in front of cars that can still stop. At level and foot crossings they wait
+  while the lights flash, and the barriers only come down once nobody is in the
+  way.
+- People do not avoid each other on a walkway (they pass through one another
+  when overtaking); that, and the one-person-wide way they queue at a kerb, are
+  the visible simplifications.
+
+### Buildings, people and their errands
+
+![](docs/inspect.png)
+
+`src/model/town.ts` turns every placed object with a `building` block into a
+building — an address (its `name`, or a number on the nearest street, odd on the
+left), its uses (accommodation, workplace, landmark), homes and job titles, and
+a door joined to the nearest walkway by a straight link that crosses no road or
+track — and lays out the parking bays (street parking strips; car parks, which
+are dead-end aisle roads of their own). It then houses the residents: names and
+households, jobs at the workplaces, and cars parked near home.
+
+`src/sim/people.ts` gives them errands. Someone with nothing to do thinks of a
+task (work, home, a visit, a stroll), and `src/sim/planner.ts` finds the quickest
+journey in one search over walkways (split where doors, bays, stations and
+strolling spots join them), road lanes and train services (with the expected
+wait), with a layer for "car still parked / driving / car parked again" so a car
+is picked up once and only where it stands. Then they follow it:
+
+- On foot, with the kerb and level-crossing behaviour above.
+- By car (`src/sim/traffic.ts`): the goal bay is reserved, the car pulls out when
+  there is a gap (backing out of nose-in bays), drives the planned lanes with the
+  rest of the traffic (rerouting if a junction stays blocked), and turns into its
+  bay. The owner gets out and walks on. Each car stays where it was parked, so a
+  car left at the station is collected on the way back.
+- By train: people walk on to the platform (through the station building, at the
+  end of a path, or from the nearest walkway; both platforms of a two-sided
+  station), wait, board the first train of a suitable service heading their way,
+  and get off at their stop. Each train keeps its passenger list.
+
+At the destination they go inside for the task's duration (or linger at the
+spot), then think of the next thing. `src/sim/describe.ts` turns all of this into
+the panel shown when you click something. Durations are compressed for a diorama
+(work lasts minutes, not hours). Through traffic (`traffic.cars`) still drives
+about at random and is not driven by residents. Cars glide into parallel bays
+rather than reversing in, and people do not avoid each other on walkways.
 
 ### Interpretations and limitations
 - **Fixed routes.** A service follows one path through the graph. Two shuttles
@@ -141,5 +279,7 @@ services and two towns.
 - The terrain mesh receives but does not cast shadows (it would double its
   175k-triangle cost); trees, buildings, structures and trains cast them.
 - The renderer's triangle count includes the shadow pass. Both examples render
-  in about 30 draw calls and ~400k triangles (shadow pass included).
+  in about 90–100 draw calls and ~420–460k triangles (shadow pass included). Each object
+  type in use costs 2–3 instanced draw calls (fixed colours, tinted parts,
+  glowing windows), however many times it is placed; vehicles likewise per type.
 - Turnouts are drawn as overlapping track; no signals, sound or timetables.

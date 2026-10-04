@@ -24,7 +24,7 @@ function occupancy(world: World, sim: Sim): Array<Array<{ track: string; s: numb
 describe.each(["valley-loop", "harbour-town"])("%s simulation", (name) => {
   const { world } = buildWorld(example(name));
   const sim = new Sim(world!);
-  const snap: SimSnapshot = { time: 0, trains: [], switches: [], blocks: [] };
+  const snap: SimSnapshot = { time: 0, trains: [], switches: [], blocks: [], vehicles: [], gates: [], people: [] };
   let doubleBooked = 0;
   let closest = Infinity;
 
