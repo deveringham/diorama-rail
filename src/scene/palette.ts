@@ -26,6 +26,9 @@ export const PALETTE = {
   bufferStop: 0xb8473a,
   platform: 0xbdb5a6,
   platformEdge: 0xe9e3c9,
+  dock: 0xa9a59c,                    // a goods yard's loading dock
+  dockEdge: 0x8a857c,
+  crateLid: 0x5a4632,
   canopy: 0x6f8a8c,
   canopyPost: 0x4e5a5c,
   bridge: 0xa8a196,

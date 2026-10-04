@@ -268,7 +268,6 @@
       }
     },
     "stations": {
-      "default": [],
       "type": "array",
       "items": {
         "type": "object",
@@ -280,13 +279,22 @@
           "name": {
             "type": "string"
           },
+          "kind": {
+            "default": "passenger",
+            "description": "passenger: platforms people use; freight: a goods yard, a loading dock beside the track where freight trains and lorries exchange goods",
+            "type": "string",
+            "enum": [
+              "passenger",
+              "freight"
+            ]
+          },
           "track": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9-]*$"
           },
           "at": {
             "type": "number",
-            "description": "s of the platform centre (m)"
+            "description": "s of the platform (or dock) centre (m)"
           },
           "length": {
             "default": 120,
@@ -295,6 +303,7 @@
           },
           "side": {
             "default": "right",
+            "description": "Which side of the track the platform is on (left/right of increasing s); a freight yard has one dock, left or right",
             "type": "string",
             "enum": [
               "left",
@@ -303,8 +312,7 @@
             ]
           },
           "building": {
-            "default": "station-building",
-            "description": "Object drawn as the station building beside the platform, or null for none",
+            "description": "Object drawn as the station building behind the platform (default \"station-building\"), or for a freight yard the shed standing on its dock (default \"goods-shed\"); null for none",
             "anyOf": [
               {
                 "type": "string",
@@ -314,6 +322,11 @@
                 "type": "null"
               }
             ]
+          },
+          "road": {
+            "description": "freight only: the road along the back of the dock, where lorries stop to load and unload; default the nearest one within 30 m",
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$"
           }
         },
         "required": [
@@ -337,7 +350,7 @@
           },
           "train": {
             "type": "string",
-            "description": "Train type id: regional-3, express-6, freight-10, tram-2"
+            "description": "Train type id: regional-3, express-6, freight-10, freight-4, tram-2"
           },
           "color": {
             "type": "string",
@@ -1046,6 +1059,34 @@
             "type": "number",
             "minimum": 0,
             "maximum": 20
+          },
+          "supplies": {
+            "default": {},
+            "description": "Goods sent out from there (loads per hour), by freight train or lorry",
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]*$"
+            },
+            "additionalProperties": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 500
+            }
+          },
+          "demands": {
+            "default": {},
+            "description": "Goods delivered there (loads per hour)",
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]*$"
+            },
+            "additionalProperties": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 500
+            }
           }
         },
         "required": [
@@ -1054,6 +1095,62 @@
         ],
         "additionalProperties": false
       }
+    },
+    "freight": {
+      "description": "Deliveries: goods supplied and demanded by buildings and off-layout places move by road and by freight train",
+      "default": {},
+      "type": "object",
+      "properties": {
+        "vehicles": {
+          "description": "Delivery vans and lorries; default a few of each when anything needs delivering by road. Idle ones drive about until given a job",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "description": "What these vehicles are called, e.g. \"Post van\"; default \"Delivery van\" or \"Lorry\" (from the object)",
+                "type": "string",
+                "minLength": 1
+              },
+              "object": {
+                "default": "van",
+                "description": "Object id drawn as the vehicle",
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]*$"
+              },
+              "count": {
+                "default": 2,
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 40
+              },
+              "capacity": {
+                "default": 6,
+                "description": "Loads it carries at once",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              },
+              "goods": {
+                "description": "Only these goods (default: any)",
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]*$"
+                }
+              },
+              "color": {
+                "description": "Colour of these vehicles; default one picked per vehicle",
+                "type": "string",
+                "pattern": "^#[0-9a-fA-F]{6}$"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
     },
     "people": {
       "default": {},
@@ -1190,6 +1287,32 @@
                 "items": false,
                 "minItems": 2,
                 "maxItems": 2
+              },
+              "supplies": {
+                "description": "Goods it sends out, in loads per hour, e.g. { \"food\": 8 } for a farm; lorries and vans collect them",
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]*$"
+                },
+                "additionalProperties": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 500
+                }
+              },
+              "demands": {
+                "description": "Goods it needs delivered, in loads per hour, e.g. { \"food\": 3, \"mail\": 1 } for a shop",
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]*$"
+                },
+                "additionalProperties": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 500
+                }
               }
             },
             "required": [
@@ -1816,6 +1939,32 @@
                 "items": false,
                 "minItems": 2,
                 "maxItems": 2
+              },
+              "supplies": {
+                "description": "Goods it sends out, in loads per hour, e.g. { \"food\": 8 } for a farm; lorries and vans collect them",
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]*$"
+                },
+                "additionalProperties": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 500
+                }
+              },
+              "demands": {
+                "description": "Goods it needs delivered, in loads per hour, e.g. { \"food\": 3, \"mail\": 1 } for a shop",
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]*$"
+                },
+                "additionalProperties": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 500
+                }
               }
             },
             "additionalProperties": false

@@ -14,6 +14,7 @@ import { planLots, lotPoints, lotIssue } from "./parking";
 import { type Town, buildTown } from "./town";
 import { type BusNet, buildBusStops, buildBusLines, emptyBusNet } from "./buses";
 import { type OffLayout, findExits, buildOffLayout } from "./exits";
+import { type FreightNet, buildFreight, emptyFreightNet } from "./freight";
 import {
   type Issue, type Report, type TrackPoint, error, makeReport, zodIssues, checkReferences, checkJunctionPosition,
   checkBounds, checkConflicts, checkStations, checkServices,
@@ -46,6 +47,7 @@ export type World = {
   town: Town;                         // buildings, parking bays, station access and the residents
   buses: BusNet;                      // bus stops and the lines calling at them
   offLayout: OffLayout;               // where lines leave the board, and the places beyond
+  freight: FreightNet;                // goods yards, what is sent and needed where, docks and the delivery fleet
   stats: Record<string, number>;
 };
 
@@ -176,9 +178,14 @@ export function buildWorld(json: unknown): { world: World | null; report: Report
   // Bus lines, calling at the sides of stops people can walk to where they can.
   issues.push(...buildBusLines(busCtx, buses, (side) => town.town.stops[side]?.access != null));
   if (hasErrors(issues)) return { world: null, report: makeReport(issues) };
+  // Freight: goods yards, who sends and needs what, where lorries stop, and the fleet.
+  const freighted = built.net
+    ? buildFreight({ layout, tracks, profiles, roads, walks, buses, town: town.town, off: offLayout, objects, lots: busCtx.lots })
+    : { net: emptyFreightNet(), issues: [] };
+  issues.push(...freighted.issues);
   const world: World = {
     layout, tracks, order, junctions, graph, profiles, spans, terrain, points, pointHash, stations, routes, objects,
-    scenery: placed.placements, roads, walks, town: town.town, buses, offLayout, stats: {},
+    scenery: placed.placements, roads, walks, town: town.town, buses, offLayout, freight: freighted.net, stats: {},
   };
   world.stats = computeStats(world);
   return { world, report: makeReport(issues, world.stats) };
@@ -208,7 +215,7 @@ function computeStats(w: World): Record<string, number> {
   const through = throughTraffic(w);
   const meanTris = (ids: string[]) => ids.reduce((a, id) => a + (w.objects.get(id)?.mesh.triangles ?? 0), 0) / Math.max(1, ids.length);
   const vehicleTris = through * meanTris(w.layout.traffic.vehicles) + ownCars * meanTris(w.layout.people.vehicles)
-    + w.buses.lines.reduce((a, l) => a + l.count * meanTris([l.vehicle]), 0);
+    + w.buses.lines.reduce((a, l) => a + l.count * meanTris([l.vehicle]), 0) + w.freight.fleet.reduce((a, f) => a + f.count * meanTris([f.object]), 0);
   // Triangle budget: terrain grid + skirt, scenery objects, track (sleepers, rails, ballast), roads
   // (surface, verges, markings), trains, vehicles, platforms.
   const triangles = 2 * w.terrain.nx * w.terrain.ny + 4 * (w.terrain.nx + w.terrain.ny) + objectTris
@@ -225,6 +232,8 @@ function computeStats(w: World): Record<string, number> {
     buildings: w.town.buildings.length, people, cars: ownCars, parkingBays: w.town.bays.length, carParks: w.town.lots.length, throughTraffic: through,
     busStops: w.buses.stops.length, busLines: w.buses.lines.length, buses: w.buses.lines.reduce((a, l) => a + l.count, 0),
     exits: w.offLayout.exits.length, offLayoutPlaces: w.offLayout.places.length,
+    freightYards: w.freight.yards.length, freightSites: w.freight.sites.filter((s) => s.kind !== "yard").length,
+    deliveryVehicles: w.freight.fleet.reduce((a, f) => a + f.count, 0),
     objects: w.scenery.length, trees, triangles,
   };
 }

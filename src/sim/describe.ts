@@ -1,16 +1,20 @@
 // Plain descriptions of what is on the board, for the inspect panel, the console
 // (window.dr) and tests: a person (who they are, where they live and work, what
 // they are doing), a building (who lives, works and is inside there), a vehicle
-// (whose it is, where it is going; a bus's line, stops and passengers), a train
-// (where it is going, who is aboard) and a bus stop (its lines, who is waiting) —
+// (whose it is, where it is going; a bus's line, stops and passengers; a delivery
+// van's job and load), a train (where it is going, who or what is aboard), a bus
+// stop (its lines, who is waiting) and a goods yard (what waits there) —
 // including whatever is out of sight off the board, at the off-layout places.
 
 import type { Sim } from "./sim";
 import type { Place } from "./planner";
+import type { Consignment } from "./freight";
 import { displayName } from "../model/roads";
+import { goodsName, WAGON_LOADS } from "../model/catalog";
+import { siteName } from "../model/freight";
 import { nextStopOf } from "./trains";
 
-export type Ref = { person?: number; building?: number; vehicle?: number; train?: number; stop?: number };
+export type Ref = { person?: number; building?: number; vehicle?: number; train?: number; stop?: number; yard?: number };
 export type InfoLine = { label: string; text: string } & Ref;
 export type InfoItem = { text: string } & Ref;
 export type Info = { title: string; subtitle: string; lines: InfoLine[]; lists: Array<{ title: string; items: InfoItem[] }> };
@@ -143,6 +147,14 @@ export function describeBuilding(sim: Sim, id: number): Info {
   lists.push({ title: `Inside now (${inside.length})`, items: inside.map((x) => ({ text: town.people[x.id].name, person: x.id })) });
   const lines: InfoLine[] = [];
   if (!b.access && !b.bays.length) lines.push({ label: "Access", text: "no walkway or parking nearby" });
+  const yard = sim.world.freight.yards.findIndex((y) => y.building === id);
+  if (yard >= 0) lines.push({ label: "Yard", text: sim.world.freight.yards[yard].name, yard });
+  const site = sim.world.freight.buildingSite.get(id);
+  if (site !== undefined) {
+    const f = freightLines(sim, site);
+    lines.push(...f.lines);
+    lists.push(...f.lists);
+  }
   return { title: b.name, subtitle: `${b.kind} · ${b.functions.join(", ")}`, lines, lists };
 }
 
@@ -157,6 +169,7 @@ export function describeVehicle(sim: Sim, ci: number): Info {
   const what = car.object.replace(/-/g, " ");
   const lines: InfoLine[] = [];
   if (car.line >= 0) return describeBus(sim, ci);
+  if (car.fleet >= 0) return describeDelivery(sim, ci);
   if (car.owner < 0) return { title: what[0].toUpperCase() + what.slice(1), subtitle: "through traffic", lines: [{ label: "Driver", text: "passing through from off the board" }], lists: [] };
   const owner = sim.world.town.people[car.owner];
   if (car.state === "driving" || car.state === "entering") {
@@ -196,7 +209,108 @@ export function describeTrain(sim: Sim, ti: number): Info {
     return { text: `${town.people[id].name}${to}`, person: id };
   });
   const subtitle = `${article(t.plan.svc.train)} on ${t.plan.svc.id}${t.off >= 0 ? ", off the board" : ""}`;
+  if (t.plan.type.shape === "freight") {
+    // A freight train: its goods, by where they come off.
+    const goods = sim.freight.onTrain(ti);
+    const capacity = (t.plan.cars.length - 1) * WAGON_LOADS;
+    const load = goods.reduce((a, c) => a + c.amount, 0);
+    const cargo = goods.map((c) => ({ text: `${loads(c.amount, c.goods)} → ${siteName(sim.freight.sites[c.legs[c.leg].to])}${c.legs[c.leg].to !== c.to ? ` (for ${siteName(sim.freight.sites[c.to])})` : ""}` }));
+    return { title: `Train ${t.id}`, subtitle, lines, lists: [{ title: `Goods (${load} of ${capacity} loads)`, items: cargo }] };
+  }
   return { title: `Train ${t.id}`, subtitle, lines, lists: [{ title: `Passengers (${riders.length})`, items }] };
+}
+
+// ---------------------------------------------------------------------------
+// Freight
+
+/** "3 loads of food". */
+export const loads = (n: number, goods: string) => `${n} load${n === 1 ? "" : "s"} of ${goodsName(goods)}`;
+
+/** A freight site by name, linked to its building or yard. */
+function siteRef(sim: Sim, site: number): Ref {
+  const s = sim.freight.sites[site];
+  return s.kind === "building" ? { building: s.ref } : s.kind === "yard" ? { yard: s.ref } : {};
+}
+
+/** Where a consignment is and what is happening to it, in a few words. */
+export function freightStatus(sim: Sim, c: Consignment): string {
+  const sites = sim.freight.sites;
+  const leg = c.legs[c.leg];
+  if (c.state === "carried") {
+    if (c.train >= 0) return `on train ${sim.trains[c.train].id} to ${siteName(sites[leg.to])}`;
+    const f = sim.world.freight.fleet[sim.traffic.cars[c.vehicle].fleet];
+    return `in a ${f.name.toLowerCase()} to ${siteName(sites[leg.to])}`;
+  }
+  const at = siteName(sites[leg.from]);
+  if (c.state === "assigned") return `waiting at ${at} for the ${sim.world.freight.fleet[sim.traffic.cars[c.vehicle].fleet].name.toLowerCase()} on its way`;
+  return leg.mode === "rail" ? `waiting at ${at} for a freight train` : c.leg === 0 ? `ready at ${at} for collection` : `waiting at ${at} for a lorry`;
+}
+
+/** What a building sends out and needs, and the goods on their way there (none: it has no part in freight). */
+function freightLines(sim: Sim, site: number): { lines: InfoLine[]; lists: Info["lists"] } {
+  const f = sim.freight;
+  const s = f.sites[site];
+  const lines: InfoLine[] = [];
+  const rate = (r: { goods: string; rate: number }) => `${goodsName(r.goods)} ${r.rate}`;
+  if (s.supplies.length) {
+    const ready = s.supplies.map((r) => `${Math.floor(f.stock[site][f.goods.indexOf(r.goods)])} ${goodsName(r.goods)}`).join(", ");
+    lines.push({ label: "Sends out", text: `${s.supplies.map(rate).join(", ")} loads an hour (ready now: ${ready})` });
+  }
+  if (s.demands.length) lines.push({ label: "Needs", text: `${s.demands.map(rate).join(", ")} loads an hour` });
+  if (!s.dock && s.kind === "building") lines.push({ label: "Deliveries", text: "no road near enough for a lorry to stop" });
+  const inbound = f.inbound(site);
+  const outbound = f.at(site).filter((c) => c.legs[c.leg].from === site && c.from === site);
+  const lists: Info["lists"] = [];
+  if (s.demands.length) lists.push({ title: `Goods on the way here (${inbound.length})`, items: inbound.map((c) => ({ text: `${loads(c.amount, c.goods)} from ${siteName(f.sites[c.from])}: ${freightStatus(sim, c)}`, ...siteRef(sim, c.from) })) });
+  if (s.supplies.length) lists.push({ title: `Waiting to go out (${outbound.length})`, items: outbound.map((c) => ({ text: `${loads(c.amount, c.goods)} for ${siteName(f.sites[c.to])}`, ...siteRef(sim, c.to) })) });
+  return { lines, lists };
+}
+
+function describeDelivery(sim: Sim, ci: number): Info {
+  const car = sim.traffic.cars[ci];
+  const f = sim.world.freight.fleet[car.fleet];
+  const freight = sim.freight;
+  const job = freight.jobs.get(ci);
+  const lines: InfoLine[] = [{ label: "Carries", text: `up to ${f.capacity} loads${f.goods ? ` of ${f.goods.map(goodsName).join(", ")}` : ""}` }];
+  const out = car.depot >= 0 ? sim.world.offLayout.exits[car.depot] : null;
+  let subtitle = out ? `waiting off the board (beyond ${out.kind === "road" ? displayName(sim.world.roads.roads.get(out.line)!.spec) : out.line}) for a job`
+    : car.hidden ? "off the board" : car.target?.kind === "park" ? "going off the board to wait for a job" : "driving about, free for a job";
+  if (job) {
+    const stop = job.stops[job.at];
+    const name = siteName(freight.sites[stop.site]);
+    const here = car.dwelling;
+    const doing = stop.pickup.length ? (here ? "loading at" : "on its way to collect at") : here ? "unloading at" : "delivering to";
+    lines.push({ label: "Now", text: `${doing} ${name}`, ...siteRef(sim, stop.site) });
+    const then = job.stops.slice(job.at + 1).map((x) => siteName(freight.sites[x.site]));
+    if (then.length) lines.push({ label: "Then", text: then.join(", ") });
+    subtitle = car.state === "entering" ? "coming on to the board for a delivery" : car.hidden ? "off the board, on a delivery" : here ? (stop.pickup.length ? "loading" : "unloading") : "on a delivery";
+  }
+  const load = freight.inVehicle(ci);
+  const aboard = load.filter((c) => c.state === "carried");
+  const items = load.map((c) => ({ text: `${loads(c.amount, c.goods)} → ${siteName(freight.sites[c.legs[c.leg].to])}${c.state === "carried" ? "" : " (to collect)"}`, ...siteRef(sim, c.legs[c.leg].to) }));
+  return { title: f.name, subtitle, lines, lists: [{ title: `Load (${aboard.reduce((a, c) => a + c.amount, 0)} of ${f.capacity})`, items }] };
+}
+
+export function describeYard(sim: Sim, k: number): Info {
+  const world = sim.world;
+  const y = world.freight.yards[k];
+  const site = world.freight.yardSite[k];
+  const freight = sim.freight;
+  const lines: InfoLine[] = [];
+  lines.push({ label: "Lorries stop", text: y.dock ? `on ${displayName(world.roads.roads.get(y.dock.road)!.spec)}` : "nowhere: no road along the dock" });
+  const services = world.layout.services.filter((s) => s.stops.includes(y.id)).map((s) => s.id);
+  lines.push({ label: "Freight trains", text: services.join(", ") || "none call here" });
+  if (y.building >= 0) lines.push({ label: "Goods shed", text: world.town.buildings[y.building].name, building: y.building });
+  const waiting = freight.at(site);
+  const total = waiting.reduce((a, c) => a + c.amount, 0);
+  const lorries = [...freight.jobs.values()].filter((j) => j.stops.slice(j.at).some((x) => x.site === site));
+  return {
+    title: y.name, subtitle: "goods yard", lines,
+    lists: [
+      { title: `On the dock (${total} load${total === 1 ? "" : "s"})`, items: waiting.map((c) => ({ text: `${loads(c.amount, c.goods)} for ${siteName(freight.sites[c.to])}: ${freightStatus(sim, c)}`, ...siteRef(sim, c.to) })) },
+      { title: `Lorries coming (${lorries.length})`, items: lorries.map((j) => ({ text: world.freight.fleet[sim.traffic.cars[j.car].fleet].name, vehicle: j.car })) },
+    ],
+  };
 }
 
 function describeBus(sim: Sim, ci: number): Info {

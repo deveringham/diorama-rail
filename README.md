@@ -7,8 +7,11 @@ often a job and perhaps a car, and runs errands — to work, home, the shops, a
 stroll — walking, driving from parking bay to parking bay, or taking the train
 or the bus, whichever is quickest. The board is a piece of a bigger world: lines
 that run off its edge lead to towns beyond, where trains and buses call and
-people go to work, out of sight, and come back. Click anyone (or any building,
-car, bus, train or bus stop) to see who they are and what they are doing. A layout is one JSON file; everything visible is derived
+people go to work, out of sight, and come back. Goods move too: farms, shops,
+homes and the towns beyond send and need food, mail and goods, carried by
+delivery vans and lorries and by freight trains through goods yards. Click anyone
+(or any building, vehicle, train, bus stop or goods yard) to see who they are and
+what they are doing. A layout is one JSON file; everything visible is derived
 from it plus a seed — including its scenery objects, which are themselves small
 JSON models built from primitives. Layouts and objects can be validated, simulated and screenshotted
 from the command line, so an LLM (or you) can write and repair them in a loop.
@@ -47,7 +50,7 @@ calls and triangles, and this list of controls with the current state of each.
 | `S` | shadows on/off |
 | `H` | hide / show the HUD (shown by default; hidden in screenshots) |
 | `R` | auto-rotate on/off |
-| click | inspect a person, building, car, bus, train or bus stop (names in the panel are links); `Esc` closes |
+| click | inspect a person, building, car, bus, delivery van, train, bus stop or goods yard (names in the panel are links); `Esc` closes |
 
 In the browser console, `dr` holds the API plus `world`, `sim`, `scene`,
 `renderer`, `camera` and `inspector`, e.g. `dr.query(dr.world).describe()` or
@@ -57,7 +60,7 @@ In the browser console, `dr` holds the API plus `world`, `sim`, `scene`,
 
 ```sh
 npm run check -- layouts/valley-loop.json [--json]          # validate; exit 1 on errors
-npm run simulate -- layouts/valley-loop.json --minutes 30   # per-service stops, speed, waits; traffic; buses; people; exit 1 on deadlock
+npm run simulate -- layouts/valley-loop.json --minutes 30   # per-service stops, speed, waits; traffic; buses; people; freight; exit 1 on deadlock
 npm run screenshot -- layouts/valley-loop.json --out shot.png --t 120 --view top --size 1600x1000
 npm run screenshot -- layouts/valley-loop.json --object windmill --out mill.png     # one object alone
 npm run screenshot -- layouts/valley-loop.json --object all --season winter         # every object
@@ -75,8 +78,8 @@ The same preview is live in the browser at `?layout=valley-loop&object=*`.
 
 Writing layouts: read [docs/LAYOUT_GUIDE.md](docs/LAYOUT_GUIDE.md) — coordinates,
 roads, parking and traffic, sidewalks and paths, buildings and people, buses,
-placing scenery, designing objects, rules of thumb, every validation code with a fix,
-and the authoring loop.
+lines off the board, freight and deliveries, placing scenery, designing objects,
+rules of thumb, every validation code with a fix, and the authoring loop.
 
 ## How it fits together
 
@@ -87,12 +90,13 @@ layout.json ─► model/  parse (zod) → refs → track geometry (fillets, jun
                  │     foot crossings, station ends) → terrain shaping → conflicts, stations,
                  │     exits and off-layout places → routes → bus stops → scenery → town (buildings, doors,
                  │     parking bays, residents)
-                 │     → bus lines (routes over the lanes)
+                 │     → bus lines (routes over the lanes) → freight (yards, docks, the fleet)
                  ├───► sim/    blocks, per-service plans, trains, level crossings, road traffic,
-                 │             parked cars and buses, journey planner, people and their errands, fixed 1/30 s
-                 │             step, deadlock check; describe.ts for the inspect panel
-                 └───► scene/  three.js meshes built once; trains, vehicles, barriers, people,
-                               smoke, light updated per frame
+                 │             parked cars, buses and delivery vans, journey planner, people and their
+                 │             errands, freight (orders, consignments, jobs), fixed 1/30 s step,
+                 │             deadlock check; describe.ts for the inspect panel
+                 └───► scene/  three.js meshes built once; trains (and their loads), vehicles, barriers,
+                               people, crates, smoke, light updated per frame
 cli/ check | simulate | schema | screenshot        api.ts: the stable public API (also window.dr)
 ```
 
@@ -139,7 +143,7 @@ its centre, `lamp`-coloured parts for headlights) and list it in the layout's
    with `error(code, message, path, at?)` or `warning(...)`.
 2. `src/model/build.ts`: call it where its inputs exist, e.g.
    `issues.push(...checkSomething(layout, tracks));`.
-3. Add the code to `docs/LAYOUT_GUIDE.md` §11 and a failing fixture to
+3. Add the code to `docs/LAYOUT_GUIDE.md` §12 and a failing fixture to
    `test/validate.test.ts`.
 
 ## Notes on v0.1
@@ -316,6 +320,37 @@ visits. Nothing out there is drawn, but everything is still simulated:
   them later. The inspect panel and `describe()` say where everything is, on the
   board or off it.
 
+### Freight and deliveries
+
+![](docs/freight.png)
+
+Buildings and off-layout places send out and need goods (`supplies` and
+`demands`, loads per hour by goods id: mail, food, goods, drinks, …; the built-in
+farm, shops, inns, offices, homes, post office, warehouse and factory come with
+some). A station with `"kind": "freight"` is a **goods yard**: a loading dock
+beside the track with a goods shed on it and a road along its back, where lorries
+load and unload (`src/model/freight.ts`). Each building with freight gets a
+*dock* too: the place in a lane at the kerb nearest its door where a delivery
+vehicle stops.
+
+In the sim (`src/sim/freight.ts`) sources make stock and consumers order when
+their need builds up. Each order goes to a source with goods ready, chosen by how
+quickly the goods can come — straight by road, or by road to a yard, by freight
+train, and by road from the other end (straight to or from an off-layout place a
+freight train calls at) — and travels as consignments, leg by leg. The delivery
+fleet (`freight.vehicles`, or a few vans and lorries by default) waits off the
+board beyond a road leaving it (or, where none does, drives about like through
+traffic) until given a job: collect everything waiting at one place
+that fits, then drop off in turn, stopping in the lane at each dock while the
+traffic behind waits (`src/sim/traffic.ts`), or driving off the board for an
+off-layout place. Freight trains unload at each yard or off-layout stop what is
+for there and load what waits for a stop ahead, waiting while the goods are moved.
+
+Crates on the docks (and outside buildings with goods ready to go) and heaps in
+the wagons show the goods in their colours; the inspect panel describes a van's
+job and load, a freight train's goods, a yard's dock, and what a building sends,
+needs and has on its way. `simulate` prints a freight line.
+
 ### Interpretations and limitations
 - **Fixed routes.** A service follows one path through the graph. Two shuttles
   cannot choose either side of a passing loop, so `harbour-town` uses two
@@ -328,6 +363,15 @@ visits. Nothing out there is drawn, but everything is still simulated:
   one go, which prevents head-on deadlocks on shared single track.
 - Because routes are fixed, car positions are computed by walking back along the
   route path rather than via a ring buffer of the head's history.
+- **Freight is scheduled, not dispatched.** Freight trains run their services
+  like passenger trains and carry whatever waits for a stop ahead; they are not
+  sent anywhere on demand. Delivery vehicles stop in the lane (there are no
+  loading bays; the traffic behind waits, with no overtaking) and turn round at
+  dead ends or off the board's edge; between jobs they wait off the board, or
+  wander like through traffic where no road leaves it. On a small, busy network
+  they add to the queues at junctions. A goods yard on a single-track main line
+  holds up other trains while a freight train stands there, so give yards a
+  siding or branch.
 - Shuttle ends: the farthest stop on the route's end track (train centred on the
   platform), else the buffer stop; a loop end track without stops turns round
   half a lap from the junction.

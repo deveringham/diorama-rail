@@ -165,7 +165,7 @@ describe.each([
 ])("%s traffic", (_, make) => {
   const { world } = buildWorld(make());
   const sim = new Sim(world!);
-  const snap: SimSnapshot = { time: 0, trains: [], switches: [], blocks: [], vehicles: [], gates: [], people: [] };
+  const snap: SimSnapshot = { time: 0, trains: [], switches: [], blocks: [], vehicles: [], gates: [], people: [], freight: { goods: [], yards: [], stock: [], trains: [] } };
   let overlaps = 0;
   let unsafe = 0;
   const closedSeen = new Set<number>();
@@ -199,7 +199,7 @@ describe.each([
     expect(st.stuck).toBe(0);
     expect(st.maxWait).toBeLessThan(120);
     expect(st.avgSpeed).toBeGreaterThan(3);
-    for (const c of sim.traffic.cars) if (c.owner < 0) expect(c.odometer, `car ${c.index}`).toBeGreaterThan(500);
+    for (const c of sim.traffic.cars) if (c.owner < 0 && c.fleet < 0) expect(c.odometer, `car ${c.index}`).toBeGreaterThan(500);   // (delivery vans may wait off the board)
   });
 
   it("does not hold up the trains", () => {
@@ -209,6 +209,7 @@ describe.each([
     L.parking = [];
     L.busStops = [];
     L.busLines = [];
+    for (const st of L.stations) delete st.road;          // goods yards' roads are gone too
     // Off-layout places now reached only by rail.
     const places = (L.offLayout ?? []).map((p) => ({ ...p, via: p.via.filter((v) => v.track) })).filter((p) => p.via.length);
     L.offLayout = places;

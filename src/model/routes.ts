@@ -273,7 +273,8 @@ export function locate(route: RoutePath, tracks: Map<string, TrackGeom>, r: numb
 /**
  * Where a shuttle turns round. Each end is the farthest stop on the end track
  * (so the train is centred on that platform), else the track end, else for a
- * loop end track the point half a lap from the junction.
+ * loop end track the point half a lap from the junction. A single line leaving
+ * the board at one end with one stop on it turns at that stop.
  */
 function shuttleEnds(
   ids: string[], hopsChosen: Hop[], tracks: Map<string, TrackGeom>,
@@ -290,9 +291,15 @@ function shuttleEnds(
     const at = on(first);
     const ends = at.length >= 2 ? { start: clampLine(first, Math.min(...at) - trainLen / 2), end: clampLine(first, Math.max(...at) + trainLen / 2) }
       : first.path.closed ? { start: 0, end: L0 / 2 } : { start: BUFFER_MARGIN, end: L0 - BUFFER_MARGIN };
-    // An end that leaves the board: the trains run off it.
-    if (!first.path.closed && exit(first.id, 0)) ends.start = 0;
-    if (!first.path.closed && exit(first.id, 1)) ends.end = L0;
+    // An end that leaves the board: the trains run off it (and with one stop on the board, turn at that stop).
+    const out0 = !first.path.closed && exit(first.id, 0);
+    const out1 = !first.path.closed && exit(first.id, 1);
+    if (at.length === 1 && out0 !== out1) {
+      if (out1) ends.start = clampLine(first, at[0] - trainLen / 2);
+      else ends.end = clampLine(first, at[0] + trainLen / 2);
+    }
+    if (out0) ends.start = 0;
+    if (out1) ends.end = L0;
     return ends;
   }
 

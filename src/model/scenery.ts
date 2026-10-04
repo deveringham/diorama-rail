@@ -23,6 +23,8 @@ import type { Season } from "../scene/palette";
 export const PLATFORM_OFFSET = 3.7;     // m from track centre to platform centre line
 export const PLATFORM_WIDTH = 4;
 export const PLATFORM_TOP = 0.9;        // platform surface above track z
+export const DOCK_OFFSET = 5.2;         // m from track centre to a freight yard's dock centre line
+export const DOCK_WIDTH = 7;            // its width: from the track's loading gauge to the road side
 const STATION_GAP = 1.5;                // m between platform and station building
 const TRACK_GAP = 2;                    // placed objects keep this far from track centres (loading gauge)
 const SCATTER_TRACK_GAP = 6;            // scattered items keep further away
@@ -54,11 +56,18 @@ export type Placement = {
 export type StationGeom = {
   id: string;
   name: string;
+  kind: "passenger" | "freight";
   track: string;
   s0: number;
   s1: number;
   sides: Array<1 | -1>;                    // +1 = left of the track direction
+  offset: number;                          // m from the track centre to the platform's (or dock's) centre line
+  width: number;                           // m across it
 };
+
+/** Where a station's platforms (or a yard's dock) lie across the track: centre line and width. */
+export const platformBand = (kind: "passenger" | "freight") =>
+  kind === "freight" ? { offset: DOCK_OFFSET, width: DOCK_WIDTH } : { offset: PLATFORM_OFFSET, width: PLATFORM_WIDTH };
 
 /** Every object a layout can use: the built-in library, overridden or extended by the layout's own. */
 export function objectCatalog(custom: Record<string, ObjectDef>, season: Season): Map<string, ObjectInfo> {
@@ -69,7 +78,7 @@ export function objectCatalog(custom: Record<string, ObjectDef>, season: Season)
 export function buildStations(layout: Layout): StationGeom[] {
   return layout.stations.map((st) => {
     const sides: Array<1 | -1> = st.side === "both" ? [-1, 1] : st.side === "left" ? [1] : [-1];
-    return { id: st.id, name: st.name, track: st.track, s0: st.at - st.length / 2, s1: st.at + st.length / 2, sides };
+    return { id: st.id, name: st.name, kind: st.kind, track: st.track, s0: st.at - st.length / 2, s1: st.at + st.length / 2, sides, ...platformBand(st.kind) };
   });
 }
 
@@ -88,7 +97,7 @@ export function stationEntries(
   for (const st of layout.stations) {
     const t = tracks.get(st.track);
     const prof = profiles.get(st.track);
-    if (!t || !prof) continue;
+    if (!t || !prof || st.kind === "freight") continue;     // a goods yard has no platform for people
     const home: 1 | -1 = st.side === "left" ? 1 : -1;       // the building's side ("both": the right)
     const L = t.path.length;
     const at = (s0: number, side: 1 | -1): StationEntry => {
@@ -174,12 +183,15 @@ export function placeScenery(ctx: Context): { placements: Placement[]; issues: I
       return { x: px - Math.sin(h) * lateral, y: py + Math.cos(h) * lateral, h };
     };
     const building = st.building ? objects.get(st.building) : undefined;
+    const yard = st.kind === "freight";
     if (building) {
-      // The building faces the track; its front edge stands just behind the platform.
+      // The building faces the track; its front edge stands just behind the platform (a yard's
+      // shed stands on the dock, its back to the dock's road side).
       const sd = sides[0];
-      const p = at(st.at, sd * (PLATFORM_OFFSET + PLATFORM_WIDTH / 2 + STATION_GAP + building.mesh.max[0]));
+      const lateral = yard ? DOCK_OFFSET + DOCK_WIDTH / 2 - 0.2 + building.mesh.min[0] : PLATFORM_OFFSET + PLATFORM_WIDTH / 2 + STATION_GAP + building.mesh.max[0];
+      const p = at(st.at, sd * lateral);
       const rot = p.h - sd * (Math.PI / 2);
-      const z = groundZ(terrain, p.x, p.y);
+      const z = yard ? profileZ(ctx.profiles.get(st.track)!, st.at) + PLATFORM_TOP : groundZ(terrain, p.x, p.y);
       const box = boxOf(building, p.x, p.y, rot, 1);
       const road = nearestRoad(ctx.roadHash, box, z);
       if (road && road.d < ROAD_GAP) {
@@ -193,7 +205,7 @@ export function placeScenery(ctx: Context): { placements: Placement[]; issues: I
       solids.push({ box, path: `stations[${i}].building`, object: st.building!, flat: false });
     }
     const bench = objects.get("bench");
-    for (const sd of bench ? sides : []) {
+    for (const sd of bench && !yard ? sides : []) {
       for (let s = st.at - st.length * 0.25; s <= st.at + st.length * 0.25; s += 18) {
         const p = at(s, sd * (PLATFORM_OFFSET + 1.1));
         add("bench", p.x, p.y, profileZ(ctx.profiles.get(st.track)!, s) + PLATFORM_TOP, p.h - sd * (Math.PI / 2), 1, tintFor(bench!, r), false, -1);
@@ -351,7 +363,7 @@ function nearestTrack(hash: SpatialHash<TrackPoint>, box: Box): { d: number; tra
 
 /** Platform strips, so objects placed on a platform stand on its surface. */
 function platformHash(ctx: Context) {
-  const hash = new SpatialHash<{ x: number; y: number; z: number }>(10);
+  const hash = new SpatialHash<{ x: number; y: number; z: number; half: number }>(10);
   for (const st of ctx.stations) {
     const t = ctx.tracks.get(st.track)!;
     const prof = ctx.profiles.get(st.track)!;
@@ -359,17 +371,17 @@ function platformHash(ctx: Context) {
       for (let s = st.s0; s <= st.s1; s += 1) {
         const [px, py] = pointAt(t.path, s);
         const h = headingAt(t.path, s);
-        hash.insert(px - Math.sin(h) * sd * PLATFORM_OFFSET, py + Math.cos(h) * sd * PLATFORM_OFFSET, {
-          x: px - Math.sin(h) * sd * PLATFORM_OFFSET, y: py + Math.cos(h) * sd * PLATFORM_OFFSET, z: profileZ(prof, s) + PLATFORM_TOP,
-        });
+        const x = px - Math.sin(h) * sd * st.offset;
+        const y = py + Math.cos(h) * sd * st.offset;
+        hash.insert(x, y, { x, y, z: profileZ(prof, s) + PLATFORM_TOP, half: st.width / 2 });
       }
     }
   }
   return {
-    /** Platform surface height if (x, y) is on a platform, else null. */
+    /** Platform (or dock) surface height if (x, y) is on one, else null. */
     find(x: number, y: number): number | null {
       let z: number | null = null;
-      hash.near(x, y, PLATFORM_WIDTH, (p) => { if (Math.hypot(p.x - x, p.y - y) <= PLATFORM_WIDTH / 2) z = p.z; });
+      hash.near(x, y, DOCK_WIDTH, (p) => { if (Math.hypot(p.x - x, p.y - y) <= p.half) z = p.z; });
       return z;
     },
   };

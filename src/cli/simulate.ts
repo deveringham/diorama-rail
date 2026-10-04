@@ -40,6 +40,12 @@ if (values.json) {
     console.log(`  now: ${pp.outside} outside (${pp.walking} walking, ${pp.waiting} on platforms, ${pp.atStops} at bus stops), ${pp.driving} driving, ${pp.riding} on trains, ${pp.onBus} on buses, ${pp.away} off the board`
       + (pp.maxStopWait ? `; longest wait at a bus stop ${pp.maxStopWait.toFixed(0)} s` : ""));
   }
+  const fr = res.freight;
+  if (fr) {
+    console.log(`freight: ${fr.orders} orders, ${fr.delivered} deliveries (${fr.loads} loads; ${fr.byRoad} by road, ${fr.byRail} by freight train), avg ${(fr.avgTime / 60).toFixed(1)} min from order to door;`
+      + ` ${fr.underWay} under way (${fr.waiting} waiting, ${fr.onTrains} loads on trains); ${fr.busy} of ${fr.vehicles} delivery vehicles busy`
+      + (fr.unserved ? `; ${fr.unserved} orders nothing could reach` : "") + (fr.lost ? `; ${fr.lost} LOST` : ""));
+  }
   if (res.deadlock) console.log(`\nDEADLOCK: ${res.deadlock.message}`);
 }
 process.exit(res.report.ok && !res.deadlock ? 0 : 1);

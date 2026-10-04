@@ -124,6 +124,7 @@ function portal(g: GeoBuilder, f: Frame, into: number, clear: number): void {
 function station(world: World, g: GeoBuilder, st: World["stations"][number]): void {
   const n = Math.max(2, Math.round((st.s1 - st.s0) / STEP));
   const fr = Array.from({ length: n + 1 }, (_, i) => frameAt(world, st.track, st.s0 + ((st.s1 - st.s0) * i) / n));
+  if (st.kind === "freight") { dock(g, st, fr); return; }
   for (const sd of st.sides) {
     const inner = sd * (PLATFORM_OFFSET - PLATFORM_WIDTH / 2);
     const outer = sd * (PLATFORM_OFFSET + PLATFORM_WIDTH / 2);
@@ -148,6 +149,30 @@ function station(world: World, g: GeoBuilder, st: World["stations"][number]): vo
       const f = frameAt(world, st.track, c0 + ((c1 - c0) * (i + 0.5)) / m);
       const [x, y, z] = side(f, sd * PLATFORM_OFFSET, PLATFORM_TOP + CANOPY_HEIGHT);
       g.box(x, y, z, (c1 - c0) / m + 0.05, PLATFORM_WIDTH + 0.4, 0.3, f.h, PALETTE.canopy);
+    }
+  }
+}
+
+/** A goods yard's loading dock: a wide concrete slab at platform height, with a kerb on the track side. */
+function dock(g: GeoBuilder, st: World["stations"][number], fr: Frame[]): void {
+  for (const sd of st.sides) {
+    const inner = sd * (st.offset - st.width / 2);
+    const outer = sd * (st.offset + st.width / 2);
+    const edge = sd * (st.offset - st.width / 2 + 0.5);
+    const n = fr.length - 1;
+    for (let i = 0; i < n; i++) {
+      const [a, b] = sd > 0 ? [fr[i], fr[i + 1]] : [fr[i + 1], fr[i]];
+      const p = (f: Frame, l: number, z: number) => side(f, l, z);
+      g.quad(p(a, edge, PLATFORM_TOP), p(b, edge, PLATFORM_TOP), p(b, outer, PLATFORM_TOP), p(a, outer, PLATFORM_TOP), PALETTE.dock);
+      g.quad(p(a, inner, PLATFORM_TOP), p(b, inner, PLATFORM_TOP), p(b, edge, PLATFORM_TOP), p(a, edge, PLATFORM_TOP), PALETTE.dockEdge);
+      g.quad(p(a, inner, -0.6), p(b, inner, -0.6), p(b, inner, PLATFORM_TOP), p(a, inner, PLATFORM_TOP), PALETTE.dock, 0.8);
+      g.quad(p(b, outer, -1.5), p(a, outer, -1.5), p(a, outer, PLATFORM_TOP), p(b, outer, PLATFORM_TOP), PALETTE.dock, 0.75);
+    }
+    // Its ends: walls down to the ground.
+    for (const [f, k] of [[fr[0], -1], [fr[n], 1]] as const) {
+      const p = (l: number, z: number) => side(f, l, z);
+      const [x0, x1] = sd * k < 0 ? [outer, inner] : [inner, outer];
+      g.quad(p(x0, -1.5), p(x1, -1.5), p(x1, PLATFORM_TOP), p(x0, PLATFORM_TOP), PALETTE.dock, 0.85);
     }
   }
 }

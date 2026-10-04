@@ -122,3 +122,21 @@ export function withExits(): Fixture {
   L.busLines![0].stops = ["houses", "shops", "church-stop", "city"];
   return L;
 }
+
+/**
+ * The town with freight: a goods spur off the loop's west side leading off the board
+ * to the port, a goods yard on it with a road across the line to its dock, a farm by
+ * the main road, a freight shuttle between the yard and the port, and two vans and a
+ * lorry. The port sends goods and mail and wants the farm's food.
+ */
+export function withFreight(): Fixture {
+  const L = withTown();
+  L.tracks.push({ id: "goods-spur", kind: "line", minRadius: 60, from: { track: "main", at: 1763 }, points: [[0, 240]] });
+  L.stations.push({ id: "depot", name: "Depot", kind: "freight", track: "goods-spur", at: 159, length: 80, side: "right", road: "depot-road" });
+  L.roads!.push({ id: "depot-road", from: { road: "cross", at: "start" }, points: [[160, 400], [120, 262], [15, 262]] });
+  L.services.push({ id: "goods", train: "freight-4", route: ["goods-spur"], mode: "shuttle", stops: ["depot", "port"] });
+  L.offLayout = [{ id: "port", name: "The Port", via: [{ track: "goods-spur", distance: 1500 }], visits: 0, supplies: { goods: 30, mail: 40, drinks: 6 }, demands: { food: 10 } }];
+  L.scenery!.push({ object: "barn", at: [655, 250], rotation: 0, name: "Hill Farm" });
+  L.freight = { vehicles: [{ name: "Van", object: "van", count: 2, capacity: 6 }, { object: "truck", count: 1, capacity: 12 }] };
+  return L;
+}

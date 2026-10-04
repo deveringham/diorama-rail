@@ -71,7 +71,7 @@ type Edge = {
 };
 
 /** A binary min-heap of (key, value) pairs. */
-class Heap {
+export class Heap {
   private keys: number[] = [];
   private vals: number[] = [];
   get size(): number { return this.keys.length; }

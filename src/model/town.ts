@@ -19,6 +19,7 @@ import type { BuildingFunction } from "./objects";
 import { type BusNet, FRONT_PAST } from "./buses";
 import type { OffLayout } from "./exits";
 import type { TrackPoint } from "./validate";
+import { TRAIN_CATALOG, isTrainType } from "./catalog";
 import { type Issue, warning } from "./validate";
 import { SpatialHash } from "../util/spatial";
 import { rng, range, type Rng } from "../util/rng";
@@ -64,7 +65,9 @@ export type Building = {
   door: P3;
   access: Attach | null;
   bays: Array<{ bay: number; link: P3[]; length: number }>;   // bays its people reach straight from the door
-  station: string | null;              // the station it belongs to (a station building)
+  station: string | null;              // the station it belongs to (a station building, or a goods yard's shed)
+  supplies: Record<string, number>;    // goods it sends out, loads per hour
+  demands: Record<string, number>;     // goods it needs delivered, loads per hour
   where: string;                       // layout path, for issues
 };
 
@@ -183,11 +186,11 @@ export function buildTown(ctx: Ctx): { town: Town; issues: Issue[] } {
     const jobCount = functions.includes("workplace") ? meta.jobs ?? DEFAULT_JOBS : 0;
     buildings.push({
       id: buildings.length, placement: k, object: p.object,
-      name: station ? `${station.name} Station` : entry?.object && entry.name ? entry.name : "",
+      name: station ? (station.kind === "freight" ? station.name : `${station.name} Station`) : entry?.object && entry.name ? entry.name : "",
       kind: meta.kind ?? titleCase(p.object), functions,
       residents: functions.includes("accommodation") ? meta.residents ?? DEFAULT_RESIDENTS : 0,
       jobs: Array.from({ length: jobCount }, (_, j) => titles[Math.min(j, titles.length - 1)]),
-      at: [p.x, p.y, p.z], door, access: null, bays: [], station: station?.id ?? null,
+      at: [p.x, p.y, p.z], door, access: null, bays: [], station: station?.id ?? null, supplies: { ...meta.supplies }, demands: { ...meta.demands },
       where: station ? `stations[${layout.stations.indexOf(station)}].building` : `scenery[${p.entry}]`,
     });
   });
@@ -221,7 +224,7 @@ export function buildTown(ctx: Ctx): { town: Town; issues: Issue[] } {
   for (const st of layout.stations) {
     const t = ctx.tracks.get(st.track);
     const entries = ctx.stationEntries.get(st.id);
-    if (!t || !entries) continue;
+    if (!t || !entries || st.kind === "freight") continue;          // goods yards take no passengers
     const home: 1 | -1 = st.side === "left" ? 1 : -1;
     const sOf = (p: P3) => nearestS(t, p, st.at, st.length);
     const building = buildings.find((b) => b.station === st.id);
@@ -275,9 +278,10 @@ export function buildTown(ctx: Ctx): { town: Town; issues: Issue[] } {
 
   // --- people ------------------------------------------------------------------------
   const people = residents(ctx, buildings, bays, issues);
+  const passengerServices = layout.services.filter((s) => !isTrainType(s.train) || TRAIN_CATALOG[s.train].shape !== "freight");
   layout.stations.forEach((st, i) => {
     const access = stations.find((x) => x.station === st.id);
-    if (!people.length || access?.entrances.length || !layout.services.some((s) => s.stops.includes(st.id))) return;
+    if (!people.length || st.kind === "freight" || access?.entrances.length || !passengerServices.some((s) => s.stops.includes(st.id))) return;
     issues.push(warning("STATION_UNREACHABLE", `station '${st.id}' has no walkway within ${ACCESS_REACH} m of its platforms or building, so nobody can catch a train there; end a path at it ("to": { "station": "${st.id}" }) or run a sidewalk past it`, `stations[${i}]`));
   });
   ctx.buses.sides.forEach((side, k) => {

@@ -10,10 +10,11 @@ export { LayoutSchema, type Layout, layoutJsonSchema } from "./model/schema";
 export { buildWorld, validate, type World } from "./model/build";
 export type { Issue, Report } from "./model/validate";
 export { Sim, simulate, type SimReport, type SimSnapshot, type SimEvent } from "./sim/sim";
-export { describePerson, describeBuilding, describeVehicle, describeTrain, describeBusStop, doing, type Info } from "./sim/describe";
+export { describePerson, describeBuilding, describeVehicle, describeTrain, describeBusStop, describeYard, doing, type Info } from "./sim/describe";
 export { TRAIN_CATALOG } from "./model/catalog";
 export { OBJECT_LIBRARY } from "./model/objectLibrary";
 
+const f1 = (x: number) => (Math.round(x * 10) / 10).toString();
 const f0 = (x: number) => x.toFixed(0);
 
 export function query(world: World) {
@@ -184,6 +185,27 @@ export function query(world: World) {
           out.push(`  place ${p.id} "${p.name}" via ${via || "nothing"}; ${p.jobs.length} jobs, visits ${p.visits}`
             + (services.length ? `; trains ${services.join(", ")}` : "") + (lines.length ? `; buses ${lines.join(", ")}` : ""));
         }
+      }
+      const freight = world.freight;
+      if (freight.sites.length || freight.yards.length) {
+        out.push("Freight:");
+        for (const y of freight.yards) {
+          const services = L.services.filter((s) => s.stops.includes(y.id)).map((s) => s.id);
+          out.push(`  yard ${y.id} "${y.name}" on ${y.track} s=${f0(y.at - y.length / 2)}–${f0(y.at + y.length / 2)} (${y.side > 0 ? "left" : "right"} side); lorries stop ${y.dock ? `on ${y.dock.road} s=${f0(y.dock.s)}` : "NOWHERE (no road along the dock)"}; freight trains ${services.join(", ") || "none"}`);
+        }
+        for (const g of freight.goods) {
+          const who = (key: "supplies" | "demands") => freight.sites.filter((s) => s[key].some((r) => r.goods === g));
+          const list = (sites: typeof freight.sites, key: "supplies" | "demands") => {
+            const total = sites.reduce((a, s) => a + s[key].find((r) => r.goods === g)!.rate, 0);
+            const named = sites.filter((s) => s.kind !== "building" || world.town.buildings[s.ref].residents === 0)
+              .map((s) => `${s.name}${s.kind === "off" ? " (off)" : s.dock ? "" : " UNREACHABLE"}`);
+            const homes = sites.length - named.length;
+            return `${f1(total)}/h by ${[...named, ...(homes ? [`${homes} homes`] : [])].join(", ") || "nobody"}`;
+          };
+          out.push(`  ${g}: sent ${list(who("supplies"), "supplies")}; needed ${list(who("demands"), "demands")}`);
+        }
+        out.push(`  delivery vehicles: ${freight.fleet.map((f) => `${f.count}× ${f.name} (${f.object}, ${f.capacity} loads${f.goods ? `, ${f.goods.join("/")} only` : ""})`).join(", ") || "none"}`);
+        if (freight.services.length) out.push(`  freight trains: ${freight.services.join(", ")}`);
       }
       const counts = new Map<string, number>();
       for (const p of world.scenery) counts.set(p.object, (counts.get(p.object) ?? 0) + 1);

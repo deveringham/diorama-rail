@@ -6,7 +6,10 @@
 // is a gap and turning in at the end — or out over the board's edge, to an
 // off-layout place, and back. Buses go round their line's route, stopping in their
 // lane at each stop while people get on and off (and calling at off-layout places
-// out of sight beyond the edge). Level crossings warn, lower their barriers
+// out of sight beyond the edge). Delivery vans and lorries drive about like through
+// traffic until the freight sim sends them somewhere: they stop in the lane at a
+// building's or a goods yard's dock while they load or unload, or drive off the
+// board to an off-layout place and back. Level crossings warn, lower their barriers
 // once the road is clear and stay closed while a train is near; trains stop short
 // of a crossing that is not closed. Pure TypeScript, deterministic from the seed.
 
@@ -42,6 +45,8 @@ const LOCK_REACH = 8;           // m beyond braking distance at which a car asks
 const REROUTE_AFTER = 4;        // s waiting for room beyond a junction before trying another way
 const QUEUED = 2;               // m/s: slower than this, the car ahead counts as queueing
 const AWAY: [number, number] = [4, 16];   // s a car stays off the board
+const AWAY_COST = 30;           // s a delivery vehicle counts for turning round off the board
+const DEPOT_TIME = 20;          // s between the board's edge and where idle delivery vehicles wait off the board
 const SPAWN_GAP = 10;           // m between spawned cars, beyond their length
 const STUCK_AFTER = 120;        // s stationary before a car counts as stuck
 const BAY_SPEED = 2.5;          // m/s turning into or out of a bay
@@ -115,9 +120,19 @@ type OffSeg = {
 type Seg = Lane | Turn | Away | BaySeg | OffSeg;
 export type { Lane as TrafficLane };
 
+/** Where the freight sim has sent a delivery vehicle: a dock in a lane, off the board by a road exit (and back), or off the board to wait there. */
+type FleetTarget =
+  | { kind: "dock"; lane: Lane; d: number }
+  | { kind: "off"; exit: number; place: number; out: number; back: number }
+  | { kind: "park"; exit: number };
+
 type Car = {
   index: number;
   owner: number;                // person whose car it is, -1 for through traffic and buses
+  fleet: number;                // the delivery fleet it belongs to (world.freight.fleet), -1 if none
+  target: FleetTarget | null;   // delivery vehicle: where it is going; null while it drives about (or waits off the board)
+  called: boolean;              // delivery vehicle off the board: has made its call out there
+  depot: number;                // delivery vehicle waiting off the board (state "off"): the road exit it waits beyond, else -1
   offT: number;                 // s travelled on its current run off the board
   offPlace: number;             // the off-layout place where it is parked (state "off"), else -1
   line: number;                 // the bus line it serves (index into world.buses.lines), -1 if not a bus
@@ -184,6 +199,9 @@ export type TrafficStats = {
   busSkipped: number;           // stops buses drove past (0 unless something went wrong)
   own: number;                  // residents' cars
   driving: number;              // residents' cars on the road now
+  fleet: number;                // delivery vans and lorries
+  fleetStops: number;           // stops they made to load or unload
+  fleetDistance: number;        // m they drove
   ownDistance: number;          // m driven by residents' cars in all
   unplaced: number; avgSpeed: number; maxWait: number; stuck: number; closures: number; closedShare: number;
 };
@@ -209,6 +227,12 @@ export class Traffic {
   }> = [];
   /** Buses that could not be placed at the start. */
   busesUnplaced = 0;
+  /** Delivery vehicles that could not be placed at the start. */
+  fleetUnplaced = 0;
+  /** Delivery vehicles that reached where they were sent this tick (the freight sim reads and clears it). */
+  readonly fleetArrivals: number[] = [];
+  /** Delivery vehicles done standing there this tick, ready to be sent on (read and cleared by the freight sim). */
+  readonly fleetReady: number[] = [];
   readonly gates: Gate[] = [];
   readonly closed: Uint8Array;
   unplaced = 0;
@@ -258,6 +282,7 @@ export class Traffic {
     this.buildLines();
     this.spawnBuses();
     this.spawn();
+    this.spawnFleet();
     this.parkOwnCars();
   }
 
@@ -266,14 +291,16 @@ export class Traffic {
     return this.lanes;
   }
 
-  /** For each road exit (world.offLayout.exits id): the lane coming on to the board there and the lanes leaving by it. */
-  roadExitLanes(): Map<number, { enter: Lane | null; leave: Lane[] }> {
-    const out = new Map<number, { enter: Lane | null; leave: Lane[] }>();
+  /** For each road exit (world.offLayout.exits id): its dead-end node, the lane coming on to the board there and the lanes leaving by it. */
+  roadExitLanes(): Map<number, { node: number; enter: Lane | null; leave: Lane[] }> {
+    if (this.exitLanes) return this.exitLanes;
+    const out = new Map<number, { node: number; enter: Lane | null; leave: Lane[] }>();
     for (const [e, x] of roadExits(this.world.roads, this.world.offLayout, this.topo)) {
-      out.set(e, { enter: x.enter ? this.laneByKey.get(x.enter)! : null, leave: x.leave.map((k) => this.laneByKey.get(k)!) });
+      out.set(e, { node: x.node, enter: x.enter ? this.laneByKey.get(x.enter)! : null, leave: x.leave.map((k) => this.laneByKey.get(k)!) });
     }
-    return out;
+    return (this.exitLanes = out);
   }
+  private exitLanes: Map<number, { node: number; enter: Lane | null; leave: Lane[] }> | null = null;
 
   /** Lanes a car may take after `lane` without leaving the board. */
   nextLanes(lane: Lane): Lane[] {
@@ -314,7 +341,7 @@ export class Traffic {
   private newCar(object: string, path: Seg[]): Car {
     const mesh = this.world.objects.get(object)!.mesh;
     return {
-      index: this.cars.length, owner: -1, offT: 0, offPlace: -1, line: -1, seqPos: 0, nextVisit: 0, dwelling: false, dwellLeft: 0, heldFor: 0, stopCount: 0, skipped: 0,
+      index: this.cars.length, owner: -1, fleet: -1, target: null, called: false, depot: -1, offT: 0, offPlace: -1, line: -1, seqPos: 0, nextVisit: 0, dwelling: false, dwellLeft: 0, heldFor: 0, stopCount: 0, skipped: 0,
       state: "driving", bay: -1, goal: -1, exitD: NaN, waitMerge: 0, reversing: false, enterD: 0, trailLen: [],
       object, length: Math.max(1, mesh.max[0] - mesh.min[0]), width: mesh.max[1] - mesh.min[1], centre: (mesh.max[0] + mesh.min[0]) / 2, pace: range(this.r, 0.85, 1.02),
       path, d: 0, trail: [], speed: 0, held: [], asking: null, request: NaN, hidden: false, awayLeft: 0, stopped: 0, odometer: 0, maxWait: 0,
@@ -854,31 +881,290 @@ export class Traffic {
 
   private spawn(): void {
     const layout = this.world.layout;
-    const total = this.lanes.reduce((a, l) => a + l.length, 0);
-    if (!total) return;
     const want = throughTraffic(this.world);
-    const objects = this.world.objects;
-    for (let k = 0; k < want; k++) {
-      const object = pick(this.r, layout.traffic.vehicles);
-      const mesh = objects.get(object)!.mesh;
-      const length = Math.max(1, mesh.max[0] - mesh.min[0]);
-      let placed = false;
-      for (let attempt = 0; attempt < 40 && !placed; attempt++) {
-        let x = this.r() * total;
-        const lane = this.lanes.find((l) => (x -= l.length) < 0) ?? this.lanes[this.lanes.length - 1];
-        if (lane.length < length + 2) continue;
-        const d = range(this.r, length, lane.length);
-        if (lane.crossings.some((c) => d > c.from - 2 && d - length < c.zoneEnd + 2)) continue;
-        if (lane.zebras.some((c) => d > c.stop - 1 && d - length < c.zoneEnd + 1)) continue;
-        const clash = this.cars.some((o) => o.path[0] === lane && Math.abs(o.d - d) < Math.max(o.length, length) + SPAWN_GAP);
-        if (clash) continue;
-        const car = this.newCar(object, [lane]);
-        car.d = d;
-        this.plan(car);
-        this.cars.push(car);
-        placed = true;
+    for (let k = 0; k < want; k++) if (!this.placeAtRandom(pick(this.r, layout.traffic.vehicles))) this.unplaced++;
+  }
+
+  /**
+   * The delivery fleet: waiting off the board beyond the roads that leave it (spread
+   * over them) until there is something to deliver — or, with no such road, out
+   * driving about.
+   */
+  private spawnFleet(): void {
+    const depots = this.depots();
+    let n = 0;
+    for (const f of this.world.freight.fleet) {
+      for (let k = 0; k < f.count; k++) {
+        if (depots.length) {
+          const car = this.newCar(f.object, []);
+          car.fleet = f.index;
+          car.state = "off";
+          car.hidden = true;
+          car.depot = depots[n++ % depots.length];
+          this.cars.push(car);
+          continue;
+        }
+        const car = this.placeAtRandom(f.object);
+        if (car) car.fleet = f.index;
+        else this.fleetUnplaced++;
       }
-      if (!placed) this.unplaced++;
+    }
+  }
+
+  /** Road exits a delivery vehicle can wait beyond: roads that leave the board and come back on. */
+  depots(): number[] {
+    return [...this.roadExitLanes()].filter(([, x]) => x.enter && x.leave.length).map(([e]) => e);
+  }
+
+  /** A vehicle driving about, somewhere free on the roads; null if nowhere fits. */
+  private placeAtRandom(object: string): Car | null {
+    const total = this.lanes.reduce((a, l) => a + l.length, 0);
+    if (!total) return null;
+    const mesh = this.world.objects.get(object)!.mesh;
+    const length = Math.max(1, mesh.max[0] - mesh.min[0]);
+    for (let attempt = 0; attempt < 40; attempt++) {
+      let x = this.r() * total;
+      const lane = this.lanes.find((l) => (x -= l.length) < 0) ?? this.lanes[this.lanes.length - 1];
+      if (lane.length < length + 2) continue;
+      const d = range(this.r, length, lane.length);
+      if (lane.crossings.some((c) => d > c.from - 2 && d - length < c.zoneEnd + 2)) continue;
+      if (lane.zebras.some((c) => d > c.stop - 1 && d - length < c.zoneEnd + 1)) continue;
+      const clash = this.cars.some((o) => o.path[0] === lane && Math.abs(o.d - d) < Math.max(o.length, length) + SPAWN_GAP);
+      if (clash) continue;
+      const car = this.newCar(object, [lane]);
+      car.d = d;
+      this.plan(car);
+      this.cars.push(car);
+      return car;
+    }
+    return null;
+  }
+
+  // -- delivery vehicles ---------------------------------------------------------------
+
+  /** A lane by its topology key (as the model's docks name them). */
+  laneOf(key: string): Lane | null {
+    return this.laneByKey.get(key) ?? null;
+  }
+
+  /** The lane offset of a dock (whose d counts from the lane's start node). */
+  dockD(key: string, d: number): number {
+    const t = this.topo.get(key);
+    return t ? d - t.box0 : d;
+  }
+
+  /**
+   * Whether delivery vehicle ci can take a job now: driving about, on its way off the
+   * board to wait (it turns back), waiting off the board, or done with a call out there.
+   */
+  fleetFree(ci: number): boolean {
+    const car = this.cars[ci];
+    return car.fleet >= 0 && !car.dwelling && (car.target === null || car.target.kind === "park") && this.routeStart(car) !== null;
+  }
+
+  /**
+   * Sends delivery vehicle ci to stop at a dock (lane `key`, front at road metres
+   * `d` from the lane's start node), or off the board by road exit `exit` to place
+   * `place` (`out` s of travel out there, `back` s back to the edge). False if no
+   * way leads there from where it is now.
+   */
+  sendFleet(ci: number, target: { dock: { lane: string; d: number } } | { exit: number; place: number; out: number; back: number }): boolean {
+    const car = this.cars[ci];
+    let t: FleetTarget;
+    if ("dock" in target) {
+      const lane = this.laneByKey.get(target.dock.lane);
+      if (!lane) return false;
+      t = { kind: "dock", lane, d: clamp(this.dockD(target.dock.lane, target.dock.d), 0.5, lane.length - 0.1) };
+    } else t = { kind: "off", ...target };
+    const start = this.routeStart(car);
+    if (!start) return false;
+    const rest = this.routeTo(t, start.lane, start.d);
+    if (!rest) return false;
+    if (car.state === "off") {
+      // From where it waits off the board: a short drive in, then on at the edge when there is room.
+      car.state = "entering";
+      car.awayLeft = DEPOT_TIME;
+      car.depot = -1;
+    }
+    car.path.length = start.k;
+    car.path.push(...rest);
+    car.target = t;
+    car.called = false;
+    if (car.asking && !car.path.includes(car.asking)) { car.asking = null; car.request = NaN; }
+    return true;
+  }
+
+  /** Where a vehicle is on the map (off the board: where it will come back on). */
+  carAt(ci: number): [number, number] {
+    const car = this.cars[ci];
+    if (car.depot >= 0) return [...this.world.offLayout.exits[car.depot].at];
+    if (car.hidden || car.state !== "driving") {
+      const seg = car.path[0];
+      const back = seg && (seg.kind === "off" || seg.kind === "away") ? seg.back : null;
+      if (back) { const p = this.lanePose(back, 0); return [p.x, p.y]; }
+      if (car.bay >= 0) { const b = this.world.town.bays[car.bay]; return [b.x, b.y]; }
+      return [NaN, NaN];
+    }
+    const p = this.along(car, car.length / 2);
+    return [p.x, p.y];
+  }
+
+  /** Lets a delivery vehicle go back to driving about. */
+  releaseFleet(ci: number): void {
+    const car = this.cars[ci];
+    car.target = null;
+    car.called = false;
+  }
+
+  /**
+   * Sends a delivery vehicle off the board by road exit `exit` to wait out there
+   * (straight away if it is already off the board beyond that exit). False if no
+   * way leads there.
+   */
+  parkFleet(ci: number, exit: number): boolean {
+    const car = this.cars[ci];
+    const x = this.roadExitLanes().get(exit);
+    if (!x) return false;
+    const seg = car.path[0];
+    if (car.hidden && seg?.kind === "off" && car.target === null && seg.node === x.node) {
+      this.waitOff(car, exit);
+      return true;
+    }
+    const start = this.routeStart(car);
+    if (!start) return false;
+    const t: FleetTarget = { kind: "park", exit };
+    const rest = this.routeTo(t, start.lane, start.d);
+    if (!rest) return false;
+    if (car.state === "off") {
+      // Waiting off the board already, beyond another exit: it comes on there first.
+      car.state = "entering";
+      car.awayLeft = DEPOT_TIME;
+      car.depot = -1;
+    }
+    car.path.length = start.k;
+    car.path.push(...rest);
+    car.target = t;
+    car.called = false;
+    if (car.asking && !car.path.includes(car.asking)) { car.asking = null; car.request = NaN; }
+    return true;
+  }
+
+  /** Off the board, waiting beyond road exit `exit` for its next job. */
+  private waitOff(car: Car, exit: number): void {
+    car.state = "off";
+    car.hidden = true;
+    car.depot = exit;
+    car.target = null;
+    car.called = false;
+    car.dwelling = false;
+    car.path = [];
+    car.trail = [];
+    car.trailLen = [];
+    car.speed = 0;
+    car.stopped = 0;
+  }
+
+  /** Keeps a delivery vehicle standing where it is for `seconds` (while it loads or unloads). */
+  holdFleet(ci: number, seconds: number): void {
+    const car = this.cars[ci];
+    if (car.dwelling) car.dwellLeft = seconds;
+  }
+
+  /**
+   * Where a route for a delivery vehicle can start: the first lane in its path past
+   * any junction it already holds (k: its index), and the offset it joins it at; off
+   * the board after its call, the lane it comes back on by. Null while it cannot be
+   * sent anywhere (turning round beyond the edge, or not yet back from a call).
+   */
+  private routeStart(car: Car): { k: number; lane: Lane; d: number } | null {
+    if (car.state === "off" && car.depot >= 0) {
+      // Waiting off the board: it comes back on by the lane entering the board there.
+      const enter = this.roadExitLanes().get(car.depot)?.enter;
+      return enter ? { k: 0, lane: enter, d: 0 } : null;
+    }
+    if (car.state !== "driving") return null;
+    if (car.hidden) {
+      const seg = car.path[0];
+      if (seg.kind !== "off" || !seg.back || (car.target && !car.called)) return null;
+      return { k: 1, lane: seg.back, d: 0 };
+    }
+    let k = 0;
+    car.path.forEach((seg, i) => { if (seg.kind === "turn" && car.held.includes(seg)) k = i; });
+    while (k < car.path.length && car.path[k].kind !== "lane") k++;
+    if (k >= car.path.length) return null;
+    return { k, lane: car.path[k] as Lane, d: k === 0 ? car.d : this.segStart(car, k) };
+  }
+
+  /** The segments from `from` (offset fromD) to a delivery vehicle's target: lanes and turns, then off the board and back on. */
+  private routeTo(t: FleetTarget, from: Lane, fromD: number): Seg[] | null {
+    const join = (lanes: Lane[]) => {
+      const out: Seg[] = [];
+      lanes.forEach((l, i) => { if (i > 0) out.push(this.turn(lanes[i - 1], l)); out.push(l); });
+      return out;
+    };
+    if (t.kind === "dock") {
+      const lanes = this.lanePath(from, fromD, t.lane, t.d, true);
+      return lanes ? join(lanes) : null;
+    }
+    const x = this.roadExitLanes().get(t.exit);
+    if (!x || (!x.enter && t.kind === "off")) return null;
+    let best: Lane[] | null = null;
+    let bestLen = Infinity;
+    for (const leave of x.leave) {
+      const lanes = this.lanePath(from, fromD, leave, leave.length - 0.5, true);
+      const len = lanes ? lanes.reduce((a, l) => a + l.length, 0) : Infinity;
+      if (lanes && len < bestLen) { best = lanes; bestLen = len; }
+    }
+    if (!best) return null;
+    const node = best[best.length - 1].end!;
+    if (t.kind === "park") return [...join(best), { kind: "off", node, back: null, length: 0, calls: [], total: DEPOT_TIME, place: -1 }];
+    const off: OffSeg = { kind: "off", node, back: x.enter, length: 0, calls: [{ at: t.out, visit: 0 }], total: t.out + t.back, place: t.place };
+    return [...join(best), off, x.enter!];
+  }
+
+  /** How far ahead of a delivery vehicle's front the dock it was sent to is, or null if not along its path. */
+  private dockAhead(car: Car): number | null {
+    const t = car.target;
+    if (t?.kind !== "dock") return null;
+    let cum = -car.d;
+    for (let k = 0; k < car.path.length; k++) {
+      const seg = car.path[k];
+      if (seg === t.lane && (k > 0 || t.d >= car.d - 1)) return cum + t.d;
+      if (seg.kind === "off") return null;
+      cum += this.segLen(car, k);                       // (turning round off the board counts nothing)
+    }
+    return null;
+  }
+
+  /** A delivery vehicle at its dock starts to stand there; one that has lost its way to it is sent again. */
+  private stepFleet(car: Car, dt: number): void {
+    if (car.dwelling) {
+      car.dwellLeft -= dt;
+      if (car.dwellLeft > 0) return;
+      car.dwelling = false;
+      car.target = null;
+      this.fleetReady.push(car.index);
+      return;
+    }
+    const t = car.target;
+    if (t?.kind !== "dock") return;
+    if (car.path[0] === t.lane && Math.abs(car.d - t.d) <= 1 && car.speed < 0.3) {
+      car.dwelling = true;
+      car.dwellLeft = Infinity;                       // until the freight sim says how long
+      car.speed = 0;
+      car.stopCount++;
+      this.fleetArrivals.push(car.index);
+      return;
+    }
+    if (this.dockAhead(car) === null) {
+      // Past it (pushed on by something), or its way there changed: find a new way.
+      car.skipped++;
+      const start = this.routeStart(car);
+      const rest = start && this.routeTo(t, start.lane, start.d);
+      if (start && rest) {
+        car.path.length = start.k;
+        car.path.push(...rest);
+      }
     }
   }
 
@@ -899,6 +1185,7 @@ export class Traffic {
     let ahead = car.path.reduce((a, s) => a + s.length, 0) - car.d;
     while (ahead < LOOK && car.path.length < 8) {
       const last = car.path[car.path.length - 1] as Lane;
+      if (last.kind !== "lane") return;
       if (last.end === null) {
         car.path.push(last);
         ahead += last.length;
@@ -1071,6 +1358,11 @@ export class Traffic {
         car.bay = -1;
         car.reversing = (car.path[0] as BaySeg).reverse;
         car.stopped = 0;
+        // Claim the stretch it pulls into now, so another car pulling out this tick waits.
+        const out = car.path[0] as BaySeg;
+        const list = this.occ.get(out.lane) ?? [];
+        list.push({ car, front: out.laneD + 1, rear: Math.max(0, out.laneD - car.length - 1), virtual: true });
+        this.occ.set(out.lane, list);
       }
       const v = this.control(car);
       car.speed = car.speed < v ? Math.min(v, car.speed + ACCEL * dt) : v;
@@ -1078,6 +1370,7 @@ export class Traffic {
       const seg = car.path[0];
       this.advance(car, car.speed * dt);
       if (car.line >= 0 && !car.hidden) this.stepBus(car, dt, car.path[0] === seg ? before : -Infinity);
+      if (car.fleet >= 0 && !car.hidden) this.stepFleet(car, dt);
       if (car.dwelling) car.stopped = 0;
       else if (car.speed < 0.05) {
         car.stopped += dt;
@@ -1130,6 +1423,12 @@ export class Traffic {
       car.path.push(via);
       rest.forEach((l, i) => { if (i > 0) car.path.push(this.turn(rest[i - 1], l)); car.path.push(l); });
       car.path.push(into);
+    } else if (car.target) {
+      // A delivery vehicle finds a new way from there to where it was sent.
+      const rest = this.routeTo(car.target, best, 0);
+      if (!rest) return false;
+      car.path.length = k;
+      car.path.push(via, ...rest);
     } else {
       car.path.length = k;
       car.path.push(via, best);
@@ -1139,10 +1438,19 @@ export class Traffic {
     return true;
   }
 
-  /** Quickest lanes from offset fromD of `from` to offset toD of `to` (both included), or null. */
-  lanePath(from: Lane, fromD: number, to: Lane, toD: number): Lane[] | null {
+  /** Whether a lane runs off the board (a vehicle can only come back on from there). */
+  endsOffBoard(lane: Lane): boolean {
+    return lane.end !== null && this.nextLanes(lane).length === 0 && lane.next.length > 0;
+  }
+
+  /**
+   * Quickest lanes from offset fromD of `from` to offset toD of `to` (both included),
+   * or null. With `turnOff`, a vehicle may also go out over the board's edge and come
+   * straight back on (turning round out of sight, as through traffic does).
+   */
+  lanePath(from: Lane, fromD: number, to: Lane, toD: number, turnOff = false): Lane[] | null {
     if (from === to && toD >= fromD + 1) return [from];
-    const time = (l: Lane) => l.length / Math.max(3, l.road.spec.speed * 0.8);
+    const time = (l: Lane) => l.length / Math.max(3, l.road.spec.speed * 0.8) + (turnOff && this.endsOffBoard(l) ? AWAY_COST : 0);
     const best = new Map<Lane, number>([[from, 0]]);
     const prev = new Map<Lane, Lane>();
     const open: Array<{ lane: Lane; t: number }> = [{ lane: from, t: 0 }];
@@ -1151,7 +1459,7 @@ export class Traffic {
       for (let i = 1; i < open.length; i++) if (open[i].t < open[bi].t) bi = i;
       const { lane, t } = open.splice(bi, 1)[0];
       if (t > (best.get(lane) ?? Infinity)) continue;
-      for (const next of this.nextLanes(lane)) {
+      for (const next of turnOff ? lane.next : this.nextLanes(lane)) {
         const nt = t + time(lane) + 3;
         if (next === to) {
           if (nt < (best.get(to) ?? Infinity) || !prev.has(to)) { best.set(to, nt); prev.set(to, lane); }
@@ -1223,6 +1531,37 @@ export class Traffic {
       return;
     }
     const seg = car.path[0];
+    if (seg.kind === "off" && car.fleet >= 0) {
+      // A delivery vehicle off the board: out to its call, standing there while it loads or unloads, then back.
+      if (car.dwelling) {
+        car.dwellLeft -= dt;
+        if (car.dwellLeft > 0) return;
+        car.dwelling = false;
+        car.target = null;
+        this.fleetReady.push(car.index);
+        return;
+      }
+      if (car.offT < seg.total) {
+        car.offT = Math.min(seg.total, car.offT + dt);
+        if (!car.called && seg.calls.length && car.offT >= seg.calls[0].at) {
+          car.called = true;
+          car.dwelling = true;
+          car.dwellLeft = Infinity;
+          car.stopCount++;
+          this.fleetArrivals.push(car.index);
+        }
+        return;
+      }
+      if (!seg.back) {
+        // Out there to wait for its next job.
+        const t = car.target;
+        this.waitOff(car, t?.kind === "park" ? t.exit : this.depots().find((e) => this.roadExitLanes().get(e)!.node === seg.node) ?? -1);
+        return;
+      }
+      if (this.exitRoom(seg.back) < car.length + MIN_GAP + 2) return;
+      this.comeBack(car, seg.back, true);
+      return;
+    }
     if (seg.kind === "off") {
       if (car.dwelling) {
         car.dwellLeft -= dt;
@@ -1315,8 +1654,8 @@ export class Traffic {
       if (gap <= ARRIVE) cap = 0;
     }
 
-    // A bus stops at its next stop (and asks for no junction beyond it until it has).
-    const busHalt = car.line >= 0 ? this.busStopAhead(car) : null;
+    // A bus stops at its next stop, a delivery vehicle at its dock (and asks for no junction beyond it until it has).
+    const busHalt = car.line >= 0 ? this.busStopAhead(car) : car.fleet >= 0 ? this.dockAhead(car) : null;
     if (busHalt !== null) stopAt(busHalt);
 
     // Crossings for people that the car is already on (on any of its lanes): it carries on over them.
@@ -1551,7 +1890,7 @@ export class Traffic {
     this.cars.forEach((car, i) => {
       const s = out[i] ?? (out[i] = { object: car.object, x: 0, y: 0, z: 0, heading: 0, pitch: 0, visible: true, color: null });
       s.object = car.object;
-      s.color = car.line >= 0 ? this.lines[car.line].geom.color : null;
+      s.color = car.line >= 0 ? this.lines[car.line].geom.color : car.fleet >= 0 ? this.world.freight.fleet[car.fleet].color : null;
       s.visible = !car.hidden;
       if (car.hidden) return;
       if (car.state !== "driving") {
@@ -1592,7 +1931,8 @@ export class Traffic {
   }
 
   stats(): TrafficStats {
-    const through = this.cars.filter((c) => c.owner < 0 && c.line < 0);
+    const through = this.cars.filter((c) => c.owner < 0 && c.line < 0 && c.fleet < 0);
+    const fleet = this.cars.filter((c) => c.fleet >= 0);
     const own = this.cars.filter((c) => c.owner >= 0);
     const buses = this.cars.filter((c) => c.line >= 0);
     const n = through.length;
@@ -1603,6 +1943,9 @@ export class Traffic {
       busSkipped: buses.reduce((a, c) => a + c.skipped, 0),
       own: own.length,
       driving: own.filter((c) => c.state === "driving").length,
+      fleet: fleet.length,
+      fleetStops: fleet.reduce((a, c) => a + c.stopCount, 0),
+      fleetDistance: fleet.reduce((a, c) => a + c.odometer, 0),
       ownDistance: own.reduce((a, c) => a + c.odometer, 0),
       unplaced: this.unplaced,
       avgSpeed: n ? through.reduce((a, c) => a + c.odometer, 0) / n / Math.max(this.time, 1e-9) : 0,

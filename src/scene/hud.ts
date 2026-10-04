@@ -45,7 +45,7 @@ const CONTROLS: Array<[keys: string, action: string, state?: (i: HudInfo) => str
   ["drag", "orbit"],
   ["wheel", "zoom"],
   ["right-drag", "pan"],
-  ["click", "inspect a person, building, car or train"],
+  ["click", "inspect a person, building, vehicle, train or yard"],
   ["Space", "pause / resume", (i) => (i.paused ? "paused" : "running")],
   ["1 2 3", "speed 1× 2× 4×", (i) => `${i.speed}×`],
   ["F", "follow next train", (i) => i.follow?.service ?? "off"],

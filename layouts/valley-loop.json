@@ -26,11 +26,29 @@
       "minRadius": 80,
       "from": { "track": "main", "at": 700, "heading": "forward" },
       "points": [[1080, 420], [1120, 700], [1030, 750], { "at": [1030, 890], "z": 26 }, [1030, 1000]]
+    },
+    {
+      "id": "goods-line",
+      "kind": "line",
+      "minRadius": 60,
+      "maxGrade": 0.03,
+      "from": { "track": "main", "at": 530, "heading": "forward" },
+      "points": [[903.5, 0]]
     }
   ],
   "stations": [
     { "id": "lindenau", "name": "Lindenau", "track": "main", "at": 380, "length": 160, "side": "both" },
-    { "id": "bergdorf", "name": "Bergdorf", "track": "hill", "at": 719, "length": 80, "side": "left" }
+    { "id": "bergdorf", "name": "Bergdorf", "track": "hill", "at": 719, "length": 80, "side": "left" },
+    {
+      "id": "lindenau-goods",
+      "name": "Lindenau Goods Yard",
+      "kind": "freight",
+      "track": "goods-line",
+      "at": 149,
+      "length": 100,
+      "side": "right",
+      "road": "goods-road"
+    }
   ],
   "services": [
     {
@@ -48,6 +66,16 @@
       "route": ["main", "hill"],
       "mode": "shuttle",
       "stops": ["lindenau", "bergdorf", "hochdorf"],
+      "count": 1
+    },
+    {
+      "id": "goods",
+      "train": "freight-4",
+      "color": "#6b5b45",
+      "route": ["goods-line"],
+      "mode": "shuttle",
+      "stops": ["lindenau-goods", "kreisstadt"],
+      "dwell": 30,
       "count": 1
     }
   ],
@@ -87,6 +115,14 @@
       "points": [[800, 230]],
       "to": { "road": "station-street", "at": 240 },
       "parking": "both"
+    },
+    {
+      "id": "goods-road",
+      "name": "Goods Road",
+      "width": 6,
+      "speed": 9,
+      "from": { "road": "south-street", "at": "end" },
+      "points": [[840, 128], [885, 128], [885, 32]]
     },
     {
       "id": "bergdorf-lane",
@@ -132,14 +168,18 @@
       "via": [{ "road": "country-west", "distance": 2500 }],
       "jobs": 8,
       "titles": ["Farmhand", "Baker", "Teacher"],
-      "visits": 0.8
+      "visits": 0.8,
+      "supplies": { "drinks": 6 },
+      "demands": { "goods": 2 }
     },
     {
       "id": "neustadt",
       "via": [{ "road": "country-east", "distance": 3000 }],
       "jobs": 40,
       "titles": ["Office worker", "Shop assistant", "Nurse", "Mechanic"],
-      "visits": 2
+      "visits": 2,
+      "supplies": { "goods": 6, "mail": 15 },
+      "demands": { "food": 4 }
     },
     {
       "id": "hochdorf",
@@ -153,8 +193,30 @@
       "name": "Mühlbach",
       "via": [{ "path": "field-path", "distance": 1200 }],
       "visits": 0.6
+    },
+    {
+      "id": "kreisstadt",
+      "name": "Kreisstadt",
+      "via": [{ "track": "goods-line", "distance": 3000 }],
+      "visits": 0,
+      "supplies": { "goods": 20, "mail": 40, "drinks": 4 },
+      "demands": { "food": 6 }
     }
   ],
+  "freight": {
+    "vehicles": [
+      {
+        "name": "Post van",
+        "object": "van",
+        "count": 2,
+        "capacity": 8,
+        "goods": ["mail"],
+        "color": "#d9a43a"
+      },
+      { "name": "Delivery van", "object": "van", "count": 2, "capacity": 6 },
+      { "name": "Lorry", "object": "truck", "count": 2, "capacity": 16 }
+    ]
+  },
   "people": { "cars": 0.3 },
   "traffic": { "cars": 10 },
   "objects": {
@@ -219,7 +281,7 @@
     { "object": "house", "at": [580, 312.9], "rotation": 267 },
     { "object": "house", "at": [595, 312.9], "rotation": 269 },
     { "object": "terrace", "at": [610, 312.9], "rotation": 271 },
-    { "object": "shop", "at": [625, 314.1], "rotation": 273, "name": "Lindenau Bakery", "building": { "kind": "Bakery", "titles": ["Baker", "Shop assistant"] } },
+    { "object": "shop", "at": [625, 314.1], "rotation": 273, "name": "Lindenau Bakery", "building": { "kind": "Bakery", "titles": ["Baker", "Shop assistant"], "demands": { "food": 4, "mail": 0.5 } } },
     { "object": "house", "at": [640, 312.9], "rotation": 268 },
     { "object": "house", "at": [655, 312.9], "rotation": 270 },
     { "object": "house", "at": [580, 287.1], "rotation": 87 },
@@ -229,7 +291,7 @@
     { "object": "house", "at": [640, 287.1], "rotation": 88 },
     { "object": "terrace", "at": [655, 287.1], "rotation": 90 },
     { "object": "house", "at": [721, 312.9], "rotation": 267 },
-    { "object": "shop", "at": [736, 314.1], "rotation": 269, "name": "Weber's Butchery", "building": { "kind": "Butcher", "titles": ["Butcher", "Apprentice"] } },
+    { "object": "shop", "at": [736, 314.1], "rotation": 269, "name": "Weber's Butchery", "building": { "kind": "Butcher", "titles": ["Butcher", "Apprentice"], "demands": { "food": 4, "mail": 0.5 } } },
     { "object": "pub", "at": [751, 314.9], "rotation": 271, "name": "The Linden Tree" },
     { "object": "terrace", "at": [766, 312.9], "rotation": 273 },
     { "object": "house", "at": [781, 312.9], "rotation": 268 },
@@ -237,9 +299,9 @@
     { "object": "house", "at": [811, 312.9], "rotation": 272 },
     { "object": "terrace", "at": [721, 287.1], "rotation": 87 },
     { "object": "house", "at": [736, 287.1], "rotation": 89 },
-    { "object": "shop", "at": [751, 285.9], "rotation": 91, "name": "Lindenau Post Office", "building": { "kind": "Post office", "titles": ["Postmaster", "Postman", "Counter clerk"], "jobs": 3 } },
+    { "object": "shop", "at": [751, 285.9], "rotation": 91, "name": "Lindenau Post Office", "building": { "kind": "Post office", "titles": ["Postmaster", "Postman", "Counter clerk"], "jobs": 3, "supplies": { "mail": 12 }, "demands": { "goods": 1 } } },
     { "object": "house", "at": [766, 287.1], "rotation": 93 },
-    { "object": "shop", "at": [781, 285.9], "rotation": 88, "name": "Café Sommer", "building": { "kind": "Café", "titles": ["Owner", "Waiter"] } },
+    { "object": "shop", "at": [781, 285.9], "rotation": 88, "name": "Café Sommer", "building": { "kind": "Café", "titles": ["Owner", "Waiter"], "demands": { "food": 2, "drinks": 2, "mail": 0.5 } } },
     { "object": "house", "at": [796, 287.1], "rotation": 90 },
     { "object": "house", "at": [811, 287.1], "rotation": 92 },
     { "object": "house", "at": [580, 360.9], "rotation": 267 },

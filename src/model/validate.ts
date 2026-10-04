@@ -61,7 +61,7 @@ export function checkReferences(layout: Layout): Issue[] {
   const seen = new Map<string, string>();
   const note = (id: string, path: string) => {
     const prev = seen.get(id);
-    if (prev) issues.push(error("DUPLICATE_ID", `id '${id}' is used twice (also at ${prev}); ids must be unique across tracks, roads, paths, car parks, stations, services, bus stops, bus lines and off-layout places`, path));
+    if (prev) issues.push(error("DUPLICATE_ID", `id '${id}' is used twice (also at ${prev}); ids must be unique across tracks, roads, paths, car parks, stations (and freight yards), services, bus stops, bus lines and off-layout places`, path));
     else seen.set(id, path);
   };
   layout.tracks.forEach((t, i) => note(t.id, `tracks[${i}].id`));
@@ -86,8 +86,10 @@ export function checkReferences(layout: Layout): Issue[] {
       if (end && end.track === t.id) issues.push(error("TRACK_REF_CYCLE", `track '${t.id}' cannot branch from itself`, `tracks[${i}].${w}.track`));
     }
   });
+  const roadIds = new Set(layout.roads.map((r) => r.id));
   layout.stations.forEach((s, i) => {
     if (!trackIds.has(s.track)) unknown("track", s.track, `stations[${i}].track`, trackIds);
+    if (s.road && !roadIds.has(s.road)) unknown("road", s.road, `stations[${i}].road`, roadIds);
   });
   layout.services.forEach((s, i) => {
     if (!isTrainType(s.train)) unknown("train type", s.train, `services[${i}].train`, new Set(Object.keys(TRAIN_CATALOG)));
@@ -103,7 +105,6 @@ export function checkReferences(layout: Layout): Issue[] {
     if (e.object && !objectIds.has(e.object)) unknown("object", e.object, `scenery[${i}].object`, known());
     e.scatter?.forEach((id, k) => { if (!objectIds.has(id)) unknown("object", id, `scenery[${i}].scatter[${k}]`, known()); });
   });
-  const roadIds = new Set(layout.roads.map((r) => r.id));
   layout.roads.forEach((r, i) => {
     for (const w of ["from", "to"] as const) {
       const end = r[w];
@@ -113,6 +114,7 @@ export function checkReferences(layout: Layout): Issue[] {
   });
   layout.traffic.vehicles.forEach((id, k) => { if (!objectIds.has(id)) unknown("object", id, `traffic.vehicles[${k}]`, known()); });
   layout.people.vehicles.forEach((id, k) => { if (!objectIds.has(id)) unknown("object", id, `people.vehicles[${k}]`, known()); });
+  (layout.freight.vehicles ?? []).forEach((f, k) => { if (!objectIds.has(f.object)) unknown("object", f.object, `freight.vehicles[${k}].object`, known()); });
   layout.parking.forEach((p, i) => { if (p.road && !roadIds.has(p.road)) unknown("road", p.road, `parking[${i}].road`, roadIds); });
   layout.busStops.forEach((b, i) => { if (!roadIds.has(b.road)) unknown("road", b.road, `busStops[${i}].road`, roadIds); });
   const stopIds = new Set(layout.busStops.map((b) => b.id));
@@ -133,6 +135,9 @@ export function checkReferences(layout: Layout): Issue[] {
       if (end?.path && !pathIds.has(end.path)) unknown("path", end.path, `paths[${i}].${w}.path`, pathIds);
       if (end?.road && !roadIds.has(end.road)) unknown("road", end.road, `paths[${i}].${w}.road`, roadIds);
       if (end?.station && !stationIds.has(end.station)) unknown("station", end.station, `paths[${i}].${w}.station`, stationIds);
+      else if (end?.station && layout.stations.find((st) => st.id === end.station)!.kind === "freight") {
+        issues.push(error("STATION_KIND", `path '${p.id}' ends at '${end.station}', a freight yard, which has no platform for people; end it at a passenger station, a road or another path`, `paths[${i}].${w}.station`));
+      }
       if (end?.path === p.id) issues.push(error("TRACK_REF_CYCLE", `path '${p.id}' cannot branch from itself`, `paths[${i}].${w}.path`));
     }
   });
@@ -260,10 +265,14 @@ export function checkServices(layout: Layout, routes: Map<string, RoutePath>): I
   layout.services.forEach((svc, i) => {
     if (!isTrainType(svc.train)) return;
     const len = trainLength(TRAIN_CATALOG[svc.train]);
+    const freight = TRAIN_CATALOG[svc.train].shape === "freight";
     svc.stops.forEach((id, k) => {
       const st = stations.get(id);
+      if (st && st.kind === "freight" && !freight) {
+        issues.push(warning("STOP_KIND", `passenger service '${svc.id}' stops at freight yard '${id}', where nobody can get on or off; leave it out of the stops, or run a freight train (${Object.entries(TRAIN_CATALOG).filter(([, t]) => t.shape === "freight").map(([k]) => k).join(", ")})`, `services[${i}].stops[${k}]`));
+      }
       if (st && len > st.length) {
-        issues.push(warning("TRAIN_TOO_LONG", `service '${svc.id}' runs ${len} m trains but platform '${id}' is ${st.length} m; lengthen the platform or pick a shorter train`, `services[${i}].stops[${k}]`));
+        issues.push(warning("TRAIN_TOO_LONG", `service '${svc.id}' runs ${len} m trains but ${st.kind === "freight" ? "the dock of freight yard" : "platform"} '${id}' is ${st.length} m; lengthen the ${st.kind === "freight" ? "yard" : "platform"} or pick a shorter train`, `services[${i}].stops[${k}]`));
       }
     });
     const route = routes.get(svc.id);

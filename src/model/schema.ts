@@ -2,7 +2,7 @@
 // pipeline sees fully-populated objects. Unknown keys are errors, to catch typos.
 
 import { z } from "zod";
-import { TRAIN_CATALOG } from "./catalog";
+import { TRAIN_CATALOG, GOODS } from "./catalog";
 import { ObjectSchema, ColorSchema, BuildingSchema } from "./objects";
 
 const Vec2 = z.tuple([z.number(), z.number()]).describe("[x, y] in metres; x = east, y = north");
@@ -116,16 +116,29 @@ const Path = z
   })
   .superRefine((p, ctx) => lineChecks(p, "path", ctx));
 
-const Station = z.strictObject({
-  id: Id,
-  name: z.string(),
-  track: Id,
-  at: z.number().describe("s of the platform centre (m)"),
-  length: z.number().positive().default(120),
-  side: z.enum(["left", "right", "both"]).default("right"),
-  building: Id.nullable().default("station-building")
-    .describe("Object drawn as the station building beside the platform, or null for none"),
-});
+const Station = z
+  .strictObject({
+    id: Id,
+    name: z.string(),
+    kind: z.enum(["passenger", "freight"]).default("passenger")
+      .describe("passenger: platforms people use; freight: a goods yard, a loading dock beside the track where freight trains and lorries exchange goods"),
+    track: Id,
+    at: z.number().describe("s of the platform (or dock) centre (m)"),
+    length: z.number().positive().default(120),
+    side: z.enum(["left", "right", "both"]).default("right").describe("Which side of the track the platform is on (left/right of increasing s); a freight yard has one dock, left or right"),
+    building: Id.nullable().optional()
+      .describe('Object drawn as the station building behind the platform (default "station-building"), or for a freight yard the shed standing on its dock (default "goods-shed"); null for none'),
+    road: Id.optional().describe("freight only: the road along the back of the dock, where lorries stop to load and unload; default the nearest one within 30 m"),
+  })
+  .superRefine((st, ctx) => {
+    if (st.kind === "freight" && st.side === "both") ctx.addIssue({ code: "custom", path: ["side"], message: 'a freight yard has one dock: use side "left" or "right"' });
+    if (st.kind !== "freight" && st.road !== undefined) ctx.addIssue({ code: "custom", path: ["road"], message: '`road` is only for freight yards (kind "freight")' });
+  })
+  .transform((st) => ({ ...st, building: st.building === undefined ? (st.kind === "freight" ? "goods-shed" : "station-building") : st.building }));
+
+/** Goods by id with loads per hour (supplies and demands of buildings and off-layout places). */
+export const GoodsRates = z.record(Id, z.number().min(0).max(500))
+  .describe(`Goods by id with loads per hour, e.g. { "food": 6, "mail": 1 }; built-in goods: ${Object.keys(GOODS).join(", ")} (any other id works too)`);
 
 const Service = z.strictObject({
   id: Id,
@@ -209,6 +222,18 @@ const OffPlace = z.strictObject({
   jobs: z.int().min(0).max(1000).default(0).describe("Posts there that residents of the board may hold (they commute)"),
   titles: z.array(z.string().min(1)).min(1).default(["Employee"]).describe("Job titles, as for buildings: the last fills the rest"),
   visits: z.number().min(0).max(20).default(1).describe("How often people go there on a visit; 1 ≈ one landmark on the board"),
+  supplies: GoodsRates.default({}).describe("Goods sent out from there (loads per hour), by freight train or lorry"),
+  demands: GoodsRates.default({}).describe("Goods delivered there (loads per hour)"),
+});
+
+const FleetEntry = z.strictObject({
+  name: z.string().min(1).optional().describe('What these vehicles are called, e.g. "Post van"; default "Delivery van" or "Lorry" (from the object)'),
+  object: Id.default("van").describe("Object id drawn as the vehicle"),
+  count: z.int().min(0).max(40).default(2),
+  capacity: z.int().min(1).max(100).default(6).describe("Loads it carries at once"),
+  goods: z.array(Id).min(1).optional().describe("Only these goods (default: any)"),
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/, "color must be a hex string like #c8553d").optional()
+    .describe("Colour of these vehicles; default one picked per vehicle"),
 });
 
 const BusStop = z.strictObject({
@@ -260,6 +285,10 @@ export const LayoutSchema = z.strictObject({
   busLines: z.array(BusLine).default([]).describe("Bus lines: buses calling at stops in order along the roads; people ride them like trains"),
   offLayout: z.array(OffPlace).default([])
     .describe("Places off the board, reached by tracks, roads and paths that leave it (end on its edge): stops for services and bus lines, and destinations for errands"),
+  freight: z.strictObject({
+    vehicles: z.array(FleetEntry).optional()
+      .describe("Delivery vans and lorries; default a few of each when anything needs delivering by road. Idle ones drive about until given a job"),
+  }).prefault({}).describe("Deliveries: goods supplied and demanded by buildings and off-layout places move by road and by freight train"),
   people: z.strictObject({
     count: z.int().min(0).max(2000).optional()
       .describe("How many people live on the board; default as many as the accommodation holds (at most 600)"),
@@ -298,6 +327,7 @@ export type ParkingLotSpec = Layout["parking"][number];
 export type BusStopSpec = Layout["busStops"][number];
 export type BusLineSpec = Layout["busLines"][number];
 export type OffPlaceSpec = Layout["offLayout"][number];
+export type FleetSpec = NonNullable<Layout["freight"]["vehicles"]>[number];
 
 /** Normalises a waypoint to { at, z?, radius? }. */
 export function waypoint(w: WaypointSpec): { at: [number, number]; z?: number; radius?: number } {
