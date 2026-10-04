@@ -19,6 +19,7 @@ import {
   kerbOffset, SHALLOWEST_CROSSING,
 } from "./roads";
 import { type Issue, error, warning } from "./validate";
+import { offEdge } from "./exits";
 import { SpatialHash } from "../util/spatial";
 import { type V2, mod } from "../util/vec";
 
@@ -52,7 +53,6 @@ const BOUNDS_MARGIN = 3;
 const END_SNAP = 2;                  // m: a path crossing another this close to its end meets it at a T
 const JOIN_REACH = 1.5;              // m beyond a road's sidewalks within which a path end joins it
 const SHARED_NODE = 10;              // m round a shared node where walkways may overlap
-const PORTAL_EDGE = 30;              // m: walkway ends this close to the board edge lead off it
 const SMALL = 1.2;                   // m: objects at most this wide may stand on a walkway (lamps, bollards)
 
 export type PathGeom = { id: string; index: number; spec: PathSpec; path: Path; waypointS: number[] };
@@ -71,7 +71,10 @@ export type Walkway = {
   // nearly touch are one: `gate` is the first crossing's, `also` the others'.
   gates: Array<{ gate: number; also: number[]; at: number; zone: number }>;
 };
-export type WalkNode = { id: number; at: V2; z: number; ways: Array<{ way: number; end: 0 | 1 }>; portal: boolean };
+export type WalkNode = {
+  id: number; at: V2; z: number; ways: Array<{ way: number; end: 0 | 1 }>;
+  exit: number;                      // the exit (world.offLayout.exits) a path or sidewalk leaves the board by here, else -1
+};
 /** Where people cross a road: cars on its lanes stop for them (zebra) or they wait for a gap (crossing). */
 export type RoadCrossing = { id: number; kind: "zebra" | "crossing"; road: string; roadS: number; half: number; way: number; at: V2 };
 export type WalkPoint = { x: number; y: number; z: number; width: number; kind: WalkKind; owner: string; ground: boolean };
@@ -594,12 +597,6 @@ export function buildWalks(ctx: Ctx): { net: WalkNet | null; issues: Issue[] } {
     }
   }
 
-  // 5f. Nodes at dead ends near the board edge lead off the board.
-  const [W, H] = layout.terrain.size;
-  for (const n of g.nodes) {
-    n.portal = n.ways.length === 1 && Math.min(n.at[0], n.at[1], W - n.at[0], H - n.at[1]) < PORTAL_EDGE;
-  }
-
   // 6. Dense points for shaping, conflicts, bounds and scenery checks.
   const points: WalkPoint[] = [];
   for (const w of g.ways) {
@@ -616,7 +613,7 @@ export function buildWalks(ctx: Ctx): { net: WalkNet | null; issues: Issue[] } {
   for (const p of points) hash.insert(p.x, p.y, p);
 
   const net: WalkNet = {
-    paths, stationNodes, order, profiles, spans, ways: g.ways, nodes: g.nodes.map((n) => ({ id: n.id, at: n.at, z: n.at3[2], ways: n.ways, portal: n.portal })),
+    paths, stationNodes, order, profiles, spans, ways: g.ways, nodes: g.nodes.map((n) => ({ id: n.id, at: n.at, z: n.at3[2], ways: n.ways, exit: -1 })),
     crossings, footCrossings, points, hash,
   };
   issues.push(...checkWalks(ctx, net, zebras, cuts, joins));
@@ -708,7 +705,7 @@ function buildPathGeom(
 // ---------------------------------------------------------------------------
 // Graph building
 
-type BNode = { id: number; at: V2; at3: P3; ways: Array<{ way: number; end: 0 | 1 }>; portal: boolean };
+type BNode = { id: number; at: V2; at3: P3; ways: Array<{ way: number; end: 0 | 1 }> };
 
 class GraphBuilder {
   nodes: BNode[] = [];
@@ -717,7 +714,7 @@ class GraphBuilder {
   constructor(private roads: RoadNet) {}
 
   node(at: P3): number {
-    this.nodes.push({ id: this.nodes.length, at: [at[0], at[1]], at3: at, ways: [], portal: false });
+    this.nodes.push({ id: this.nodes.length, at: [at[0], at[1]], at3: at, ways: [] });
     return this.nodes.length - 1;
   }
 
@@ -937,8 +934,8 @@ function checkWalks(
   for (const p of net.paths.values()) {
     for (const s of sampleS(p.path, POINT_STEP)) {
       const [x, y] = pointAt(p.path, s);
-      if (x < BOUNDS_MARGIN || y < BOUNDS_MARGIN || x > W - BOUNDS_MARGIN || y > H - BOUNDS_MARGIN) {
-        issues.push(error("OUT_OF_BOUNDS", `path '${p.id}' leaves the terrain around (${x.toFixed(0)}, ${y.toFixed(0)}); keep paths ${BOUNDS_MARGIN} m inside`, `paths[${p.index}].points`, [x, y]));
+      if ((x < BOUNDS_MARGIN || y < BOUNDS_MARGIN || x > W - BOUNDS_MARGIN || y > H - BOUNDS_MARGIN) && !offEdge(ctx.layout.terrain.size, p, s, BOUNDS_MARGIN)) {
+        issues.push(error("OUT_OF_BOUNDS", `path '${p.id}' leaves the terrain around (${x.toFixed(0)}, ${y.toFixed(0)}); keep paths ${BOUNDS_MARGIN} m inside, or end the path on the edge to let it leave the board`, `paths[${p.index}].points`, [x, y]));
         break;
       }
     }

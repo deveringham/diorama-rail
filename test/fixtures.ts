@@ -102,3 +102,23 @@ export function withBuses(): Fixture {
   L.busLines = [{ id: "town-bus", name: "7", stops: ["houses", "shops", "church-stop"], count: 2 }];
   return L;
 }
+
+/**
+ * The bus town with ways off the board: the main road runs on to the top edge, a
+ * branch line off the loop to the east edge, and a footpath to the south edge, all
+ * leading to The City — where a shuttle train and the bus line call, and some
+ * residents work.
+ */
+export function withExits(): Fixture {
+  const L = withBuses();
+  L.roads![0].points = [[680, 60], [680, 800]];
+  L.tracks.push({ id: "east-line", kind: "line", minRadius: 60, from: { track: "main", at: 644 }, points: [[900, 480], [1000, 480]] });
+  L.services.push({ id: "x", train: "regional-3", route: ["main", "east-line"], mode: "shuttle", stops: ["a", "city"], count: 2 });
+  L.paths!.push({ id: "hike", from: { path: "track-walk", at: "end" }, points: [[500, 40], [500, 0]] });
+  L.offLayout = [{
+    id: "city", name: "The City", jobs: 12, titles: ["Clerk"], visits: 2,
+    via: [{ road: "north-south", distance: 2000 }, { track: "east-line", distance: 3000 }, { path: "hike", distance: 900 }],
+  }];
+  L.busLines![0].stops = ["houses", "shops", "church-stop", "city"];
+  return L;
+}

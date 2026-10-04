@@ -3,18 +3,20 @@
 // time, never stopping where they would block a junction or a crossing. Through
 // traffic picks turns at random; residents' cars stand in parking bays until their
 // owner drives them along a planned route to another bay, pulling out when there
-// is a gap and turning in at the end. Buses go round their line's route, stopping
-// in their lane at each stop while people get on and off. Level crossings warn, lower their barriers
+// is a gap and turning in at the end — or out over the board's edge, to an
+// off-layout place, and back. Buses go round their line's route, stopping in their
+// lane at each stop while people get on and off (and calling at off-layout places
+// out of sight beyond the edge). Level crossings warn, lower their barriers
 // once the road is clear and stay closed while a train is near; trains stop short
 // of a crossing that is not closed. Pure TypeScript, deterministic from the seed.
 
 import type { World } from "../model/build";
 import { throughTraffic } from "../model/build";
 import { PULL_OUT } from "../model/town";
-import { type BusLineGeom, DOOR_BACK } from "../model/buses";
+import { type BusLineGeom, DOOR_BACK, OFF_BUS_SPEED, roadExits } from "../model/buses";
 import { type RoadGeom, type RoadNode, type LevelCrossing, isPortal, laneTopology, nextNode } from "../model/roads";
 import { type Plan, curveLimit } from "./services";
-import type { Train } from "./trains";
+import { type Train, approach } from "./trains";
 import { rOnPiece } from "../model/routes";
 import { pointAt, headingAt, radiusAt } from "../model/geometry";
 import { profileZ } from "../model/heights";
@@ -60,6 +62,7 @@ const MIN_APPROACH = 30;        // m: a standing train this close keeps the cros
 const TAIL_CLEAR = 5;           // m the tail must be past before the crossing opens
 const ETA_STEP = 5;             // m steps when estimating a train's arrival
 const HOLD = 2;                 // s a crossing stays wanted after the last train wanted it (no flicker)
+const OFF_LOOKAHEAD = 60;       // s before a train comes back on the board that the crossings start to count it
 
 export type GateState = "open" | "warning" | "lowering" | "closed" | "raising";
 
@@ -100,12 +103,23 @@ type BaySeg = {
   kind: "bay"; bay: number; into: boolean; reverse: boolean; lane: Lane; laneD: number;
   length: number; speed: number; pts: Float64Array; cum: Float64Array;
 };
-type Seg = Lane | Turn | Away | BaySeg;
+/**
+ * Off the board: past the end of the lane into exit node `node`, `total` s of travel
+ * out of sight — a bus calls at off-layout places on the way (`calls`, s into the
+ * run) — then back on along `back`; a car leaving for an off-layout place (`back`
+ * null) stays out there, parked at `place`.
+ */
+type OffSeg = {
+  kind: "off"; node: number; back: Lane | null; length: number; calls: Array<{ at: number; visit: number }>; total: number; place: number;
+};
+type Seg = Lane | Turn | Away | BaySeg | OffSeg;
 export type { Lane as TrafficLane };
 
 type Car = {
   index: number;
   owner: number;                // person whose car it is, -1 for through traffic and buses
+  offT: number;                 // s travelled on its current run off the board
+  offPlace: number;             // the off-layout place where it is parked (state "off"), else -1
   line: number;                 // the bus line it serves (index into world.buses.lines), -1 if not a bus
   seqPos: number;               // bus: its line's itinerary entry that the end of its path is
   nextVisit: number;            // bus: the visit (index into the line's visits) it calls at next
@@ -114,7 +128,9 @@ type Car = {
   heldFor: number;              // s kept at the stop beyond its dwell to even out the gaps between buses
   stopCount: number;            // bus: stops made (the people serve each once)
   skipped: number;              // bus: stops passed without stopping (should stay 0)
-  state: "driving" | "parked" | "leaving";   // leaving: in its bay, waiting for a gap to pull out
+  // leaving: in its bay, waiting for a gap to pull out; off: parked at an off-layout place;
+  // entering: on its way back from one, out of sight, then waiting for room to come on to the board
+  state: "driving" | "parked" | "leaving" | "off" | "entering";
   bay: number;                  // bay while parked or leaving, else -1
   goal: number;                 // bay it is driving to, -1 for through traffic
   exitD: number;                // where its front leaves the last lane for the goal bay
@@ -198,6 +214,7 @@ export class Traffic {
   unplaced = 0;
   private lanes: Lane[] = [];
   private laneByKey = new Map<string, Lane>();
+  private topo = new Map<string, ReturnType<typeof laneTopology>[number]>();
   private turns = new Map<string, Turn>();
   private aways = new Map<number, Away>();
   private holder: Int32Array;
@@ -249,6 +266,15 @@ export class Traffic {
     return this.lanes;
   }
 
+  /** For each road exit (world.offLayout.exits id): the lane coming on to the board there and the lanes leaving by it. */
+  roadExitLanes(): Map<number, { enter: Lane | null; leave: Lane[] }> {
+    const out = new Map<number, { enter: Lane | null; leave: Lane[] }>();
+    for (const [e, x] of roadExits(this.world.roads, this.world.offLayout, this.topo)) {
+      out.set(e, { enter: x.enter ? this.laneByKey.get(x.enter)! : null, leave: x.leave.map((k) => this.laneByKey.get(k)!) });
+    }
+    return out;
+  }
+
   /** Lanes a car may take after `lane` without leaving the board. */
   nextLanes(lane: Lane): Lane[] {
     if (lane.end === null) return [lane];
@@ -288,7 +314,7 @@ export class Traffic {
   private newCar(object: string, path: Seg[]): Car {
     const mesh = this.world.objects.get(object)!.mesh;
     return {
-      index: this.cars.length, owner: -1, line: -1, seqPos: 0, nextVisit: 0, dwelling: false, dwellLeft: 0, heldFor: 0, stopCount: 0, skipped: 0,
+      index: this.cars.length, owner: -1, offT: 0, offPlace: -1, line: -1, seqPos: 0, nextVisit: 0, dwelling: false, dwellLeft: 0, heldFor: 0, stopCount: 0, skipped: 0,
       state: "driving", bay: -1, goal: -1, exitD: NaN, waitMerge: 0, reversing: false, enterD: 0, trailLen: [],
       object, length: Math.max(1, mesh.max[0] - mesh.min[0]), width: mesh.max[1] - mesh.min[1], centre: (mesh.max[0] + mesh.min[0]) / 2, pace: range(this.r, 0.85, 1.02),
       path, d: 0, trail: [], speed: 0, held: [], asking: null, request: NaN, hidden: false, awayLeft: 0, stopped: 0, odometer: 0, maxWait: 0,
@@ -298,30 +324,39 @@ export class Traffic {
   // -- residents' driving ----------------------------------------------------------
 
   /**
-   * Sends a parked car along `lanes` (from its bay's lane to the goal bay's) to bay
-   * `goal`, which is reserved for it. It pulls out once there is a gap.
+   * Sends a resident's car along `lanes` to bay `goal` (reserved for it), or (goal
+   * −1 − p) off the board by the exit the last lane runs into, `offOut` s on to
+   * off-layout place p. A car in a bay pulls out once there is a gap; one parked off
+   * the board travels `offIn` s back to the edge and comes on at the first lane's start.
    */
-  drive(ci: number, lanes: Lane[], goal: number): void {
+  drive(ci: number, lanes: Lane[], goal: number, offIn = 0, offOut = 0): void {
     const car = this.cars[ci];
-    const from = this.bayAt[car.bay]!;
-    const to = this.bayAt[goal]!;
-    const out = this.outSeg(car, car.bay, from);
-    const into = this.inSeg(car, goal, to);
-    const path: Seg[] = [out];
+    const fromOff = car.state === "off";
+    const path: Seg[] = fromOff ? [] : [this.outSeg(car, car.bay, this.bayAt[car.bay]!)];
     lanes.forEach((lane, k) => {
       if (k > 0) path.push(this.turn(lanes[k - 1], lane));
       path.push(lane);
     });
-    path.push(into);
+    if (goal >= 0) {
+      const into = this.inSeg(car, goal, this.bayAt[goal]!);
+      path.push(into);
+      car.exitD = into.laneD;
+      this.bayCar[goal] = ci;
+    } else {
+      path.push({ kind: "off", node: lanes[lanes.length - 1].end!, back: null, length: 0, calls: [], total: offOut, place: -1 - goal });
+      car.exitD = NaN;
+    }
     car.path = path;
-    car.exitD = into.laneD;
     car.goal = goal;
-    car.state = "leaving";
     car.waitMerge = 0;
     car.d = 0;
     car.trail = [];
     car.trailLen = [];
-    this.bayCar[goal] = ci;
+    if (fromOff) {
+      car.state = "entering";
+      car.awayLeft = offIn;
+      car.offPlace = -1;
+    } else car.state = "leaving";
   }
 
   /** Where the front of a car `length` m long, pulling out of bay `bay`, is when it joins the lane. */
@@ -442,6 +477,7 @@ export class Traffic {
     };
     // The network's lanes, each starting and ending clear of its nodes' junction areas.
     const topo = laneTopology(net, this.world.layout.terrain.size);
+    for (const t of topo) this.topo.set(t.key, t);
     for (const t of topo) {
       const road = net.roads.get(t.road)!;
       const L = road.path.length;
@@ -582,6 +618,7 @@ export class Traffic {
   private segPose(seg: Seg, offset: number) {
     if (seg.kind === "lane") return this.lanePose(seg, offset);
     if (seg.kind === "away") return this.lanePose(seg.back, 0);
+    if (seg.kind === "off") return seg.back ? this.lanePose(seg.back, 0) : this.pose;
     const { pts, cum } = seg as Turn | BaySeg;
     const N = cum.length - 1;
     const d = clamp(offset, 0, cum[N]);
@@ -604,34 +641,73 @@ export class Traffic {
    */
   private buildLines(): void {
     const net = this.world.buses;
+    const off = this.world.offLayout;
+    const exits = roadExits(this.world.roads, off, net.lanes);
+    const exitAt = new Map([...exits].map(([e, x]) => [x.node, e]));
+    const distance = (p: number, exit: number) => off.places[p].via.find((v) => v.exit === exit)!.distance;
+    const between = (p: number, q: number) => Math.min(...off.places[p].via.flatMap((v) => off.places[q].via.filter((w) => w.exit === v.exit).map((w) => Math.abs(w.distance - v.distance))));
     for (const geom of net.lines) {
-      const place = (side: number) => {
+      // Round the line: lanes (with the stops in them) and off-layout places ("@p", a call there if `visit`).
+      type Tok = { key: string; stops: Array<{ d: number; visit: number }>; visit: number };
+      const tokOf = (v: number): Tok => {
+        const side = geom.visits[v].side;
+        if (side < 0) return { key: `@${-1 - side}`, stops: [], visit: v };
         const st = net.sides[side];
-        return { lane: this.laneByKey.get(st.lane)!, d: st.d - net.lanes.get(st.lane)!.box0 };
+        return { key: st.lane, stops: [{ d: st.d - net.lanes.get(st.lane)!.box0, visit: v }], visit: -1 };
       };
       const m = geom.visits.length;
-      const v0 = place(geom.visits[0].side);
-      const passes: Array<{ lane: Lane; stops: Array<{ d: number; visit: number }> }> = [{ lane: v0.lane, stops: [{ d: v0.d, visit: 0 }] }];
+      const toks: Tok[] = [tokOf(0)];
       geom.legs.forEach((keys, i) => {
-        for (let k = 1; k < keys.length; k++) passes.push({ lane: this.laneByKey.get(keys[k])!, stops: [] });
-        const to = (i + 1) % m;
-        passes[passes.length - 1].stops.push({ d: place(geom.visits[to].side).d, visit: to });
+        for (let k = 1; k < keys.length; k++) toks.push({ key: keys[k], stops: [], visit: -1 });
+        const to = tokOf((i + 1) % m);
+        const last = toks[toks.length - 1];
+        if (to.visit >= 0) last.visit = to.visit;
+        else last.stops.push(...to.stops);
       });
-      // The round ends on the first visit's lane again: that pass is the first one.
-      const last = passes.pop()!;
-      passes[0].stops.unshift(...last.stops.filter((x) => x.visit !== 0));
+      // The round ends where it began: the last token is the first one again.
+      const end = toks.pop()!;
+      toks[0].stops.unshift(...end.stops.filter((x) => x.visit !== 0));
+      // Start on a lane, so each run off the board is in one piece.
+      const first = toks.findIndex((t) => !t.key.startsWith("@"));
+      const ring = [...toks.slice(first), ...toks.slice(0, first)];
       const seq: Array<{ seg: Seg; stops: Array<{ d: number; visit: number }> }> = [];
-      passes.forEach((p, k) => {
-        p.stops.sort((a, b) => a.d - b.d);
-        seq.push({ seg: p.lane, stops: p.stops });
-        const next = passes[(k + 1) % passes.length].lane;
-        if (p.lane.end !== null) seq.push({ seg: this.turn(p.lane, next), stops: [] });
+      ring.forEach((t, k) => {
+        if (t.key.startsWith("@")) return;
+        const lane = this.laneByKey.get(t.key)!;
+        t.stops.sort((a, b) => a.d - b.d);
+        seq.push({ seg: lane, stops: t.stops });
+        const next = ring[(k + 1) % ring.length];
+        if (!next.key.startsWith("@")) {
+          if (lane.end !== null) seq.push({ seg: this.turn(lane, this.laneByKey.get(next.key)!), stops: [] });
+          return;
+        }
+        // Off the board until the next lane: out to each place in turn (calling where it is a visit), then back on.
+        const out = exitAt.get(lane.end!)!;
+        const calls: OffSeg["calls"] = [];
+        let time = 0;
+        let place = -1;
+        let j = (k + 1) % ring.length;
+        while (ring[j].key.startsWith("@")) {
+          const p = Number(ring[j].key.slice(1));
+          time += (place < 0 ? distance(p, out) : between(place, p)) / OFF_BUS_SPEED;
+          if (ring[j].visit >= 0) calls.push({ at: time, visit: ring[j].visit });
+          place = p;
+          j = (j + 1) % ring.length;
+        }
+        const back = this.laneByKey.get(ring[j].key)!;
+        time += distance(place, exitAt.get(Number(ring[j].key.split("|")[0]))!) / OFF_BUS_SPEED;
+        seq.push({ seg: { kind: "off", node: lane.end!, back, length: 0, calls, total: time, place: -1 }, stops: [] });
       });
+      // Distances round the itinerary, a run off the board counting as the road it would cover.
+      const len = (e: (typeof seq)[number]) => (e.seg.kind === "off" ? e.seg.total * OFF_BUS_SPEED : e.seg.length);
       const cum: number[] = [];
       let total = 0;
-      for (const e of seq) { cum.push(total); total += e.seg.length; }
+      for (const e of seq) { cum.push(total); total += len(e); }
       const visitAt = geom.visits.map(() => 0);
-      seq.forEach((e, k) => { for (const x of e.stops) visitAt[x.visit] = cum[k] + x.d; });
+      seq.forEach((e, k) => {
+        for (const x of e.stops) visitAt[x.visit] = cum[k] + x.d;
+        if (e.seg.kind === "off") for (const c of e.seg.calls) visitAt[c.visit] = cum[k] + c.at * OFF_BUS_SPEED;
+      });
       this.lines.push({ geom, seq, cum, total, visitAt, buses: [] });
     }
   }
@@ -670,10 +746,11 @@ export class Traffic {
     });
   }
 
-  /** The first visit marked after offset d of itinerary entry idx. */
+  /** The first visit marked after offset d of itinerary entry idx (a stop in a lane, or a call off the board). */
   private visitAhead(seq: Traffic["lines"][number]["seq"], idx: number, d: number): number {
     for (let k = 0; k <= seq.length; k++) {
       const e = seq[(idx + k) % seq.length];
+      if (k > 0 && e.seg.kind === "off" && e.seg.calls.length) return e.seg.calls[0].visit;
       const stop = e.stops.find((x) => k > 0 || x.d > d + 0.1);
       if (stop) return stop.visit;
     }
@@ -739,7 +816,8 @@ export class Traffic {
   private busAt(car: Car): number {
     const line = this.lines[car.line];
     const k = mod(car.seqPos - (car.path.length - 1), line.seq.length);
-    return line.cum[k] + Math.min(car.d, line.seq[k].seg.length);
+    const seg = line.seq[k].seg;
+    return line.cum[k] + (seg.kind === "off" ? car.offT * OFF_BUS_SPEED : Math.min(car.d, seg.length));
   }
 
   /** About how many seconds until bus ci stands at visit v (0 if it is there now). */
@@ -859,18 +937,24 @@ export class Traffic {
     this.occupy();
     for (const g of this.gates) g.want = false;
     for (const t of trains) {
+      // On the board, or off it but about to come back on (as if already heading for the edge).
+      const at = approach(t, OFF_LOOKAHEAD);
+      if (!at) continue;
       const L = t.plan.route.length;
-      const brake = (t.speed * t.speed) / (2 * t.plan.type.decel);
+      const brake = (at.speed * at.speed) / (2 * t.plan.type.decel);
       for (const pg of this.planGates[planIndex(t)]) {
         const g = this.gates[pg.gate];
         const behind = t.plan.length + g.half + TAIL_CLEAR;
-        let ahead = (pg.r - t.r) * t.dir;
+        let ahead = (pg.r - at.r) * at.dir;
         if (t.plan.route.closed) ahead = mod(ahead + behind, L) - behind;
         if (ahead < -behind) continue;
         const toStop = ahead - g.half - GATE_MARGIN;
         // Over it, or too close to stop comfortably without it closing in time, or arriving soon.
         const warning = WARN + LOWER + SLACK;
-        if (ahead < 0 || toStop < brake + t.speed * warning + MIN_APPROACH || this.eta(t, toStop) <= warning) g.wantedAt = this.time;
+        // A train held at a signal, still short of where it stops for this crossing, asks again when it can go
+        // (it stops short of a crossing that is not closed).
+        const held = t.phase === "waiting" && t.wants.length > 0 && toStop > 1;
+        if (ahead < 0 || (!held && (toStop < brake + at.speed * warning + MIN_APPROACH || this.eta(t, at, toStop) <= warning))) g.wantedAt = this.time;
       }
     }
     for (const g of this.gates) g.want = this.time - g.wantedAt < HOLD;
@@ -893,13 +977,13 @@ export class Traffic {
    * come, accelerating from its current speed to the highest speed the line allows
    * (ignoring stops and signals on the way).
    */
-  private eta(t: Train, dist: number): number {
-    let time = t.phase === "dwelling" ? t.dwellLeft : 0;
-    let v = t.speed;
+  private eta(t: Train, at: NonNullable<ReturnType<typeof approach>>, dist: number): number {
+    let time = at.delay;
+    let v = at.speed;
     const limit = WARN + LOWER + SLACK;
     for (let x = 0; x < dist && time <= limit; x += ETA_STEP) {
       const ds = Math.min(ETA_STEP, dist - x);
-      const v2 = Math.min(Math.max(curveLimit(t.plan, t.r + t.dir * x), 1), Math.sqrt(v * v + 2 * t.plan.type.accel * ds));
+      const v2 = Math.min(Math.max(curveLimit(t.plan, at.r + at.dir * x), 1), Math.sqrt(v * v + 2 * t.plan.type.accel * ds));
       time += ds / Math.max((v + v2) / 2, 0.5);
       v = v2;
     }
@@ -1037,9 +1121,10 @@ export class Traffic {
     if (!best) return false;
     const via = this.turn(lane, best) as Turn;
     if (car.owner >= 0) {
-      // A resident's car finds a new way from there to its bay.
-      const into = car.path[car.path.length - 1] as BaySeg;
-      const rest = this.lanePath(best, 0, into.lane, into.laneD);
+      // A resident's car finds a new way from there to its bay (or to the lane leaving the board).
+      const into = car.path[car.path.length - 1] as BaySeg | OffSeg;
+      const target = into.kind === "bay" ? into.lane : (car.path[car.path.length - 2] as Lane);
+      const rest = this.lanePath(best, 0, target, into.kind === "bay" ? into.laneD : target.length - 0.5);
       if (!rest) return false;
       car.path.length = k;
       car.path.push(via);
@@ -1098,7 +1183,7 @@ export class Traffic {
     let cum = 0;
     for (let k = car.path.indexOf(turn) + 1; k < car.path.length; k++) {
       const seg = car.path[k];
-      if (seg.kind === "away" || seg.kind === "bay") return Infinity;     // off the board, or into its own bay
+      if (seg.kind === "away" || seg.kind === "off" || seg.kind === "bay") return Infinity;     // off the board, or into its own bay
       if (seg.kind === "turn" && seg.junction) return cum;
       const len = this.segLen(car, k);
       let room = len;
@@ -1122,20 +1207,75 @@ export class Traffic {
     return room;
   }
 
+  /**
+   * Out of sight beyond the board's edge: turning round (through traffic), on a run
+   * off the board (buses calling at off-layout places; residents' cars on their way
+   * to one, or back), and coming back on when there is room.
+   */
   private stepAway(car: Car, dt: number): void {
+    if (car.state === "off") return;                    // parked off the board
+    if (car.state === "entering") {
+      car.awayLeft -= dt;
+      const lane = car.path[0] as Lane;
+      if (car.awayLeft > 0 || this.exitRoom(lane) < car.length + MIN_GAP + 2) return;
+      car.state = "driving";
+      this.comeBack(car, lane, false);
+      return;
+    }
+    const seg = car.path[0];
+    if (seg.kind === "off") {
+      if (car.dwelling) {
+        car.dwellLeft -= dt;
+        if (car.dwellLeft > 0) return;
+        car.dwelling = false;
+        car.nextVisit = (car.nextVisit + 1) % this.lines[car.line].geom.visits.length;
+        return;
+      }
+      if (car.offT < seg.total) {
+        car.offT = Math.min(seg.total, car.offT + dt);
+        const call = seg.calls.find((c) => c.visit === car.nextVisit && c.at <= car.offT);
+        if (call) {
+          car.dwelling = true;
+          car.dwellLeft = this.lines[car.line].geom.dwell;
+          car.stopCount++;
+        }
+        return;
+      }
+      if (!seg.back) {
+        // A resident's car has arrived out there: parked off the board.
+        car.state = "off";
+        car.offPlace = seg.place;
+        car.goal = -1;
+        car.path = [];
+        car.trail = [];
+        car.trailLen = [];
+        this.arrivals.push(car.index);
+        return;
+      }
+      if (this.exitRoom(seg.back) < car.length + MIN_GAP + 2) return;
+      this.comeBack(car, seg.back, true);
+      return;
+    }
     car.awayLeft -= dt;
-    const away = car.path[0] as Away;
+    const away = seg as Away;
     if (car.awayLeft > 0 || this.exitRoom(away.back) < car.length + MIN_GAP + 2) return;
-    car.path.shift();
-    car.d = Math.min(car.length, away.back.length);
+    this.comeBack(car, away.back, true);
+  }
+
+  /** Back on the board at the start of `lane` (dropping the segment off the board ahead of it, if `shift`). */
+  private comeBack(car: Car, lane: Lane, shift: boolean): void {
+    if (shift) car.path.shift();
+    car.d = Math.min(car.length, lane.length);
     car.trail = [];
+    car.trailLen = [];
     car.hidden = false;
     car.speed = 0;
+    car.stopped = 0;
     this.plan(car);
     // Claim the space now, so a second car coming back this tick waits.
-    const list = this.occ.get(away.back) ?? [];
+    const list = this.occ.get(lane) ?? [];
     list.push({ car, front: car.d, rear: Math.max(0, car.d - car.length) });
-    this.occ.set(away.back, list);
+    this.occ.set(lane, list);
   }
 
   /** The highest speed the car may have this tick. */
@@ -1157,6 +1297,7 @@ export class Traffic {
     let cum = -car.d;
     for (let k = 0; k < car.path.length && cum < LOOK + 20; k++) {
       const seg = car.path[k];
+      if (seg.kind === "away" || seg.kind === "off") break;            // nothing beyond the board's edge is in the way
       const len = this.segLen(car, k);
       const start = this.segStart(car, k);
       for (const o of this.occ.get(seg) ?? []) {
@@ -1224,7 +1365,7 @@ export class Traffic {
           if (!halt) halt = obstacles.some((o) => o.rel > stop && o.rel < cum + z.zoneEnd + car.length + MIN_GAP && o.speed < QUEUED);
           if (halt) { stopAt(stop); clear = false; }
         }
-      } else if (seg.kind === "away") {
+      } else if (seg.kind === "away" || seg.kind === "off") {
         break;                                             // off the board: nothing beyond matters yet
       } else if (seg.kind === "turn") {
         slowTo(seg.speed, cum);
@@ -1247,7 +1388,7 @@ export class Traffic {
     car.odometer += move;
     // (A car backing out stops at the end of its path before driving off: near enough counts.)
     const doneAt = (seg: Seg) => this.segLen(car, 0) - (seg.kind === "bay" && seg.reverse ? 2 * ARRIVE : 0);
-    while (car.path.length > 1 && car.d >= doneAt(car.path[0]) && car.path[0].kind !== "away") {
+    while (car.path.length > 1 && car.d >= doneAt(car.path[0]) && car.path[0].kind !== "away" && car.path[0].kind !== "off") {
       const seg = car.path[0];
       const len = this.segLen(car, 0);
       if (car.line >= 0 && this.seqAt(car, 0).stops.some((x) => x.visit === car.nextVisit && x.d > car.d - move)) {
@@ -1271,11 +1412,14 @@ export class Traffic {
       car.trail.unshift(seg);
       car.trailLen.unshift(len);
       if (car.trail.length > 3) { car.trail.length = 3; car.trailLen.length = 3; }
-      if ((car.path[0] as Seg).kind === "away") {
+      const next = car.path[0] as Seg;
+      if (next.kind === "away" || next.kind === "off") {
+        // Over the board's edge: out of sight.
         car.hidden = true;
         car.asking = null;
         car.request = NaN;
-        car.awayLeft = range(this.r, AWAY[0], AWAY[1]);
+        car.awayLeft = next.kind === "off" ? next.total : range(this.r, AWAY[0], AWAY[1]);
+        car.offT = 0;
         car.d = 0;
         car.speed = 0;
         for (const t of car.held) this.release(car, t);
@@ -1351,6 +1495,7 @@ export class Traffic {
     let cum = -car.d;
     for (let k = 0; k < car.path.length && cum < LOOK; k++) {
       const seg = car.path[k];
+      if (seg.kind === "away" || seg.kind === "off") return null;
       const len = this.segLen(car, k);
       const start = this.segStart(car, k);
       if (seg === lane) {

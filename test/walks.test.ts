@@ -113,7 +113,7 @@ describe("walkway validation", () => {
       L.paths = [{ id: "p", points: [[300, 300], { at: [350, 300], z: 0 }, { at: [360, 300], z: 6 }, [450, 300]] }];
       return L;
     }],
-    ["OUT_OF_BOUNDS", "error", "paths[0].points", () => { const L = base(); L.paths = [{ id: "p", points: [[1, 300], [100, 300]] }]; return L; }],
+    ["OUT_OF_BOUNDS", "error", "paths[0].points", () => { const L = base(); L.paths = [{ id: "p", points: [[2, 300], [100, 300]] }]; return L; }],
     ["SCHEMA", "error", "paths[2].from.road", () => { const L = withWalks(); L.paths![2].from = { path: "park", road: "cross", at: 10 }; return L; }],
   ];
   it.each(cases)("%s (%s) at %s", (code, severity, path, make) => {

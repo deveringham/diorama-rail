@@ -10,6 +10,7 @@ import type { RoutePath } from "./routes";
 import { radiusAt, pointAt } from "./geometry";
 import { isTrainType, TRAIN_CATALOG, trainLength } from "./catalog";
 import { OBJECT_LIBRARY } from "./objectLibrary";
+import { offEdge } from "./exits";
 import { SpatialHash } from "../util/spatial";
 import { mod, round } from "../util/vec";
 
@@ -60,7 +61,7 @@ export function checkReferences(layout: Layout): Issue[] {
   const seen = new Map<string, string>();
   const note = (id: string, path: string) => {
     const prev = seen.get(id);
-    if (prev) issues.push(error("DUPLICATE_ID", `id '${id}' is used twice (also at ${prev}); ids must be unique across tracks, roads, paths, car parks, stations, services, bus stops and bus lines`, path));
+    if (prev) issues.push(error("DUPLICATE_ID", `id '${id}' is used twice (also at ${prev}); ids must be unique across tracks, roads, paths, car parks, stations, services, bus stops, bus lines and off-layout places`, path));
     else seen.set(id, path);
   };
   layout.tracks.forEach((t, i) => note(t.id, `tracks[${i}].id`));
@@ -71,9 +72,11 @@ export function checkReferences(layout: Layout): Issue[] {
   layout.parking.forEach((p, i) => note(p.id, `parking[${i}].id`));
   layout.busStops.forEach((p, i) => note(p.id, `busStops[${i}].id`));
   layout.busLines.forEach((p, i) => note(p.id, `busLines[${i}].id`));
+  layout.offLayout.forEach((p, i) => note(p.id, `offLayout[${i}].id`));
 
   const trackIds = new Set(layout.tracks.map((t) => t.id));
   const stationIds = new Set(layout.stations.map((s) => s.id));
+  const offIds = new Set(layout.offLayout.map((p) => p.id));
   const unknown = (kind: string, id: string, path: string, known: Set<string>) =>
     issues.push(error("UNKNOWN_REF", `unknown ${kind} '${id}'; known: ${[...known].join(", ") || "(none)"}`, path));
   layout.tracks.forEach((t, i) => {
@@ -89,7 +92,7 @@ export function checkReferences(layout: Layout): Issue[] {
   layout.services.forEach((s, i) => {
     if (!isTrainType(s.train)) unknown("train type", s.train, `services[${i}].train`, new Set(Object.keys(TRAIN_CATALOG)));
     s.route.forEach((r, k) => { if (!trackIds.has(r)) unknown("track", r, `services[${i}].route[${k}]`, trackIds); });
-    s.stops.forEach((r, k) => { if (!stationIds.has(r)) unknown("station", r, `services[${i}].stops[${k}]`, stationIds); });
+    s.stops.forEach((r, k) => { if (!stationIds.has(r) && !offIds.has(r)) unknown("station", r, `services[${i}].stops[${k}]`, new Set([...stationIds, ...offIds])); });
   });
   const objectIds = new Set([...Object.keys(OBJECT_LIBRARY), ...Object.keys(layout.objects)]);
   const known = () => new Set([...objectIds].sort());
@@ -115,7 +118,7 @@ export function checkReferences(layout: Layout): Issue[] {
   const stopIds = new Set(layout.busStops.map((b) => b.id));
   layout.busLines.forEach((l, i) => {
     l.stops.forEach((id, k) => {
-      if (!stopIds.has(id)) unknown("bus stop", id, `busLines[${i}].stops[${k}]`, stopIds);
+      if (!stopIds.has(id) && !offIds.has(id)) unknown("bus stop", id, `busLines[${i}].stops[${k}]`, new Set([...stopIds, ...offIds]));
       else if (k > 0 && l.stops[k - 1] === id) issues.push(error("BUS_ROUTE", `bus line '${l.id}' calls at stop '${id}' twice in a row; list each stop once per visit`, `busLines[${i}].stops[${k}]`));
     });
     if (l.mode === "loop" && l.stops.length > 1 && l.stops[0] === l.stops[l.stops.length - 1]) {
@@ -132,6 +135,13 @@ export function checkReferences(layout: Layout): Issue[] {
       if (end?.station && !stationIds.has(end.station)) unknown("station", end.station, `paths[${i}].${w}.station`, stationIds);
       if (end?.path === p.id) issues.push(error("TRACK_REF_CYCLE", `path '${p.id}' cannot branch from itself`, `paths[${i}].${w}.path`));
     }
+  });
+  layout.offLayout.forEach((p, i) => {
+    p.via.forEach((v, k) => {
+      if (v.track && !trackIds.has(v.track)) unknown("track", v.track, `offLayout[${i}].via[${k}].track`, trackIds);
+      if (v.road && !roadIds.has(v.road)) unknown("road", v.road, `offLayout[${i}].via[${k}].road`, roadIds);
+      if (v.path && !pathIds.has(v.path)) unknown("path", v.path, `offLayout[${i}].via[${k}].path`, pathIds);
+    });
   });
   return issues;
 }
@@ -168,10 +178,10 @@ export function checkBounds(layout: Layout, tracks: Map<string, TrackGeom>, poin
   const m = OUT_OF_BOUNDS_MARGIN;
   const issues: Issue[] = [];
   for (const t of tracks.values()) {
-    const out = points.filter((p) => p.track === t.id && (p.x < m || p.y < m || p.x > W - m || p.y > H - m));
+    const out = points.filter((p) => p.track === t.id && (p.x < m || p.y < m || p.x > W - m || p.y > H - m) && !offEdge(layout.terrain.size, t, p.s, m));
     if (out.length) {
       const p = out[0];
-      issues.push(error("OUT_OF_BOUNDS", `track '${t.id}' leaves the terrain (keep ${m} m from the edge of [0,0]–[${W},${H}]) around s=${p.s.toFixed(0)}, (${p.x.toFixed(0)}, ${p.y.toFixed(0)}); move the nearby waypoints inward`, `tracks[${t.index}].points`, [p.x, p.y]));
+      issues.push(error("OUT_OF_BOUNDS", `track '${t.id}' leaves the terrain (keep ${m} m from the edge of [0,0]–[${W},${H}]) around s=${p.s.toFixed(0)}, (${p.x.toFixed(0)}, ${p.y.toFixed(0)}); move the nearby waypoints inward, or end the track on the edge to let it leave the board`, `tracks[${t.index}].points`, [p.x, p.y]));
     }
   }
   return issues;
@@ -258,7 +268,8 @@ export function checkServices(layout: Layout, routes: Map<string, RoutePath>): I
     });
     const route = routes.get(svc.id);
     if (!route) return;
-    const fit = route.length / (len + CAPACITY_HEADWAY);
+    // Trains also wait off the board where the route leaves it.
+    const fit = (route.length + route.off.reduce((a, o) => a + (o ? o.length / 2 : 0), 0)) / (len + CAPACITY_HEADWAY);
     if (svc.count > fit) {
       issues.push(warning("CAPACITY", `service '${svc.id}' has ${svc.count} trains but its ${route.length.toFixed(0)} m route holds about ${Math.max(1, Math.floor(fit))}; reduce count or lengthen the route`, `services[${i}].count`));
     }

@@ -176,19 +176,23 @@ describe.each([
     const inBay = new Map<number, number>();
     for (const c of sim.traffic.cars) {
       if (c.owner < 0) continue;
-      if (c.state !== "driving") {
+      if (c.state === "parked" || c.state === "leaving") {
         inBay.set(c.bay, (inBay.get(c.bay) ?? 0) + 1);
         if (sim.traffic.bayCar[c.bay] !== c.index) bayClash++;
       }
       const driver = sim.people.bodies[c.owner];
-      if ((c.state !== "parked") !== (driver.mode === "drive")) wrongDriver++;
+      const moving = c.state === "driving" || c.state === "leaving" || c.state === "entering";
+      if (moving !== (driver.mode === "drive")) wrongDriver++;
     }
     for (const n of inBay.values()) if (n > 1) bayClash++;
     sim.people.riders.forEach((list, ti) => {
-      const stops = sim.trains[ti].plan.route.stops.map((s) => s.station);
+      const route = sim.trains[ti].plan.route;
+      const stops = route.stops.map((s) => s.station);
+      // Its destination is a station the train calls at, or an off-layout place it calls at off the board.
+      const calls = (to: number) => (to >= 0 ? stops.includes(world!.town.stations[to].station) : route.off.some((o) => o?.calls.some((c) => c.place === -1 - to)));
       for (const id of list) {
         const leg = sim.people.bodies[id].route?.legs[sim.people.bodies[id].leg];
-        if (leg?.mode !== "train" || !stops.includes(world!.town.stations[leg.to].station)) wrongTrain++;
+        if (leg?.mode !== "train" || !calls(leg.to)) wrongTrain++;
       }
     });
   }

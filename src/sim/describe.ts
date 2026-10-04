@@ -2,7 +2,8 @@
 // (window.dr) and tests: a person (who they are, where they live and work, what
 // they are doing), a building (who lives, works and is inside there), a vehicle
 // (whose it is, where it is going; a bus's line, stops and passengers), a train
-// (where it is going, who is aboard) and a bus stop (its lines, who is waiting).
+// (where it is going, who is aboard) and a bus stop (its lines, who is waiting) —
+// including whatever is out of sight off the board, at the off-layout places.
 
 import type { Sim } from "./sim";
 import type { Place } from "./planner";
@@ -24,12 +25,23 @@ function bayName(sim: Sim, bay: number): string {
   return displayName(sim.world.roads.roads.get(b.road)!.spec);
 }
 
-/** A side of a bus stop, by its stop's name. */
+/** An off-layout place by name. */
+const offName = (sim: Sim, p: number) => sim.world.offLayout.places[p].name;
+
+/** A side of a bus stop (or −1 − p, an off-layout place), by its stop's name. */
 function sideName(sim: Sim, side: number): string {
+  if (side < 0) return offName(sim, -1 - side);
   const net = sim.world.buses;
-  const st = net.sides[side];
-  return net.stops[st.stop].name;
+  return net.stops[net.sides[side].stop].name;
 }
+
+/** A train stop: a station (index into town.stations) or −1 − p, an off-layout place. */
+function stationName(sim: Sim, ref: number): string {
+  return ref < 0 ? offName(sim, -1 - ref) : sim.world.town.stations[ref].name;
+}
+
+/** Where a drive ends: a bay, or (−1 − p) off the board at an off-layout place. */
+const driveTo = (sim: Sim, to: number) => (to < 0 ? `${offName(sim, -1 - to)} (off the board)` : bayName(sim, to));
 
 /** A bus line's name, by its id. */
 function lineName(sim: Sim, id: string): string {
@@ -55,12 +67,12 @@ export function doing(sim: Sim, id: number): string {
     case "wait": return `waiting to cross, on the way ${to}`;
     case "pass": return `going through ${town.stations[b.station]?.name ?? ""} station`;
     case "platform":
-      return leg?.mode === "train" ? `waiting at ${town.stations[leg.from].name} for a train to ${town.stations[leg.to].name}` : "on a platform";
+      return leg?.mode === "train" ? `waiting at ${town.stations[leg.from].name} for a train to ${stationName(sim, leg.to)}` : "on a platform";
     case "board":
       if (b.ride === "bus") return `getting on the ${busLine(sim, b.bus)} bus at ${sideName(sim, b.stopSide)}`;
       return `boarding a train at ${town.stations[b.station]?.name ?? ""}`;
     case "train":
-      return leg?.mode === "train" ? `on train ${sim.trains[b.train]?.id ?? ""} to ${town.stations[leg.to].name}` : "on a train";
+      return leg?.mode === "train" ? `on train ${sim.trains[b.train]?.id ?? ""} to ${stationName(sim, leg.to)}` : "on a train";
     case "alight":
       if (b.ride === "bus") return `getting off the bus at ${sideName(sim, b.stopSide)}`;
       return `getting off at ${town.stations[b.station]?.name ?? ""}`;
@@ -69,7 +81,20 @@ export function doing(sim: Sim, id: number): string {
       return leg?.mode === "bus" ? `waiting at ${sideName(sim, leg.from)} for the ${leg.lines.map((l) => lineName(sim, l)).join(" or ")} bus to ${sideName(sim, leg.to)}` : "at a bus stop";
     case "bus":
       return leg?.mode === "bus" ? `on the ${busLine(sim, b.bus)} bus to ${sideName(sim, leg.to)}` : "on a bus";
-    case "drive": return leg?.mode === "drive" ? `driving to ${bayName(sim, leg.to)}, then ${to}` : `driving ${to}`;
+    case "drive":
+      if (leg?.mode !== "drive") return `driving ${to}`;
+      return leg.to < 0 && b.task?.dest.kind === "off" && b.task.dest.id === -1 - leg.to ? `driving ${to} (off the board)` : `driving to ${driveTo(sim, leg.to)}, then ${to}`;
+    case "away": {
+      const where = offName(sim, b.off);
+      if (leg?.mode === "train") return `waiting in ${where} (off the board) for a train to ${stationName(sim, leg.to)}`;
+      if (leg?.mode === "bus") return `waiting in ${where} (off the board) for the ${leg.lines.map((l) => lineName(sim, l)).join(" or ")} bus to ${sideName(sim, leg.to)}`;
+      return b.task?.kind === "work" ? `at work in ${where} (off the board)` : `in ${where} (off the board)`;
+    }
+    case "transit": {
+      const st = leg?.mode === "walk" ? leg.steps[b.step] : undefined;
+      const where = offName(sim, b.off);
+      return st?.kind === "off" && !st.out ? `walking back from ${where}, ${to}` : `walking to ${where} (off the board)`;
+    }
   }
 }
 
@@ -80,12 +105,15 @@ export function describePerson(sim: Sim, id: number): Info {
   const home = town.buildings[p.home];
   const lines: InfoLine[] = [
     { label: "Home", text: home.name, building: home.id },
-    p.job ? { label: "Job", text: `${p.job.title} at ${town.buildings[p.job.building].name}`, building: p.job.building } : { label: "Job", text: "none" },
+    !p.job ? { label: "Job", text: "none" }
+      : p.job.off >= 0 ? { label: "Job", text: `${p.job.title} in ${offName(sim, p.job.off)} (off the board)` }
+        : { label: "Job", text: `${p.job.title} at ${town.buildings[p.job.building].name}`, building: p.job.building },
   ];
   if (b.car >= 0) {
     const car = sim.traffic.cars[b.car];
     const what = car.object.replace(/-/g, " ");
-    const where = car.state === "driving" ? "on the road" : car.state === "leaving" ? `pulling out on ${bayName(sim, car.bay)}` : `parked at ${bayName(sim, car.bay)}`;
+    const where = car.state === "driving" ? (car.hidden ? "off the board" : "on the road") : car.state === "leaving" ? `pulling out on ${bayName(sim, car.bay)}`
+      : car.state === "off" ? `parked in ${offName(sim, car.offPlace)} (off the board)` : car.state === "entering" ? "on its way back on to the board" : `parked at ${bayName(sim, car.bay)}`;
     lines.push({ label: "Car", text: `${what}, ${where}`, vehicle: b.car });
   } else lines.push({ label: "Car", text: "none" });
   const now: Ref = b.mode === "train" ? { train: b.train } : b.mode === "drive" ? { vehicle: b.car } : b.mode === "bus" ? { vehicle: b.bus }
@@ -131,31 +159,44 @@ export function describeVehicle(sim: Sim, ci: number): Info {
   if (car.line >= 0) return describeBus(sim, ci);
   if (car.owner < 0) return { title: what[0].toUpperCase() + what.slice(1), subtitle: "through traffic", lines: [{ label: "Driver", text: "passing through from off the board" }], lists: [] };
   const owner = sim.world.town.people[car.owner];
-  if (car.state === "driving") {
+  if (car.state === "driving" || car.state === "entering") {
     lines.push({ label: "Driver", text: owner.name, person: owner.id });
-    if (car.goal >= 0) lines.push({ label: "Going to", text: bayName(sim, car.goal) });
+    if (car.goal !== -1) lines.push({ label: "Going to", text: driveTo(sim, car.goal) });
+  } else if (car.state === "off") {
+    lines.push({ label: "Parked", text: `in ${offName(sim, car.offPlace)} (off the board)` });
+    lines.push({ label: "Owner", text: `${owner.name} (${doing(sim, owner.id)})`, person: owner.id });
   } else {
     lines.push({ label: car.state === "leaving" ? "Pulling out" : "Parked", text: bayName(sim, car.bay) });
     lines.push({ label: "Owner", text: `${owner.name} (${doing(sim, owner.id)})`, person: owner.id });
   }
-  return { title: `${owner.name}'s ${what}`, subtitle: car.state === "driving" ? "on the road" : "parked", lines, lists: [] };
+  const subtitle = car.hidden ? "off the board" : car.state === "driving" ? "on the road" : "parked";
+  return { title: `${owner.name}'s ${what}`, subtitle, lines, lists: [] };
 }
 
 export function describeTrain(sim: Sim, ti: number): Info {
   const t = sim.trains[ti];
   const town = sim.world.town;
   const riders = sim.people.riders[ti] ?? [];
-  const stationName = (id: string | null) => (id ? sim.world.layout.stations.find((s) => s.id === id)?.name ?? id : "—");
-  const lines: InfoLine[] = [
-    { label: "Service", text: `${t.plan.svc.id} (${t.plan.svc.train}, ${t.plan.svc.mode})` },
-    { label: t.atStation ? "At" : "Next stop", text: t.atStation ? stationName(t.atStation) : stationName(nextStopOf(t)) },
-  ];
+  const named = (id: string | null) => {
+    if (!id) return "—";
+    const place = sim.world.offLayout.places.find((p) => p.id === id);
+    return place ? `${place.name} (off the board)` : sim.world.layout.stations.find((s) => s.id === id)?.name ?? id;
+  };
+  const lines: InfoLine[] = [{ label: "Service", text: `${t.plan.svc.id} (${t.plan.svc.train}, ${t.plan.svc.mode})` }];
+  if (t.off >= 0) {
+    // Out of sight: calling at an off-layout place, or on its way.
+    const run = t.plan.offRuns[t.off]!;
+    if (t.offAt >= 0) lines.push({ label: "At", text: `${offName(sim, t.offAt)} (off the board)` });
+    else if (t.offCall < run.calls.length) lines.push({ label: "Next stop", text: `${offName(sim, run.calls[t.offCall].place)} (off the board)` });
+    else lines.push({ label: "Next", text: `back on the board in about ${mins(Math.max(0, run.total - t.offT))}` });
+  } else lines.push({ label: t.atStation ? "At" : "Next stop", text: t.atStation ? named(t.atStation) : named(nextStopOf(t)) });
   const items = riders.map((id) => {
     const leg = sim.people.bodies[id].route?.legs[sim.people.bodies[id].leg];
-    const to = leg?.mode === "train" ? ` → ${town.stations[leg.to].name}` : "";
+    const to = leg?.mode === "train" ? ` → ${stationName(sim, leg.to)}` : "";
     return { text: `${town.people[id].name}${to}`, person: id };
   });
-  return { title: `Train ${t.id}`, subtitle: `${article(t.plan.svc.train)} on ${t.plan.svc.id}`, lines, lists: [{ title: `Passengers (${riders.length})`, items }] };
+  const subtitle = `${article(t.plan.svc.train)} on ${t.plan.svc.id}${t.off >= 0 ? ", off the board" : ""}`;
+  return { title: `Train ${t.id}`, subtitle, lines, lists: [{ title: `Passengers (${riders.length})`, items }] };
 }
 
 function describeBus(sim: Sim, ci: number): Info {
@@ -164,23 +205,22 @@ function describeBus(sim: Sim, ci: number): Info {
   const line = net.lines[car.line];
   const town = sim.world.town;
   const riders = sim.people.onBus.get(ci) ?? [];
-  const stopOf = (v: number) => net.sides[line.visits[v].side].stop;
   const m = line.visits.length;
-  const ahead = Array.from({ length: Math.min(m, 4) }, (_, k) => stopOf((car.nextVisit + k) % m));
+  const ahead = Array.from({ length: Math.min(m, 4) }, (_, k) => line.visits[(car.nextVisit + k) % m].side);
+  const first: InfoLine = { label: car.dwelling ? "At" : "Next stop", text: sideName(sim, ahead[0]) + (ahead[0] < 0 ? " (off the board)" : "") };
+  if (ahead[0] >= 0) first.stop = net.sides[ahead[0]].stop;
   const lines: InfoLine[] = [
     { label: "Line", text: `${line.name} (${line.mode === "loop" ? "loop" : "there and back"}, ${line.count} bus${line.count > 1 ? "es" : ""}, every ${mins(line.cycle / line.count)})` },
-    car.dwelling
-      ? { label: "At", text: net.stops[ahead[0]].name, stop: ahead[0] }
-      : { label: "Next stop", text: net.stops[ahead[0]].name, stop: ahead[0] },
+    first,
   ];
-  if (ahead.length > 1) lines.push({ label: "Then", text: ahead.slice(1).map((k) => net.stops[k].name).join(", ") });
+  if (ahead.length > 1) lines.push({ label: "Then", text: ahead.slice(1).map((x) => sideName(sim, x)).join(", ") });
   const items = riders.map((id) => {
     const leg = sim.people.bodies[id].route?.legs[sim.people.bodies[id].leg];
     const to = leg?.mode === "bus" ? ` → ${sideName(sim, leg.to)}` : "";
     return { text: `${town.people[id].name}${to}`, person: id };
   });
   return {
-    title: `Bus ${line.name}`, subtitle: car.dwelling ? "at a stop" : car.hidden ? "off the board, turning round" : "on its way",
+    title: `Bus ${line.name}`, subtitle: car.hidden ? (car.dwelling ? "off the board, at a stop" : "off the board") : car.dwelling ? "at a stop" : "on its way",
     lines, lists: [{ title: `Passengers (${riders.length} of ${line.capacity})`, items }],
   };
 }
@@ -198,7 +238,7 @@ export function describeBusStop(sim: Sim, si: number): Info {
     net.lines.forEach((line, li) => {
       const v = line.visits.findIndex((x) => x.side === sideId);
       if (v < 0) return;
-      const next = net.stops[net.sides[line.visits[(v + 1) % line.visits.length].side].stop].name;
+      const next = sideName(sim, line.visits[(v + 1) % line.visits.length].side);
       const due = sim.traffic.lines[li]?.buses.map((ci) => sim.traffic.busDue(ci, v)).filter((t) => t !== null) as number[];
       const soon = due.length ? Math.min(...due) : null;
       calls.push(`${line.name} towards ${next}${soon === null ? "" : soon < 1 ? " (here now)" : ` (in about ${mins(soon)})`}`);

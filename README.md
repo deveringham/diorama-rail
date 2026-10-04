@@ -5,8 +5,10 @@ roads, footpaths, buildings and trees on a diorama block, with trains running on
 their own and a town that lives around them. Every resident has a name, a home,
 often a job and perhaps a car, and runs errands — to work, home, the shops, a
 stroll — walking, driving from parking bay to parking bay, or taking the train
-or the bus, whichever is quickest. Click anyone (or any building, car, bus,
-train or bus stop) to see who they are and what they are doing. A layout is one JSON file; everything visible is derived
+or the bus, whichever is quickest. The board is a piece of a bigger world: lines
+that run off its edge lead to towns beyond, where trains and buses call and
+people go to work, out of sight, and come back. Click anyone (or any building,
+car, bus, train or bus stop) to see who they are and what they are doing. A layout is one JSON file; everything visible is derived
 from it plus a seed — including its scenery objects, which are themselves small
 JSON models built from primitives. Layouts and objects can be validated, simulated and screenshotted
 from the command line, so an LLM (or you) can write and repair them in a loop.
@@ -83,7 +85,8 @@ layout.json ─► model/  parse (zod) → refs → track geometry (fillets, jun
                  │     bridges/tunnels → roads (junctions, crossroads, level crossings, heights)
                  │     (car parks as aisle roads) → paths and sidewalks (the walk network: zebras,
                  │     foot crossings, station ends) → terrain shaping → conflicts, stations,
-                 │     routes → bus stops → scenery → town (buildings, doors, parking bays, residents)
+                 │     exits and off-layout places → routes → bus stops → scenery → town (buildings, doors,
+                 │     parking bays, residents)
                  │     → bus lines (routes over the lanes)
                  ├───► sim/    blocks, per-service plans, trains, level crossings, road traffic,
                  │             parked cars and buses, journey planner, people and their errands, fixed 1/30 s
@@ -136,7 +139,7 @@ its centre, `lamp`-coloured parts for headlights) and list it in the layout's
    with `error(code, message, path, at?)` or `warning(...)`.
 2. `src/model/build.ts`: call it where its inputs exist, e.g.
    `issues.push(...checkSomething(layout, tracks));`.
-3. Add the code to `docs/LAYOUT_GUIDE.md` §10 and a failing fixture to
+3. Add the code to `docs/LAYOUT_GUIDE.md` §11 and a failing fixture to
    `test/validate.test.ts`.
 
 ## Notes on v0.1
@@ -182,8 +185,8 @@ height. The sim (`src/sim/traffic.ts`) drives vehicles on two right-hand lanes:
 - Cars follow the car ahead (a time gap plus a minimum distance), slow for
   curves and turns, and choose turns at random. They pass a junction one at a
   time, and only when there is room beyond it, so they never block one; nor do
-  they stop on a level crossing. Dead ends near the board edge lead off the
-  board; elsewhere cars turn round.
+  they stop on a level crossing. Roads that end on the board's edge lead off
+  it (cars drive off and come back); at other dead ends cars turn round.
 - A level crossing starts flashing when a train could arrive within about 11 s
   (a pessimistic estimate: the line's speed limits, accelerating from its
   current speed, after any remaining dwell) or is too close to brake comfortably,
@@ -283,6 +286,35 @@ apart. The planner treats a line like a train service: an edge from each side of
 a stop to every later one, costed with half the headway as the expected wait.
 Buses stop in the lane (there are no lay-bys), and turn round at dead ends or off
 the board's edge.
+
+### Off the board
+
+![](docs/offboard.png)
+
+A track, road or footpath line whose first or last waypoint is on the board's
+edge leaves the board there (`src/model/exits.ts`); `offLayout` places lie beyond
+such exits at given distances, with jobs for the residents and an appeal for
+visits. Nothing out there is drawn, but everything is still simulated:
+
+- **Trains** (`src/sim/trains.ts`): a shuttle whose route ends where its track
+  leaves the board runs off the edge instead of turning at its last platform; a
+  loop whose first and last tracks cross the edge runs through, off at the end
+  and back on at the start. Once the tail is past the edge the train hands back
+  its blocks and is off the board: it travels on at a steady speed, calls at the
+  service's off-layout stops (people get off and on), and comes back on at the
+  edge as soon as the first stretch is free, at a speed it can stop from. Level
+  crossings near the edge close for a train due back. Cars vanish (and reappear)
+  one by one at the edge.
+- **Buses** take roads off the board to the line's off-layout stops, call there
+  out of sight and come back on; **residents' cars** drive off to an off-layout
+  place and stay parked there until driven back; through traffic drives off and
+  back.
+- **People** may be given a job off the board, or go there on a visit; the
+  planner joins each off-layout place to the paths and sidewalks (walked out of
+  sight), roads (driven), services and bus lines that reach it, so they leave by
+  whatever is quickest, stay there out of sight, and come back by whatever suits
+  them later. The inspect panel and `describe()` say where everything is, on the
+  board or off it.
 
 ### Interpretations and limitations
 - **Fixed routes.** A service follows one path through the graph. Two shuttles

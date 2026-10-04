@@ -123,6 +123,7 @@ export class Inspector {
     });
     snap.trains.forEach((t, i) => {
       for (const c of t.cars) {
+        if (!c.visible) continue;
         const s = screen(c.x, c.y, c.z + 2);
         if (s.front) consider({ kind: "train", id: i }, s.d, TRAIN_PX);
       }
@@ -189,7 +190,7 @@ export class Inspector {
         return v ? [v.x, v.y, v.z + 3] : null;
       }
       case "train": {
-        const c = snap.trains[sel.id]?.cars[0];
+        const c = snap.trains[sel.id]?.cars.find((x) => x.visible);
         return c ? [c.x, c.y, c.z + 6] : null;
       }
       case "stop": {

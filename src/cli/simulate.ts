@@ -37,7 +37,7 @@ if (values.json) {
     console.log(`people: ${pp.people} residents, ${pp.tasks} errands done, ${Object.values(pp.trips).reduce((a, b) => a + b, 0)} journeys (avg ${(pp.avgTrip / 60).toFixed(1)} min),`
       + ` longest wait ${pp.maxWait.toFixed(0)} s${pp.stuck ? `, ${pp.stuck} stuck` : ""}; ${pp.crossed} road crossings`);
     console.log(`  journeys by way of travel: ${Object.entries(pp.trips).map(([k, n]) => `${k} ${n}`).join("; ") || "none"}`);
-    console.log(`  now: ${pp.outside} outside (${pp.walking} walking, ${pp.waiting} on platforms, ${pp.atStops} at bus stops), ${pp.driving} driving, ${pp.riding} on trains, ${pp.onBus} on buses`
+    console.log(`  now: ${pp.outside} outside (${pp.walking} walking, ${pp.waiting} on platforms, ${pp.atStops} at bus stops), ${pp.driving} driving, ${pp.riding} on trains, ${pp.onBus} on buses, ${pp.away} off the board`
       + (pp.maxStopWait ? `; longest wait at a bus stop ${pp.maxStopWait.toFixed(0)} s` : ""));
   }
   if (res.deadlock) console.log(`\nDEADLOCK: ${res.deadlock.message}`);

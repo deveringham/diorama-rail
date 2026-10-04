@@ -1,5 +1,6 @@
 // Bus stops and bus lines. A stop stands beside a road at s, on one side of it or
-// both. Buses drive on the right, so a side is served by buses travelling with it on
+// both (a line may also call at off-layout places, reached by roads that leave the
+// board: the buses drive off the edge, call there out of sight, and come back). Buses drive on the right, so a side is served by buses travelling with it on
 // their right: the right side (−1) going toward increasing s, the left (+1) coming
 // back. A bus stops in its lane with its front door by the stop's sign, and the
 // traffic behind waits. A line calls at its stops in order, round and round (loop)
@@ -12,6 +13,7 @@ import { type RoadNet, type LaneTopo, laneTopology, isPortal, displayName, kerbO
 import type { WalkNet } from "./walks";
 import { KERB } from "./walks";
 import type { ObjectInfo } from "./scenery";
+import type { OffLayout, OffPlace } from "./exits";
 import { pointAt, headingAt } from "./geometry";
 import { profileZ, structureAt } from "./heights";
 import { type Issue, error, warning } from "./validate";
@@ -55,7 +57,7 @@ export type StopSide = {
 export type BusStopGeom = { id: string; index: number; name: string; road: string; s: number; sides: number[] };
 
 export type BusVisit = {
-  side: number;                        // StopSide id
+  side: number;                        // StopSide id, or −1 − p for off-layout place p
   t: number;                           // s after arriving at the first visit that a bus arrives here
   dist: number;                        // m along the line from the first visit
 };
@@ -72,7 +74,7 @@ export type BusLineGeom = {
   dwell: number;
   capacity: number;
   visits: BusVisit[];                  // in calling order; after the last, back to the first
-  legs: string[][];                    // lane keys from each visit's lane to the next visit's (both included)
+  legs: string[][];                    // lane keys (and "@p" for off-layout place p) from each visit's to the next visit's (both included)
   cycle: number;                       // s for one bus to go round once, stops included
   distance: number;                    // m round once
 };
@@ -81,7 +83,23 @@ export type BusNet = { stops: BusStopGeom[]; sides: StopSide[]; lines: BusLineGe
 
 export const emptyBusNet = (): BusNet => ({ stops: [], sides: [], lines: [], lanes: new Map() });
 
-type Ctx = { layout: Layout; roads: RoadNet; walks: WalkNet; objects: Map<string, ObjectInfo>; lots: Set<string> };
+type Ctx = { layout: Layout; roads: RoadNet; walks: WalkNet; objects: Map<string, ObjectInfo>; lots: Set<string>; off: OffLayout };
+
+export const OFF_BUS_SPEED = 11;       // m/s a bus averages off the board
+const OFF_ID = 1_000_000;              // option ids of off-layout places while choosing sides: OFF_ID + place
+
+/** The road exits: each one's dead-end node, the lane coming on to the board there and the lanes leaving by it. */
+export function roadExits(roads: RoadNet, off: OffLayout, lanes: Map<string, LaneTopo>): Map<number, { node: number; enter: string | null; leave: string[] }> {
+  const out = new Map<number, { node: number; enter: string | null; leave: string[] }>();
+  for (const e of off.exits) {
+    if (e.kind !== "road") continue;
+    const node = roads.nodes.find((n) => n.legs.length === 1 && n.legs[0].road === e.line && Math.hypot(n.at[0] - e.at[0], n.at[1] - e.at[1]) < 2);
+    if (!node) continue;
+    const enter = lanes.has(`${node.id}|0`) ? `${node.id}|0` : null;
+    out.set(e.id, { node: node.id, enter, leave: [...lanes.values()].filter((t) => t.end === node.id).map((t) => t.key) });
+  }
+  return out;
+}
 
 /** The stops and their sides (lines come later, once the town knows which sides people can walk to). */
 export function buildBusStops(ctx: Ctx): { net: BusNet; issues: Issue[] } {
@@ -179,25 +197,42 @@ export function buildBusLines(ctx: Ctx, net: BusNet, reachable: (side: number) =
   const { layout } = ctx;
   const issues: Issue[] = [];
   if (!net.stops.length) return issues;
-  const penalty = (id: number) => (id >= 0 && !reachable(id) ? UNREACHABLE_PENALTY : 0);
+  const penalty = (id: number) => (id >= 0 && id < OFF_ID && !reachable(id) ? UNREACHABLE_PENALTY : 0);
   layout.busLines.forEach((spec, i) => {
     const where = `busLines[${i}]`;
-    const ids = spec.stops.map((id) => net.stops.find((s) => s.id === id));
-    if (ids.some((s) => !s)) return;                      // reported as UNKNOWN_REF
-    const stops = ids as BusStopGeom[];
-    const empty = stops.find((s) => !s.sides.length);
-    if (empty) return;                                    // its position is reported already
+    // Each call: a stop on the board (one of its sides), or an off-layout place.
+    type Target = { id: string; sides: number[]; one: boolean; place: OffPlace | null };
+    const targets: Target[] = [];
+    for (const id of spec.stops) {
+      const st = net.stops.find((s) => s.id === id);
+      const place = ctx.off.places.find((p) => p.id === id);
+      if (st) {
+        if (!st.sides.length) return;                     // its position is reported already
+        targets.push({ id, sides: st.sides, one: st.sides.length === 1, place: null });
+      } else if (place) {
+        if (!place.via.some((v) => ctx.off.exits[v.exit].kind === "road")) {
+          issues.push(error("BUS_ROUTE", `bus line '${spec.id}' calls at off-layout place '${id}', but no road leads off the board to it; give it a via on a road that ends on the board's edge`, `${where}.stops`));
+          return;
+        }
+        targets.push({ id, sides: [OFF_ID + place.index], one: false, place });
+      } else return;                                      // reported as UNKNOWN_REF
+    }
+    if (targets.every((t) => t.place)) {
+      issues.push(error("BUS_ROUTE", `bus line '${spec.id}' calls only at off-layout places; give it at least one stop on the board`, `${where}.stops`));
+      return;
+    }
     // Each visit with the index it has in the full round (a shuttle's return pass mirrors its way out).
-    const out = stops.length;
-    let visits = (spec.mode === "loop" ? stops.slice() : [...stops, ...stops.slice(1, -1).reverse()]).map((st, k) => ({ st, k }));
+    const out = targets.length;
+    let visits = (spec.mode === "loop" ? targets.slice() : [...targets, ...targets.slice(1, -1).reverse()]).map((st, k) => ({ st, k }));
     const twin = (k: number) => (spec.mode === "shuttle" && k > 0 && k !== out - 1 ? 2 * out - 2 - k : -1);
-    const choose = (list: typeof visits, relax: boolean) => bestSides(ctx, net, list.map((v) => (relax ? bothSides(v.st) : v.st.sides)), relax ? () => 0 : penalty);
+    const both = (t: Target) => (t.place || t.sides.length === 2 ? t.sides : [t.sides[0], -1 - t.sides[0]]);
+    const choose = (list: typeof visits, relax: boolean) => bestSides(ctx, net, list.map((v) => (relax ? both(v.st) : v.st.sides)), relax ? () => 0 : penalty);
     if (spec.mode === "shuttle") {
       // A stop on one side only is called at once: on the pass that has it on the right (the way out if both do, or neither).
       const relaxed = choose(visits, true);
       if (relaxed) {
         visits = visits.filter((v) => {
-          if (twin(v.k) < 0 || v.st.sides.length !== 1) return true;
+          if (twin(v.k) < 0 || !v.st.one) return true;
           const own = net.sides[v.st.sides[0]].side;
           const [outK, backK] = [Math.min(v.k, twin(v.k)), Math.max(v.k, twin(v.k))];
           const back = relaxed.sides[backK].side === own && relaxed.sides[outK].side !== own;
@@ -207,7 +242,7 @@ export function buildBusLines(ctx: Ctx, net: BusNet, reachable: (side: number) =
     }
     let best = choose(visits, false);
     if (!best) {
-      const k = firstGap(ctx, net, visits.map((v) => v.st));
+      const k = firstGap(ctx, net, visits.map((v) => v.st.sides));
       const [a, b] = [visits[k].st, visits[(k + 1) % visits.length].st];
       issues.push(error("BUS_ROUTE", `bus line '${spec.id}' finds no way by road from stop '${a.id}' to stop '${b.id}' (buses drive on the right and call at the stop on their right-hand side; a stop on one side only is served one way); connect the roads, add the other side to a stop, or change the order`, `${where}.stops`));
       return;
@@ -231,7 +266,7 @@ export function buildBusLines(ctx: Ctx, net: BusNet, reachable: (side: number) =
     let t = 0;
     let dist = 0;
     chosen.sides.forEach((side, k) => {
-      lineVisits.push({ side: side.id, t, dist });
+      lineVisits.push({ side: side.id >= OFF_ID ? -1 - (side.id - OFF_ID) : side.id, t, dist });
       t += spec.dwell + STOP_TIME + chosen.legs[k].time;
       dist += chosen.legs[k].dist;
     });
@@ -247,11 +282,6 @@ export function buildBusLines(ctx: Ctx, net: BusNet, reachable: (side: number) =
     }
   });
   return issues;
-}
-
-/** Both sides of a stop, real or not, for working out which way each pass of a shuttle goes. */
-function bothSides(st: BusStopGeom): number[] {
-  return st.sides.length === 2 ? st.sides : [st.sides[0], -1 - st.sides[0]];
 }
 
 /**
@@ -305,56 +335,99 @@ function stopPlace(ctx: Ctx, net: BusNet, spec: BusStopSpec, s: number, dir: 1 |
 }
 
 type Hop = { keys: string[]; time: number; dist: number };
+const exitCache = new WeakMap<BusNet, ReturnType<typeof roadExits>>();
+type Pos = { lane: string; d: number } | { off: number };
 
-/** The quickest way by lane from one stop side's stopping place to another's, or null. */
-function hop(ctx: Ctx, net: BusNet, a: { lane: string; d: number }, b: { lane: string; d: number }): Hop | null {
+/**
+ * The quickest way from one stopping place to another — a side's place in its lane
+ * or an off-layout place — over the lanes and, through the road exits, off the
+ * board ("@p" keys for the off-layout places passed), or null.
+ */
+function hop(ctx: Ctx, net: BusNet, a: Pos, b: Pos): Hop | null {
   const { roads, layout } = ctx;
   const speed = (t: LaneTopo) => Math.max(3, roads.roads.get(t.road)!.spec.speed * BUS_SPEED);
-  const A = net.lanes.get(a.lane)!;
-  if (a.lane === b.lane && b.d > a.d + 0.5) return { keys: [a.lane], time: (b.d - a.d) / speed(A), dist: b.d - a.d };
+  if ("lane" in a && "lane" in b && a.lane === b.lane && b.d > a.d + 0.5) {
+    const A = net.lanes.get(a.lane)!;
+    return { keys: [a.lane], time: (b.d - a.d) / speed(A), dist: b.d - a.d };
+  }
+  let exits = exitCache.get(net);
+  if (!exits) exitCache.set(net, (exits = roadExits(roads, ctx.off, net.lanes)));
+  const portalOf = new Map([...exits!].map(([e, x]) => [x.node, e]));
   const turnTime = (t: LaneTopo) => {
     const n = t.end === null ? null : roads.nodes[t.end];
     return n && isPortal(n, layout.terrain.size) ? AWAY_TIME : t.end === null ? 0 : JUNCTION_TIME;
   };
+  // Off-layout places reachable from the end of a lane leaving the board, and the ways back on from a place.
+  const offFrom = (t: LaneTopo) => {
+    const e = t.end === null ? undefined : portalOf.get(t.end);
+    return e === undefined ? [] : ctx.off.places.flatMap((p) => p.via.filter((v) => v.exit === e).map((v) => ({ place: p.index, dist: v.distance })));
+  };
+  const onFrom = (p: number) => {
+    const out: Array<{ key: string; dist: number }> = [];
+    for (const v of ctx.off.places[p].via) {
+      const x = exits!.get(v.exit);
+      if (x?.enter) out.push({ key: x.enter, dist: v.distance });
+      // Another place out along the same way.
+      for (const q of ctx.off.places) {
+        if (q.index === p) continue;
+        const w = q.via.find((u) => u.exit === v.exit);
+        if (w) out.push({ key: `@${q.index}`, dist: Math.abs(w.distance - v.distance) });
+      }
+    }
+    return out;
+  };
   const best = new Map<string, number>();
   const prev = new Map<string, string>();
-  const open: Array<{ key: string; time: number; dist: number }> = [];
   const dists = new Map<string, number>();
+  const open: Array<{ key: string; time: number; dist: number }> = [];
   const push = (key: string, time: number, dist: number, from: string) => {
-    if (ctx.lots.has(net.lanes.get(key)!.road)) return;          // not through car parks
+    if (!key.startsWith("@") && ctx.lots.has(net.lanes.get(key)!.road)) return;          // not through car parks
     if (time >= (best.get(key) ?? Infinity)) return;
     best.set(key, time);
     dists.set(key, dist);
     prev.set(key, from);
     open.push({ key, time, dist });
   };
-  for (const k of A.next) push(k, (A.dist - a.d) / speed(A) + turnTime(A), A.dist - a.d, "");
-  let done: { time: number; dist: number; via: string } | null = null;
+  /** Everything one step on from the end of lane t (reached at `time`, `dist`). */
+  const fromLane = (t: LaneTopo, time: number, dist: number, rest: number, from: string) => {
+    for (const k of t.next) push(k, time + rest / speed(t) + turnTime(t), dist + rest, from);
+    for (const o of offFrom(t)) push(`@${o.place}`, time + rest / speed(t) + o.dist / OFF_BUS_SPEED, dist + rest + o.dist, from);
+  };
+  const fromOff = (p: number, time: number, dist: number, from: string) => {
+    for (const o of onFrom(p)) push(o.key, time + o.dist / OFF_BUS_SPEED, dist + o.dist, from);
+  };
+  const startKey = "lane" in a ? a.lane : `@${a.off}`;
+  if ("lane" in a) { const A = net.lanes.get(a.lane)!; fromLane(A, 0, 0, A.dist - a.d, ""); }
+  else fromOff(a.off, 0, 0, "");
+  const goalKey = "lane" in b ? b.lane : `@${b.off}`;
+  let done: { time: number; dist: number } | null = null;
   while (open.length) {
     let bi = 0;
     for (let i = 1; i < open.length; i++) if (open[i].time < open[bi].time) bi = i;
     const cur = open.splice(bi, 1)[0];
     if (cur.time > (best.get(cur.key) ?? Infinity)) continue;
     if (done && cur.time >= done.time) break;
-    const t = net.lanes.get(cur.key)!;
-    if (cur.key === b.lane) {
-      const time = cur.time + b.d / speed(t);
-      if (!done || time < done.time) done = { time, dist: cur.dist + b.d, via: cur.key };
+    if (cur.key === goalKey) {
+      const extra = "lane" in b ? b.d / speed(net.lanes.get(b.lane)!) : 0;
+      if (!done || cur.time + extra < done.time) done = { time: cur.time + extra, dist: cur.dist + ("lane" in b ? b.d : 0) };
+      if (!("lane" in b)) break;
     }
-    for (const k of t.next) push(k, cur.time + t.dist / speed(t) + turnTime(t), cur.dist + t.dist, cur.key);
+    if (cur.key.startsWith("@")) fromOff(Number(cur.key.slice(1)), cur.time, cur.dist, cur.key);
+    else { const t = net.lanes.get(cur.key)!; fromLane(t, cur.time, cur.dist, t.dist, cur.key); }
   }
   if (!done) return null;
-  const keys: string[] = [b.lane];
-  for (let k = prev.get(b.lane)!; k; k = prev.get(k)!) {
+  const keys: string[] = [goalKey];
+  for (let k = prev.get(goalKey)!; k; k = prev.get(k)!) {
     keys.unshift(k);
     if (keys.length > 2000) return null;
   }
-  keys.unshift(a.lane);
+  keys.unshift(startKey);
   return { keys, time: done.time, dist: done.dist };
 }
 
-/** Where a side (or the missing side of a one-sided stop: id −1 − side) has a bus stand. */
-function placeOf(net: BusNet, id: number): { lane: string; d: number; side: 1 | -1 } | null {
+/** Where a side (or the missing side of a one-sided stop: id −1 − side; an off-layout place: OFF_ID + p) has a bus stand. */
+function placeOf(net: BusNet, id: number): ({ lane: string; d: number } | { off: number }) & { side: 1 | -1 } | null {
+  if (id >= OFF_ID) return { off: id - OFF_ID, side: 1 };
   if (id >= 0) return { lane: net.sides[id].lane, d: net.sides[id].d, side: net.sides[id].side };
   // A stand-in for the other side of a one-sided stop: the same spot driven the other way.
   const real = net.sides[-1 - id];
@@ -422,10 +495,10 @@ function bestSides(
 }
 
 /** The first pair of visits with no way between them on any sides (for the error message). */
-function firstGap(ctx: Ctx, net: BusNet, visits: BusStopGeom[]): number {
+function firstGap(ctx: Ctx, net: BusNet, visits: number[][]): number {
   for (let k = 0; k < visits.length; k++) {
-    const a = visits[k].sides;
-    const b = visits[(k + 1) % visits.length].sides;
+    const a = visits[k];
+    const b = visits[(k + 1) % visits.length];
     if (!a.some((x) => b.some((y) => hop(ctx, net, placeOf(net, x)!, placeOf(net, y)!)))) return k;
   }
   return 0;

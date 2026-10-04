@@ -21,7 +21,7 @@
       "id": "coast",
       "kind": "line",
       "minRadius": 300,
-      "points": [{ "at": [120, 450], "z": 3.5 }, [700, 430], [1000, 440], { "at": [1480, 500], "z": 4.5 }]
+      "points": [{ "at": [120, 450], "z": 3.5 }, [700, 430], [1000, 440], { "at": [1480, 500], "z": 4.5 }, [1600, 512]]
     },
     {
       "id": "passing",
@@ -42,7 +42,7 @@
       "train": "regional-3",
       "route": ["coast"],
       "mode": "shuttle",
-      "stops": ["westhafen", "ostkap"]
+      "stops": ["westhafen", "ostkap", "neuhafen"]
     },
     {
       "id": "west-east",
@@ -50,7 +50,7 @@
       "color": "#3d7d8c",
       "route": ["coast", "passing", "coast"],
       "mode": "shuttle",
-      "stops": ["ostkap", "westhafen"]
+      "stops": ["ostkap", "westhafen", "neuhafen"]
     }
   ],
   "style": { "season": "autumn", "timeOfDay": 16.5, "dayLengthSeconds": 600 },
@@ -96,7 +96,7 @@
     {
       "id": "ostkap-street",
       "from": { "road": "inland-road", "at": "end" },
-      "points": [[1470, 530]],
+      "points": [[1470, 530], [1600, 536]],
       "sidewalks": "both"
     },
     {
@@ -166,9 +166,18 @@
     {
       "id": "coast-line",
       "name": "1",
-      "stops": ["quay", "upper-street-stop", "inland-farm", "beach-stop", "ostkap-centre", "lighthouse"],
-      "count": 3,
+      "stops": ["quay", "upper-street-stop", "inland-farm", "beach-stop", "ostkap-centre", "lighthouse", "neuhafen"],
+      "count": 5,
       "color": "#4f6f9a"
+    }
+  ],
+  "offLayout": [
+    {
+      "id": "neuhafen",
+      "via": [{ "track": "coast", "distance": 3500 }, { "road": "ostkap-street", "distance": 3000 }],
+      "jobs": 30,
+      "titles": ["Dock worker", "Clerk", "Shop assistant"],
+      "visits": 1.5
     }
   ],
   "people": { "cars": 0.3 },

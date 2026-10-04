@@ -13,6 +13,7 @@ import { type WalkNet, buildWalks, emptyWalkNet } from "./walks";
 import { planLots, lotPoints, lotIssue } from "./parking";
 import { type Town, buildTown } from "./town";
 import { type BusNet, buildBusStops, buildBusLines, emptyBusNet } from "./buses";
+import { type OffLayout, findExits, buildOffLayout } from "./exits";
 import {
   type Issue, type Report, type TrackPoint, error, makeReport, zodIssues, checkReferences, checkJunctionPosition,
   checkBounds, checkConflicts, checkStations, checkServices,
@@ -44,6 +45,7 @@ export type World = {
   walks: WalkNet;                     // footpaths, sidewalks and where people cross
   town: Town;                         // buildings, parking bays, station access and the residents
   buses: BusNet;                      // bus stops and the lines calling at them
+  offLayout: OffLayout;               // where lines leave the board, and the places beyond
   stats: Record<string, number>;
 };
 
@@ -127,7 +129,20 @@ export function buildWorld(json: unknown): { world: World | null; report: Report
     : null;
   if (walked) issues.push(...walked.issues);
   const walks = walked?.net ?? emptyWalkNet();
-  const busCtx = { layout, roads, walks, objects, lots: new Set(planned.lots.map((l) => l.id)) };
+  // Where tracks, roads and paths leave the board, and the places beyond.
+  const found = findExits(layout, { tracks: [...tracks.values()], roads: [...roads.roads.values()], paths: [...walks.paths.values()] });
+  issues.push(...found.issues);
+  const offPlaces = buildOffLayout(layout, found.exits);
+  issues.push(...offPlaces.issues);
+  const offLayout: OffLayout = { exits: found.exits, places: offPlaces.places };
+  for (const n of walks.nodes) {
+    // A path's or sidewalk's end where its path or road leaves the board.
+    if (n.ways.length !== 1) continue;
+    const owner = walks.ways[n.ways[0].way].owner;
+    const e = found.exits.find((x) => x.kind !== "track" && x.line === owner && Math.hypot(x.at[0] - n.at[0], x.at[1] - n.at[1]) < 15);
+    if (e) n.exit = e.id;
+  }
+  const busCtx = { layout, roads, walks, objects, lots: new Set(planned.lots.map((l) => l.id)), off: offLayout };
   const bused = built.net ? buildBusStops(busCtx) : null;
   if (bused) issues.push(...bused.issues);
   const buses = bused?.net ?? emptyBusNet();
@@ -143,7 +158,7 @@ export function buildWorld(json: unknown): { world: World | null; report: Report
   const routes = new Map<string, RoutePath>();
   layout.services.forEach((svc, i) => {
     if (!isTrainType(svc.train)) return;
-    const res = buildRoute(svc, i, graph, tracks, stationById, trainLength(TRAIN_CATALOG[svc.train]));
+    const res = buildRoute(svc, i, graph, tracks, stationById, trainLength(TRAIN_CATALOG[svc.train]), offLayout);
     issues.push(...res.issues.map((r) => error(r.code, r.message, r.jsonPath)));
     if (res.route) routes.set(svc.id, res.route);
   });
@@ -155,7 +170,7 @@ export function buildWorld(json: unknown): { world: World | null; report: Report
   if (hasErrors(issues)) return { world: null, report: makeReport(issues) };
   const town = buildTown({
     layout, tracks, profiles, spans, trackHash: pointHash, roads, walks, lots: planned.lots, stations, stationEntries: entries, objects,
-    scenery: placed.placements, buses,
+    scenery: placed.placements, buses, off: offLayout,
   });
   issues.push(...town.issues);
   // Bus lines, calling at the sides of stops people can walk to where they can.
@@ -163,7 +178,7 @@ export function buildWorld(json: unknown): { world: World | null; report: Report
   if (hasErrors(issues)) return { world: null, report: makeReport(issues) };
   const world: World = {
     layout, tracks, order, junctions, graph, profiles, spans, terrain, points, pointHash, stations, routes, objects,
-    scenery: placed.placements, roads, walks, town: town.town, buses, stats: {},
+    scenery: placed.placements, roads, walks, town: town.town, buses, offLayout, stats: {},
   };
   world.stats = computeStats(world);
   return { world, report: makeReport(issues, world.stats) };
@@ -209,6 +224,7 @@ function computeStats(w: World): Record<string, number> {
     zebras: w.walks.crossings.filter((c) => c.kind === "zebra").length, footCrossings: w.walks.footCrossings.length,
     buildings: w.town.buildings.length, people, cars: ownCars, parkingBays: w.town.bays.length, carParks: w.town.lots.length, throughTraffic: through,
     busStops: w.buses.stops.length, busLines: w.buses.lines.length, buses: w.buses.lines.reduce((a, l) => a + l.count, 0),
+    exits: w.offLayout.exits.length, offLayoutPlaces: w.offLayout.places.length,
     objects: w.scenery.length, trees, triangles,
   };
 }

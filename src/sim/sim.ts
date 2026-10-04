@@ -13,7 +13,7 @@ import type { SwitchState } from "../model/trackGraph";
 import { TIME_SCALE } from "../model/catalog";
 import { type Blocks, buildBlocks } from "./blocks";
 import { type Plan, buildPlans } from "./services";
-import { type Train, type Phase, type World4Trains, spawn, stepTrain, forEachCar, nextStopOf, entryOf } from "./trains";
+import { type Train, type Phase, type World4Trains, spawn, stepTrain, forEachCar, nextStopOf, entryOf, onBoard } from "./trains";
 import { type VehicleSnapshot, type GateSnapshot, type TrafficStats, Traffic } from "./traffic";
 import { type PersonSnapshot, type PeopleStats, People } from "./people";
 import { rng } from "../util/rng";
@@ -25,7 +25,7 @@ export type SimEvent =
   | { t: number; type: "arrived" | "departed"; train: string; service: string; station: string }
   | { t: number; type: "deadlock"; issue: Issue };
 
-export type CarPose = { x: number; y: number; z: number; heading: number; pitch: number };
+export type CarPose = { x: number; y: number; z: number; heading: number; pitch: number; visible: boolean };
 export type TrainSnapshot = {
   id: string;
   service: string;
@@ -39,6 +39,8 @@ export type TrainSnapshot = {
   length: number;             // m, whole consist
   atStation: string | null;
   nextStop: string | null;
+  offBoard: boolean;          // off the board (every car hidden), travelling or calling at an off-layout stop
+  offAt: string | null;       // the off-layout place it is calling at
   cars: CarPose[];
   reserved: number[];
 };
@@ -157,7 +159,8 @@ export class Sim {
       const path = this.world.tracks.get(loc.track)!.path;
       const ts: TrainSnapshot = snap.trains[i] ?? {
         id: t.id, service: t.plan.svc.id, train: t.plan.svc.train, phase: t.phase, speed: 0, track: "", s: 0,
-        direction: 1, heading: 0, length: t.plan.length, atStation: null, nextStop: null, cars: t.plan.cars.map(() => ({ x: 0, y: 0, z: 0, heading: 0, pitch: 0 })), reserved: [],
+        direction: 1, heading: 0, length: t.plan.length, atStation: null, nextStop: null, offBoard: false, offAt: null,
+        cars: t.plan.cars.map(() => ({ x: 0, y: 0, z: 0, heading: 0, pitch: 0, visible: true })), reserved: [],
       };
       ts.phase = t.phase;
       ts.speed = t.speed;
@@ -167,11 +170,14 @@ export class Sim {
       ts.heading = headingAt(path, loc.s) + (ts.direction < 0 ? Math.PI : 0);
       ts.atStation = t.atStation;
       ts.nextStop = nextStopOf(t);
+      ts.offBoard = t.off >= 0;
+      ts.offAt = t.offAt >= 0 ? this.world.offLayout.places[t.offAt].id : null;
       ts.reserved.length = 0;
       for (let b = 0; b < owner.length; b++) if (owner[b] === i) ts.reserved.push(b);
-      forEachCar(t, (r) => this.at(t.plan, r), (c, x, y, z, heading, pitch) => {
+      forEachCar(t, (r) => this.at(t.plan, r), (c, x, y, z, heading, pitch, mid) => {
         const car = ts.cars[c];
         car.x = x; car.y = y; car.z = z; car.heading = heading; car.pitch = pitch;
+        car.visible = onBoard(t, mid);
       });
       snap.trains[i] = ts;
     });

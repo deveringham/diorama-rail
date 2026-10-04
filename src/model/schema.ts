@@ -133,7 +133,7 @@ const Service = z.strictObject({
   color: z.string().regex(/^#[0-9a-fA-F]{6}$/, "color must be a hex string like #c8553d").optional(),
   route: z.array(Id).min(1).describe("Ordered track ids; consecutive ids must share a junction"),
   mode: z.enum(["loop", "shuttle"]),
-  stops: z.array(Id).default([]),
+  stops: z.array(Id).default([]).describe("Station ids, and off-layout place ids reached by a track at an end of the route that leaves the board"),
   dwell: z.number().nonnegative().default(25),
   count: z.int().min(1).max(20).default(1),
 });
@@ -188,6 +188,29 @@ const ParkingLot = z.strictObject({
   road: Id.optional().describe("Road its driveway joins; default the nearest"),
 });
 
+const OffVia = z
+  .strictObject({
+    track: Id.optional().describe("A track that leaves the board toward the place"),
+    road: Id.optional().describe("A road that leaves the board toward the place (cars and buses; people on foot along its sidewalks)"),
+    path: Id.optional().describe("A footpath that leaves the board toward the place"),
+    end: z.enum(["start", "end"]).optional().describe("Which end of the line leaves the board, if both do"),
+    distance: z.number().positive().default(2000).describe("m from the board's edge to the place along this way"),
+  })
+  .superRefine((v, ctx) => {
+    if ([v.track, v.road, v.path].filter((x) => x !== undefined).length !== 1) {
+      ctx.addIssue({ code: "custom", path: [v.road ? "road" : v.path ? "path" : "track"], message: "give exactly one of `track`, `road` or `path`" });
+    }
+  });
+
+const OffPlace = z.strictObject({
+  id: Id,
+  name: z.string().min(1).optional().describe('Shown in journeys and timetables; default from the id ("neustadt" → "Neustadt")'),
+  via: z.array(OffVia).min(1).describe("The lines leading off the board to it, each with the distance beyond the edge"),
+  jobs: z.int().min(0).max(1000).default(0).describe("Posts there that residents of the board may hold (they commute)"),
+  titles: z.array(z.string().min(1)).min(1).default(["Employee"]).describe("Job titles, as for buildings: the last fills the rest"),
+  visits: z.number().min(0).max(20).default(1).describe("How often people go there on a visit; 1 ≈ one landmark on the board"),
+});
+
 const BusStop = z.strictObject({
   id: Id,
   name: z.string().min(1).optional().describe('Shown on the stop and in journeys; default from the id ("market-square" → "Market Square")'),
@@ -201,7 +224,7 @@ const BusStop = z.strictObject({
 const BusLine = z.strictObject({
   id: Id,
   name: z.string().min(1).optional().describe('Shown on the buses and in journeys, e.g. "3" or "Harbour Hopper"; default from the id'),
-  stops: z.array(Id).min(2).describe("Bus stop ids in the order the buses call; they take the quickest way along the roads between them"),
+  stops: z.array(Id).min(2).describe("Bus stop ids (or off-layout place ids reached by road) in the order the buses call; they take the quickest way along the roads between them"),
   mode: z.enum(["shuttle", "loop"]).default("shuttle")
     .describe("shuttle: there and back along the list, turning round after the last stop; loop: from the last stop back to the first"),
   count: z.int().min(1).max(20).default(1).describe("Buses on the line, spread evenly along it"),
@@ -235,6 +258,8 @@ export const LayoutSchema = z.strictObject({
   parking: z.array(ParkingLot).default([]).describe("Car parks: rows of bays along an aisle, joined to a road by a driveway"),
   busStops: z.array(BusStop).default([]).describe("Bus stops beside roads, on one side or both"),
   busLines: z.array(BusLine).default([]).describe("Bus lines: buses calling at stops in order along the roads; people ride them like trains"),
+  offLayout: z.array(OffPlace).default([])
+    .describe("Places off the board, reached by tracks, roads and paths that leave it (end on its edge): stops for services and bus lines, and destinations for errands"),
   people: z.strictObject({
     count: z.int().min(0).max(2000).optional()
       .describe("How many people live on the board; default as many as the accommodation holds (at most 600)"),
@@ -272,6 +297,7 @@ export type PathEndSpec = NonNullable<PathSpec["from"]>;
 export type ParkingLotSpec = Layout["parking"][number];
 export type BusStopSpec = Layout["busStops"][number];
 export type BusLineSpec = Layout["busLines"][number];
+export type OffPlaceSpec = Layout["offLayout"][number];
 
 /** Normalises a waypoint to { at, z?, radius? }. */
 export function waypoint(w: WaypointSpec): { at: [number, number]; z?: number; radius?: number } {

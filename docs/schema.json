@@ -361,6 +361,7 @@
           },
           "stops": {
             "default": [],
+            "description": "Station ids, and off-layout place ids reached by a track at an end of the route that leaves the board",
             "type": "array",
             "items": {
               "type": "string",
@@ -913,7 +914,7 @@
               "type": "string",
               "pattern": "^[a-z][a-z0-9-]*$"
             },
-            "description": "Bus stop ids in the order the buses call; they take the quickest way along the roads between them"
+            "description": "Bus stop ids (or off-layout place ids reached by road) in the order the buses call; they take the quickest way along the roads between them"
           },
           "mode": {
             "default": "shuttle",
@@ -960,6 +961,96 @@
         "required": [
           "id",
           "stops"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "offLayout": {
+      "default": [],
+      "description": "Places off the board, reached by tracks, roads and paths that leave it (end on its edge): stops for services and bus lines, and destinations for errands",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$"
+          },
+          "name": {
+            "description": "Shown in journeys and timetables; default from the id (\"neustadt\" → \"Neustadt\")",
+            "type": "string",
+            "minLength": 1
+          },
+          "via": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "track": {
+                  "description": "A track that leaves the board toward the place",
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]*$"
+                },
+                "road": {
+                  "description": "A road that leaves the board toward the place (cars and buses; people on foot along its sidewalks)",
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]*$"
+                },
+                "path": {
+                  "description": "A footpath that leaves the board toward the place",
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]*$"
+                },
+                "end": {
+                  "description": "Which end of the line leaves the board, if both do",
+                  "type": "string",
+                  "enum": [
+                    "start",
+                    "end"
+                  ]
+                },
+                "distance": {
+                  "default": 2000,
+                  "description": "m from the board's edge to the place along this way",
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                }
+              },
+              "additionalProperties": false
+            },
+            "description": "The lines leading off the board to it, each with the distance beyond the edge"
+          },
+          "jobs": {
+            "default": 0,
+            "description": "Posts there that residents of the board may hold (they commute)",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000
+          },
+          "titles": {
+            "default": [
+              "Employee"
+            ],
+            "description": "Job titles, as for buildings: the last fills the rest",
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "visits": {
+            "default": 1,
+            "description": "How often people go there on a visit; 1 ≈ one landmark on the board",
+            "type": "number",
+            "minimum": 0,
+            "maximum": 20
+          }
+        },
+        "required": [
+          "id",
+          "via"
         ],
         "additionalProperties": false
       }

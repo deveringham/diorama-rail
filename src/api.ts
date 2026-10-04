@@ -163,13 +163,26 @@ export function query(world: World) {
       const buses = world.buses;
       if (buses.stops.length) {
         out.push("Buses:");
-        const sideName = (id: number) => `${buses.stops[buses.sides[id].stop].id}${buses.stops[buses.sides[id].stop].sides.length > 1 ? `(${buses.sides[id].side > 0 ? "L" : "R"})` : ""}`;
+        const sideName = (id: number) => (id < 0 ? `${world.offLayout.places[-1 - id].id}(off)`
+          : `${buses.stops[buses.sides[id].stop].id}${buses.stops[buses.sides[id].stop].sides.length > 1 ? `(${buses.sides[id].side > 0 ? "L" : "R"})` : ""}`);
         for (const st of buses.stops) {
           const sides = st.sides.map((k) => `${buses.sides[k].side > 0 ? "left" : "right"}${town.stops[k]?.access ? "" : " UNREACHABLE"}`);
           out.push(`  stop ${st.id} "${st.name}" on ${st.road} s=${f0(st.s)}, ${sides.join(" + ")} side${sides.length > 1 ? "s" : ""}`);
         }
         for (const l of buses.lines) {
           out.push(`  line ${l.id} "${l.name}" ${l.mode}, ${l.count}× ${l.vehicle} (${l.color}): ${l.visits.map((v) => sideName(v.side)).join(" → ")} → back; round ${f0(l.distance)} m in about ${f0(l.cycle)} s, a bus every ${f0(l.cycle / l.count)} s`);
+        }
+      }
+      const off = world.offLayout;
+      if (off.exits.length) {
+        out.push("Off the board:");
+        for (const e of off.exits) out.push(`  exit: ${e.kind} ${e.line} leaves at its ${e.end ? "end" : "start"}, (${f0(e.at[0])}, ${f0(e.at[1])})`);
+        for (const p of off.places) {
+          const via = p.via.map((v) => `${off.exits[v.exit].kind} ${off.exits[v.exit].line} ${f0(v.distance)} m`).join(", ");
+          const services = L.services.filter((s) => s.stops.includes(p.id)).map((s) => s.id);
+          const lines = L.busLines.filter((l) => l.stops.includes(p.id)).map((l) => l.id);
+          out.push(`  place ${p.id} "${p.name}" via ${via || "nothing"}; ${p.jobs.length} jobs, visits ${p.visits}`
+            + (services.length ? `; trains ${services.join(", ")}` : "") + (lines.length ? `; buses ${lines.join(", ")}` : ""));
         }
       }
       const counts = new Map<string, number>();

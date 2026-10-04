@@ -54,6 +54,7 @@ export class TrainMeshes {
   private e = new THREE.Euler(0, 0, 0, "YZX");
   private p = new THREE.Vector3();
   private one = new THREE.Vector3(1, 1, 1);
+  private none = new THREE.Vector3(0, 0, 0);
 
   constructor(world: World, snapshot: SimSnapshot) {
     const meshes = new Map<string, { geo: THREE.BufferGeometry; colors: THREE.Color[]; owners: Array<[number, number]> }>();
@@ -90,7 +91,8 @@ export class TrainMeshes {
         const slot = this.slots[ti][c];
         toThree(car.x, car.y, car.z + RAIL_TOP, this.p);
         this.q.setFromEuler(this.e.set(0, car.heading, car.pitch));
-        slot.mesh.setMatrixAt(slot.index, this.m.compose(this.p, this.q, this.one));
+        // Cars out past the board's edge (or off it altogether) are scaled to nothing.
+        slot.mesh.setMatrixAt(slot.index, this.m.compose(this.p, this.q, car.visible ? this.one : this.none));
       });
     });
     for (const child of this.group.children) (child as THREE.InstancedMesh).instanceMatrix.needsUpdate = true;

@@ -108,7 +108,9 @@ export class CameraRig {
 
   update(dt: number, snap: SimSnapshot | null, jump = false): void {
     const tr = this.follow !== null ? snap?.trains[this.follow] : undefined;
-    if (tr) {
+    if (tr?.offBoard) {
+      // Off the board: the camera waits where the train left until it comes back.
+    } else if (tr) {
       const car = tr.cars[0];
       const back = FOLLOW_BACK + 0.6 * tr.length;
       const fx = Math.cos(tr.heading), fy = Math.sin(tr.heading);

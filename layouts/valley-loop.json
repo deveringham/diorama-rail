@@ -25,12 +25,12 @@
       "kind": "line",
       "minRadius": 80,
       "from": { "track": "main", "at": 700, "heading": "forward" },
-      "points": [[1080, 420], [1120, 700], [1030, 750], { "at": [1030, 890], "z": 26 }]
+      "points": [[1080, 420], [1120, 700], [1030, 750], { "at": [1030, 890], "z": 26 }, [1030, 1000]]
     }
   ],
   "stations": [
     { "id": "lindenau", "name": "Lindenau", "track": "main", "at": 380, "length": 160, "side": "both" },
-    { "id": "bergdorf", "name": "Bergdorf", "track": "hill", "at": 722, "length": 80, "side": "left" }
+    { "id": "bergdorf", "name": "Bergdorf", "track": "hill", "at": 719, "length": 80, "side": "left" }
   ],
   "services": [
     {
@@ -47,17 +47,17 @@
       "train": "tram-2",
       "route": ["main", "hill"],
       "mode": "shuttle",
-      "stops": ["lindenau", "bergdorf"],
+      "stops": ["lindenau", "bergdorf", "hochdorf"],
       "count": 1
     }
   ],
   "style": { "season": "summer", "timeOfDay": 15, "dayLengthSeconds": null },
   "roads": [
-    { "id": "country-west", "points": [[6, 300], [560, 300]], "speed": 16, "sidewalks": "right" },
+    { "id": "country-west", "points": [[0, 300], [560, 300]], "speed": 16, "sidewalks": "right" },
     { "id": "market-street", "points": [[560, 300], [830, 300]], "sidewalks": "both", "parking": "both" },
     {
       "id": "country-east",
-      "points": [[830, 300], { "at": [1092, 300], "z": -1.8 }, [1394, 300]],
+      "points": [[830, 300], { "at": [1092, 300], "z": -1.8 }, [1400, 300]],
       "speed": 16,
       "sidewalks": "right"
     },
@@ -93,7 +93,7 @@
       "width": 5,
       "maxGrade": 0.1,
       "speed": 9,
-      "points": [[1001, 788], [1001, 994]],
+      "points": [[1001, 788], [1001, 1000]],
       "sidewalks": "both",
       "sidewalkWidth": 1.5
     }
@@ -107,7 +107,7 @@
     {
       "id": "field-path",
       "from": { "path": "mill-walk", "at": "end" },
-      "points": [[452, 380], [450, 240], [445, 160], [460, 6]]
+      "points": [[452, 380], [450, 240], [445, 160], [460, 0]]
     },
     { "id": "chapel-path", "from": { "road": "bergdorf-lane", "at": 77 }, "points": [[982, 865], [975, 861]] }
   ],
@@ -122,8 +122,37 @@
     {
       "id": "line-2",
       "name": "2",
-      "stops": ["westfeld", "market-square", "lindenau-station", "ostend"],
-      "count": 2
+      "stops": ["altheim", "westfeld", "market-square", "lindenau-station", "ostend", "neustadt"],
+      "count": 3
+    }
+  ],
+  "offLayout": [
+    {
+      "id": "altheim",
+      "via": [{ "road": "country-west", "distance": 2500 }],
+      "jobs": 8,
+      "titles": ["Farmhand", "Baker", "Teacher"],
+      "visits": 0.8
+    },
+    {
+      "id": "neustadt",
+      "via": [{ "road": "country-east", "distance": 3000 }],
+      "jobs": 40,
+      "titles": ["Office worker", "Shop assistant", "Nurse", "Mechanic"],
+      "visits": 2
+    },
+    {
+      "id": "hochdorf",
+      "via": [{ "track": "hill", "distance": 2200 }, { "road": "bergdorf-lane", "distance": 1800 }],
+      "jobs": 4,
+      "titles": ["Forester", "Innkeeper"],
+      "visits": 0.6
+    },
+    {
+      "id": "muehlbach",
+      "name": "Mühlbach",
+      "via": [{ "path": "field-path", "distance": 1200 }],
+      "visits": 0.6
     }
   ],
   "people": { "cars": 0.3 },

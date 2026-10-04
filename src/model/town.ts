@@ -17,6 +17,7 @@ import { type LotGeom, LOT_AISLE, BAY_PITCH, BAY_DEPTH, lotFrame } from "./parki
 import type { Placement, ObjectInfo, StationGeom, StationEntry } from "./scenery";
 import type { BuildingFunction } from "./objects";
 import { type BusNet, FRONT_PAST } from "./buses";
+import type { OffLayout } from "./exits";
 import type { TrackPoint } from "./validate";
 import { type Issue, warning } from "./validate";
 import { SpatialHash } from "../util/spatial";
@@ -111,7 +112,7 @@ export type Person = {
   last: string;
   name: string;
   home: number;                        // building
-  job: { title: string; building: number } | null;
+  job: { title: string; building: number; off: number } | null;   // at a building, or (building −1) at off-layout place `off`
   car: { object: string; bay: number } | null;   // their car and where it is parked at the start
   prefs: { walk: number; drive: number; train: number; bus: number };   // how much they mind each (cost factors)
 };
@@ -142,6 +143,7 @@ type Ctx = {
   objects: Map<string, ObjectInfo>;
   scenery: Placement[];
   buses: BusNet;
+  off: OffLayout;
 };
 
 const FIRST = [
@@ -659,14 +661,15 @@ function residents(ctx: Ctx, buildings: Building[], bays: Bay[], issues: Issue[]
       prefs: { walk: range(r, 0.9, 1.7), drive: range(r, 0.8, 1.4), train: range(r, 0.75, 1.3), bus: range(tastes, 0.8, 1.35) },
     });
   }
-  // Jobs: workplaces' posts go to people picked at random, up to the employment rate.
-  const posts: Array<{ title: string; building: number }> = [];
-  for (const b of buildings) if (reachable(b) || b.station) for (const title of b.jobs) posts.push({ title, building: b.id });
+  // Jobs: workplaces' posts (and those off the board) go to people picked at random, up to the employment rate.
+  const posts: Array<{ title: string; building: number; off: number; rank: number }> = [];
+  for (const b of buildings) if (reachable(b) || b.station) b.jobs.forEach((title) => posts.push({ title, building: b.id, off: -1, rank: b.jobs.indexOf(title) }));
+  for (const place of ctx.off.places) place.jobs.forEach((title) => posts.push({ title, building: -1, off: place.index, rank: place.jobs.indexOf(title) }));
   const workers = shuffle(r, people.slice()).slice(0, Math.min(posts.length, Math.round(people.length * EMPLOYMENT)));
   shuffle(r, posts);
   // Leading posts (the first titles of each workplace) are filled first.
-  posts.sort((a, b) => buildings[a.building].jobs.indexOf(a.title) - buildings[b.building].jobs.indexOf(b.title));
-  workers.forEach((p, k) => { p.job = posts[k]; });
+  posts.sort((a, b) => a.rank - b.rank);
+  workers.forEach((p, k) => { p.job = { title: posts[k].title, building: posts[k].building, off: posts[k].off }; });
   // Cars: parked at the nearest free bay to home.
   const taken = new Set<number>();
   const vehicles = layout.people.vehicles;

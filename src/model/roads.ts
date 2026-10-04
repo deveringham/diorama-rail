@@ -10,6 +10,7 @@ import { type Path, makePath, filletPolyline, pointAt, headingAt, sampleS } from
 import { type Profile, type Span, type Pin, buildProfile, classify, profileZ, structureAt } from "./heights";
 import { type Terrain, baseZ } from "./terrain";
 import { type Issue, error, warning } from "./validate";
+import { EDGE_SNAP, offEdge } from "./exits";
 import { SpatialHash } from "../util/spatial";
 import { type V2, mod, wrapAngle } from "../util/vec";
 
@@ -103,12 +104,11 @@ export function junctionStop(net: Pick<RoadNet, "roads">, n: RoadNode, legIndex:
   return box;
 }
 
-export const PORTAL_EDGE = 30;   // m: dead ends this close to the board edge lead off the board
 const DEAD_END_TURN = 6;         // m of road a car uses to turn round at a dead end
 
-/** Whether a node is a dead end near the board's edge, where roads lead off the board. */
+/** Whether a node is a road's end on the board's edge, where the road leads off the board (see model/exits.ts). */
 export function isPortal(n: RoadNode, size: readonly [number, number]): boolean {
-  return n.legs.length === 1 && Math.min(n.at[0], n.at[1], size[0] - n.at[0], size[1] - n.at[1]) < PORTAL_EDGE;
+  return n.legs.length === 1 && Math.min(n.at[0], n.at[1], size[0] - n.at[0], size[1] - n.at[1]) <= EDGE_SNAP + 1e-6;
 }
 
 /** The next node along a road from s in direction dir (wrapping on loops), not counting s itself. */
@@ -543,8 +543,9 @@ function checkRoads(ctx: Ctx, net: RoadNet): Issue[] {
   const [W, H] = ctx.layout.terrain.size;
   const road = (id: string) => net.roads.get(id)!;
   for (const r of net.roads.values()) {
-    const out = net.points.find((p) => p.road === r.id && (p.x < BOUNDS_MARGIN || p.y < BOUNDS_MARGIN || p.x > W - BOUNDS_MARGIN || p.y > H - BOUNDS_MARGIN));
-    if (out) issues.push(error("OUT_OF_BOUNDS", `road '${r.id}' leaves the terrain around (${out.x.toFixed(0)}, ${out.y.toFixed(0)}); keep roads ${BOUNDS_MARGIN} m inside`, `roads[${r.index}].points`, [out.x, out.y]));
+    const out = net.points.find((p) => p.road === r.id && (p.x < BOUNDS_MARGIN || p.y < BOUNDS_MARGIN || p.x > W - BOUNDS_MARGIN || p.y > H - BOUNDS_MARGIN)
+      && !offEdge(ctx.layout.terrain.size, r, p.s, BOUNDS_MARGIN));
+    if (out) issues.push(error("OUT_OF_BOUNDS", `road '${r.id}' leaves the terrain around (${out.x.toFixed(0)}, ${out.y.toFixed(0)}); keep roads ${BOUNDS_MARGIN} m inside, or end the road on the edge to let it leave the board`, `roads[${r.index}].points`, [out.x, out.y]));
   }
 
   // Junctions need room between them for a car to wait clear of both.

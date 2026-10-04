@@ -209,6 +209,10 @@ describe.each([
     L.parking = [];
     L.busStops = [];
     L.busLines = [];
+    // Off-layout places now reached only by rail.
+    const places = (L.offLayout ?? []).map((p) => ({ ...p, via: p.via.filter((v) => v.track) })).filter((p) => p.via.length);
+    L.offLayout = places;
+    for (const svc of L.services) svc.stops = (svc.stops ?? []).filter((id) => L.stations.some((st) => st.id === id) || places.some((p) => p.id === id));
     const plain = new Sim(buildWorld(L).world!);
     for (let i = 0; i < (30 * 60) / DT; i++) plain.step();
     const run = (s: Sim) => s.trains.reduce((a, t) => a + t.odometer, 0);

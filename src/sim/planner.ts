@@ -2,10 +2,13 @@
 // driving, riding trains and taking buses. Walkways are split wherever a door,
 // parking bay, station, bus stop or place to stroll joins them; each road lane is a
 // node for driving; trains join stations served by a common service, and buses the
-// sides of stops on a common line (each with the expected wait). States
+// sides of stops on a common line (each with the expected wait). Off-layout places
+// are nodes too, joined to the paths, sidewalks and roads that leave the board
+// toward them (walking or driving the distance out of sight) and to the services
+// and lines calling there. States
 // carry a layer: 0 on foot with one's own car still parked, 1 driving, 2 on foot
 // with no car to use (none owned, or parked again), so a car is picked up at most
-// once and only where it stands. Costs are seconds, scaled by the person's tastes.
+// once and only where it stands (in a bay, or parked off the board). Costs are seconds, scaled by the person's tastes.
 
 import type { World } from "../model/build";
 import type { Person } from "../model/town";
@@ -25,20 +28,30 @@ const JUNCTION = 3;                     // s per junction driven through
 const BOARD = 25;                       // s for buying a ticket and boarding
 const BUS_BOARD = 15;                   // s for paying the driver and finding a seat
 const DRIVE_FACTOR = 0.75;              // share of the speed limit cars average
+export const OFF_CAR_SPEED = 14;        // m/s a car averages off the board
 
 /** Where a journey starts or ends. */
 export type Place =
   | { kind: "building"; id: number }
   | { kind: "spot"; id: number }
   | { kind: "station"; id: number }
-  | { kind: "bay"; id: number };
+  | { kind: "bay"; id: number }
+  | { kind: "off"; id: number };              // an off-layout place (world.offLayout.places)
 
-/** One stretch of a walk: along a walkway from d `from` to `to`, or a straight link through `pts`. */
-export type WalkStep = { kind: "way"; way: number; from: number; to: number } | { kind: "link"; pts: P3[] };
+/**
+ * One stretch of a walk: along a walkway from d `from` to `to`, a straight link
+ * through `pts`, or between walk node `node` at the board's edge and off-layout
+ * place `place`, `dist` m out of sight (`out`: leaving the board).
+ */
+export type WalkStep =
+  | { kind: "way"; way: number; from: number; to: number }
+  | { kind: "link"; pts: P3[] }
+  | { kind: "off"; place: number; node: number; dist: number; out: boolean };
 
+// Stops and bays off the board are written −1 − p for off-layout place p.
 export type Leg =
   | { mode: "walk"; steps: WalkStep[] }
-  | { mode: "drive"; car: number; from: number; to: number; lanes: TrafficLane[] }      // from and to are bays
+  | { mode: "drive"; car: number; from: number; to: number; lanes: TrafficLane[]; offIn: number; offOut: number }   // bays; s driven off the board
   | { mode: "train"; from: number; to: number; services: string[] }                     // stations (indices into town.stations)
   | { mode: "bus"; from: number; to: number; lines: string[] };                         // sides of bus stops (indices into world.buses.sides)
 
@@ -51,6 +64,8 @@ type Edge = {
   step?: WalkStep;                      // walk
   lane?: TrafficLane;                   // drive: the lane it enters (null when it stays on the same lane)
   bay?: number;                         // getIn / getOut / drive edges ending at a bay
+  place?: number;                       // getIn / getOut / drive edges at an off-layout place
+  offTime?: number;                     // drive: s of it off the board
   train?: { from: number; to: number; services: string[] };
   bus?: { from: number; to: number; lines: string[] };
 };
@@ -101,6 +116,7 @@ export class Planner {
   readonly spotNode: number[] = [];
   readonly stationNode: number[] = [];
   readonly stopNode: number[] = [];       // per side of a bus stop
+  readonly offNode: number[] = [];        // per off-layout place
   readonly kerbNode: number[] = [];       // per bay: its driver's side, on foot
   private bayStart: number[] = [];        // per bay: a car pulling out of it
   private bayArrive: number[] = [];       // per bay: a car pulling into it
@@ -154,6 +170,19 @@ export class Planner {
       this.stopNode.push(n);
       const a = town.stops[side.id]?.access;
       if (a) linkPlace(n, a);
+    });
+    // Off-layout places, walked to from the end of a path or sidewalk that leaves the board toward them.
+    const off = world.offLayout;
+    for (let p = 0; p < off.places.length; p++) this.offNode.push(node());
+    walks.nodes.forEach((wn) => {
+      if (wn.exit < 0) return;
+      for (const place of off.places) {
+        const via = place.via.find((v) => v.exit === wn.exit);
+        if (!via) continue;
+        const cost = via.distance / WALK_SPEED;
+        link(wn.id, this.offNode[place.index], { cost, mode: "walk", step: { kind: "off", place: place.index, node: wn.id, dist: via.distance, out: true } },
+          { cost, mode: "walk", step: { kind: "off", place: place.index, node: wn.id, dist: via.distance, out: false } });
+      }
     });
     for (const bay of town.bays) {
       const k = node();
@@ -217,31 +246,59 @@ export class Planner {
       }
     }
 
+    // Driving off the board to an off-layout place (and parking there), and back on from one.
+    for (const [e, x] of traffic.roadExitLanes()) {
+      for (const place of off.places) {
+        const via = place.via.find((v) => v.exit === e);
+        if (!via) continue;
+        const offTime = via.distance / OFF_CAR_SPEED;
+        const p = place.index;
+        const arrive = node();
+        const start = node();
+        for (const l of x.leave) link(this.laneNode.get(l)!, arrive, { cost: time(l, 0, l.length) + offTime, mode: "drive", place: p, offTime });
+        link(arrive, this.offNode[p], { cost: PARK, mode: "getOut", place: p });
+        link(this.offNode[p], start, { cost: GET_IN, mode: "getIn", place: p });
+        if (x.enter) link(start, this.laneNode.get(x.enter)!, { cost: offTime, mode: "drive", lane: x.enter, offTime });
+      }
+    }
+
     // Trains: from each station to every later stop of each passenger service calling there.
+    // (Stops off the board sit at their distance beyond the route's end, as if the route went on.)
     const stationIndex = new Map(town.stations.map((s, i) => [s.station, i]));
     for (const plan of plans) {
       const type = TRAIN_CATALOG[plan.svc.train as TrainTypeId];
-      if (!type || type.shape === "freight" || plan.route.stops.length < 2) continue;
+      const route = plan.route;
+      if (!type || type.shape === "freight") continue;
       const v = type.maxSpeed * 0.6;
-      const L = plan.route.length;
-      const stops = plan.route.stops.filter((s) => stationIndex.has(s.station));
+      const L = route.length;
+      const stops: Array<{ ref: number; node: number; r: number }> = route.stops
+        .filter((s) => stationIndex.has(s.station))
+        .map((s) => ({ ref: stationIndex.get(s.station)!, node: this.stationNode[stationIndex.get(s.station)!], r: s.r }));
+      route.off.forEach((o, e) => {
+        for (const c of o?.calls ?? []) {
+          if (stops.some((x) => x.ref === -1 - c.place)) continue;            // a shuttle calls again coming back: the first will do
+          stops.push({ ref: -1 - c.place, node: this.offNode[c.place], r: e === 1 ? L + c.at : -c.at });
+        }
+      });
+      if (stops.length < 2) continue;
       const dwell = plan.svc.dwell;
-      const cycle = plan.route.closed ? L / v + dwell * stops.length : (2 * L) / v + dwell * 2 * stops.length;
+      const offLen = route.off.reduce((a, o) => a + (o?.length ?? 0), 0);
+      const round = route.closed ? L : route.through ? L + offLen : 2 * L + offLen;   // m round once
+      const loop = route.closed || route.through;
+      const cycle = round / v + dwell * (loop ? stops.length : 2 * stops.length);
       const wait = cycle / plan.svc.count / 2;
       for (const a of stops) {
         for (const b of stops) {
-          if (a.station === b.station) continue;
-          const dist = plan.route.closed ? mod(b.r - a.r, L) : Math.abs(b.r - a.r);
-          const between = stops.filter((s) => s !== a && s !== b && (plan.route.closed ? mod(s.r - a.r, L) < dist : Math.abs(s.r - a.r) < dist && Math.sign(s.r - a.r) === Math.sign(b.r - a.r))).length;
+          if (a.ref === b.ref) continue;
+          const dist = loop ? mod(b.r - a.r, round) : Math.abs(b.r - a.r);
+          const between = stops.filter((s) => s !== a && s !== b && (loop ? mod(s.r - a.r, round) < dist : Math.abs(s.r - a.r) < dist && Math.sign(s.r - a.r) === Math.sign(b.r - a.r))).length;
           const cost = wait + dist / v + between * dwell + BOARD;
-          const from = stationIndex.get(a.station)!;
-          const to = stationIndex.get(b.station)!;
-          const existing = this.adj[this.stationNode[from]].find((e) => e.mode === "train" && e.train!.to === to);
+          const existing = this.adj[a.node].find((e) => e.mode === "train" && e.train!.to === b.ref);
           if (existing) {
-            existing.train!.services.push(plan.svc.id);
+            if (!existing.train!.services.includes(plan.svc.id)) existing.train!.services.push(plan.svc.id);
             existing.cost = Math.min(existing.cost, cost);
           } else {
-            link(this.stationNode[from], this.stationNode[to], { cost, mode: "train", train: { from, to, services: [plan.svc.id] } });
+            link(a.node, b.node, { cost, mode: "train", train: { from: a.ref, to: b.ref, services: [plan.svc.id] } });
           }
         }
       }
@@ -252,18 +309,19 @@ export class Planner {
       const running = traffic.lines[li]?.buses.length ?? 0;
       if (!running) return;
       const wait = line.cycle / running / 2;
+      const at = (side: number) => (side < 0 ? this.offNode[-1 - side] : this.stopNode[side]);
       for (const a of line.visits) {
         for (const b of line.visits) {
           if (a.side === b.side) continue;
           const ride = mod(b.t - a.t, line.cycle);
           const cost = wait + ride + BUS_BOARD;
-          const from = this.stopNode[a.side];
+          const from = at(a.side);
           const existing = this.adj[from].find((e) => e.mode === "bus" && e.bus!.to === b.side);
           if (existing) {
             if (!existing.bus!.lines.includes(line.id)) existing.bus!.lines.push(line.id);
             existing.cost = Math.min(existing.cost, cost);
           } else {
-            link(from, this.stopNode[b.side], { cost, mode: "bus", bus: { from: a.side, to: b.side, lines: [line.id] } });
+            link(from, at(b.side), { cost, mode: "bus", bus: { from: a.side, to: b.side, lines: [line.id] } });
           }
         }
       }
@@ -277,14 +335,15 @@ export class Planner {
       case "spot": return this.spotNode[p.id];
       case "station": return this.stationNode[p.id];
       case "bay": return this.kerbNode[p.id];
+      case "off": return this.offNode[p.id];
     }
   }
 
   /**
    * The quickest journey for a person from one place to another, given where their
-   * car stands (-1: none to use), or null if there is none.
+   * car stands (a bay, or `carOff` an off-layout place; -1: none to use), or null if there is none.
    */
-  plan(person: Person, from: Place, to: Place, carBay: number, car: number): Route | null {
+  plan(person: Person, from: Place, to: Place, carBay: number, car: number, carOff = -1): Route | null {
     const start = this.nodeOf(from);
     const goal = this.nodeOf(to);
     if (start === goal) return null;
@@ -293,7 +352,7 @@ export class Planner {
     const prev = new Int32Array(n * 3).fill(-1);
     const via = new Array<Edge | null>(n * 3).fill(null);
     const heap = new Heap();
-    const s0 = start * 3 + (carBay >= 0 && car >= 0 ? 0 : 2);
+    const s0 = start * 3 + ((carBay >= 0 || carOff >= 0) && car >= 0 ? 0 : 2);
     best[s0] = 0;
     heap.push(0, s0);
     const { prefs } = person;
@@ -322,10 +381,10 @@ export class Planner {
             if (layer !== 1) continue;
             to = e.to * 3 + 1; cost = e.cost * prefs.drive; break;
           case "getIn":
-            if (layer !== 0 || e.bay !== carBay) continue;
+            if (layer !== 0 || (e.place !== undefined ? e.place !== carOff : e.bay !== carBay)) continue;
             to = e.to * 3 + 1; cost = e.cost; break;
           case "getOut":
-            if (layer !== 1 || (bayCar[e.bay!] >= 0 && bayCar[e.bay!] !== car)) continue;
+            if (layer !== 1 || (e.bay !== undefined && bayCar[e.bay] >= 0 && bayCar[e.bay] !== car)) continue;
             to = e.to * 3 + 2; cost = e.cost; break;
         }
         const nc = c + cost;
@@ -342,7 +401,7 @@ export class Planner {
     const edges: Edge[] = [];
     for (let s = end; prev[s] >= 0; s = prev[s]) edges.unshift(via[s]!);
     const legs: Leg[] = [];
-    let drive: { from: number; to: number; lanes: TrafficLane[] } | null = null;
+    let drive: { from: number; to: number; lanes: TrafficLane[]; offIn: number; offOut: number } | null = null;
     for (const e of edges) {
       if (e.mode === "walk") {
         const last = legs[legs.length - 1];
@@ -353,13 +412,15 @@ export class Planner {
       } else if (e.mode === "bus") {
         legs.push({ mode: "bus", from: e.bus!.from, to: e.bus!.to, lines: e.bus!.lines.slice() });
       } else if (e.mode === "getIn") {
-        const at = this.traffic.bayAt[e.bay!]!;
-        drive = { from: e.bay!, to: -1, lanes: [at.lane] };
+        drive = e.place !== undefined ? { from: -1 - e.place, to: -1, lanes: [], offIn: 0, offOut: 0 }
+          : { from: e.bay!, to: -1, lanes: [this.traffic.bayAt[e.bay!]!.lane], offIn: 0, offOut: 0 };
       } else if (e.mode === "drive") {
         if (e.lane) drive!.lanes.push(e.lane);
         if (e.bay !== undefined) drive!.to = e.bay;
+        if (e.place !== undefined) { drive!.to = -1 - e.place; drive!.offOut = e.offTime!; }
+        else if (e.offTime !== undefined) drive!.offIn = e.offTime;
       } else if (e.mode === "getOut") {
-        legs.push({ mode: "drive", car, from: drive!.from, to: drive!.to, lanes: drive!.lanes });
+        legs.push({ mode: "drive", car, ...drive! });
         drive = null;
       }
     }

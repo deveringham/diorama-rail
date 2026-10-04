@@ -5,11 +5,14 @@
 // right of walkways (waiting at kerbs and level crossings), driving their car from
 // its bay to one near the destination, waiting on a platform for a train heading
 // their way and riding it to their stop, or waiting at a bus stop for a bus of their
-// line and riding it to theirs. At the destination they go inside for the task's
-// duration (or linger at a spot). Pure TypeScript, deterministic.
+// line and riding it to theirs. Some errands lead off the board — to a job or a
+// visit at an off-layout place — and people leave by train, bus, car or on foot
+// over the edge, stay out there (out of sight) and come back by whatever way suits
+// them later. At the destination they go inside for the task's duration (or linger
+// at a spot). Pure TypeScript, deterministic.
 
 import type { World } from "../model/build";
-import type { Person, Building } from "../model/town";
+import type { Person, Building, Entrance } from "../model/town";
 import type { StopSide } from "../model/buses";
 import { platformPoint } from "../model/town";
 import { wayPoint, wayHeading } from "../model/walks";
@@ -35,6 +38,7 @@ const STUCK_AFTER = 120;        // s waiting at a kerb or crossing before someon
 const PASS = 4;                 // s to walk through a station building between door and platform
 const BOARD_TIME = 2.5;         // s to step from the platform into a train (and out)
 const PLATFORM_SPREAD = 22;     // m along the platform either side of the entry where people wait
+const OFF_VISIT = 1.2;          // how much people like a visit off the board, per `visits` (a landmark nearby ≈ 1.5–3)
 const DURATION = {              // s spent at the destination
   work: [240, 720], home: [180, 600], visit: [40, 240], stroll: [20, 90],
 } as const;
@@ -43,8 +47,12 @@ export type TaskKind = keyof typeof DURATION;
 export type Task = { kind: TaskKind; dest: Place; duration: number; label: string; started: number; arrived: number };
 // platform: walking to a place on the platform, then waiting there; exit: off the train and across
 // the platform to its entry; pass: through the station building (in or out), unseen; stop: at a
-// bus stop, stepping to a place to wait and waiting; board/alight: on to or off a train or bus.
-export type Mode = "inside" | "walk" | "wait" | "platform" | "board" | "train" | "alight" | "exit" | "drive" | "linger" | "pass" | "stop" | "bus";
+// bus stop, stepping to a place to wait and waiting; board/alight: on to or off a train or bus;
+// away: at an off-layout place (staying, or waiting there for a train or bus); transit: walking
+// between the board's edge and an off-layout place.
+export type Mode =
+  | "inside" | "walk" | "wait" | "platform" | "board" | "train" | "alight" | "exit" | "drive" | "linger" | "pass" | "stop" | "bus"
+  | "away" | "transit";
 
 export type PersonState = Body;
 type Body = {
@@ -71,6 +79,7 @@ type Body = {
   bus: number;                  // the bus (traffic car index) boarding, riding or leaving, else -1
   stopSide: number;             // the side of a bus stop waiting at or getting off at (world.buses.sides)
   ride: "train" | "bus";        // what boarding or alighting is about
+  off: number;                  // the off-layout place they are at (away) or walking to or from (transit), else -1
   from: P3; dest: P3;           // boarding and alighting moves on the platform or at the kerb
   pos: P3;                      // last position (for standing still)
   heading: number;
@@ -83,7 +92,7 @@ type Body = {
 
 export type PersonSnapshot = { x: number; y: number; z: number; heading: number; visible: boolean; moving: boolean; step: number };
 export type PeopleStats = {
-  people: number; outside: number; walking: number; driving: number; riding: number; waiting: number; onBus: number; atStops: number;
+  people: number; away: number; outside: number; walking: number; driving: number; riding: number; waiting: number; onBus: number; atStops: number;
   maxStopWait: number;          // s the longest anyone has waited at a bus stop
   tasks: number; trips: Record<string, number>; avgTrip: number; avgSpeed: number; maxWait: number; stuck: number; crossed: number;
 };
@@ -121,16 +130,16 @@ export class People implements WalkerView {
     for (const p of town.people) {
       const job = p.job;
       const atWork = job !== null && this.r() < 0.35;
-      const place: Place = { kind: "building", id: atWork ? job!.building : p.home };
+      const place: Place = atWork && job!.off >= 0 ? { kind: "off", id: job!.off } : { kind: "building", id: atWork ? job!.building : p.home };
       const kind: TaskKind = atWork ? "work" : "home";
       const duration = atWork ? range(this.r, 0, 600) : range(this.r, 0, 400);
-      const b = town.buildings[place.id];
+      const door: P3 = place.kind === "building" ? town.buildings[place.id].door : [0, 0, 0];
       this.bodies.push({
-        id: p.id, speed: range(this.r, SPEED[0], SPEED[1]), side: this.r(), mode: "inside", at: place,
+        id: p.id, speed: range(this.r, SPEED[0], SPEED[1]), side: this.r(), mode: place.kind === "off" ? "away" : "inside", at: place,
         task: { kind, dest: place, duration, label: this.label(kind, place), started: 0, arrived: 0 },
         route: null, leg: 0, step: 0, way: -1, d: 0, to: 0, dir: 1, link: null, linkAt: 0, linkLen: [], timer: duration,
-        waited: 0, maxWait: 0, odometer: 0, car: traffic.carOf[p.id], station: -1, entrance: -1, platS: 0, train: -1, bus: -1, stopSide: -1, ride: "train",
-        from: [0, 0, 0], dest: [0, 0, 0], pos: [...b.door] as P3, heading: 0, lastWork: atWork ? 0 : -Infinity, trips: 0, stranded: false, modes: [], reserved: -1,
+        waited: 0, maxWait: 0, odometer: 0, car: traffic.carOf[p.id], station: -1, entrance: -1, platS: 0, train: -1, bus: -1, stopSide: -1, ride: "train", off: place.kind === "off" ? place.id : -1,
+        from: [0, 0, 0], dest: [0, 0, 0], pos: [...door] as P3, heading: 0, lastWork: atWork ? 0 : -Infinity, trips: 0, stranded: false, modes: [], reserved: -1,
       });
     }
   }
@@ -157,6 +166,7 @@ export class People implements WalkerView {
         const b = town.bays[p.id];
         return b.lot ? town.lots.find((l) => l.id === b.lot)!.name : this.world.roads.roads.get(b.road)!.spec.name ?? b.road;
       }
+      case "off": return this.world.offLayout.places[p.id].name;
     }
   }
 
@@ -169,10 +179,13 @@ export class People implements WalkerView {
     for (const ci of traffic.arrivals) {
       const owner = traffic.cars[ci].owner;
       const b = owner >= 0 ? this.bodies[owner] : undefined;
-      if (b && b.mode === "drive") this.nextLeg(b, traffic);
+      if (!b || b.mode !== "drive") continue;
+      const leg = b.route?.legs[b.leg];
+      if (leg?.mode === "drive" && leg.to < 0) b.off = -1 - leg.to;      // parked off the board
+      this.nextLeg(b, traffic);
     }
     traffic.arrivals.length = 0;
-    this.trainStops(trains);
+    this.trainStops(trains, traffic);
     this.busStops(traffic);
 
     const waiting = new Uint8Array(this.busy.length);
@@ -180,6 +193,8 @@ export class People implements WalkerView {
       switch (b.mode) {
         case "inside":
         case "linger":
+        case "away":
+          if (b.mode === "away" && b.route) break;              // waiting out there for a train or bus
           if (b.task && b.task.arrived >= 0 && !Number.isNaN(b.task.arrived)) {
             b.timer -= dt;
             if (b.timer <= 0) this.finish(b);
@@ -190,6 +205,18 @@ export class People implements WalkerView {
           b.timer -= dt;
           if (b.timer <= 0) this.nextLeg(b, traffic);
           break;
+        case "transit": {
+          // Walking out of sight between the board's edge and an off-layout place.
+          b.timer -= dt;
+          b.odometer += b.speed * dt;
+          if (b.timer > 0) break;
+          const leg = b.route!.legs[b.leg] as Extract<Leg, { mode: "walk" }>;
+          b.mode = "walk";
+          b.step++;
+          if (b.step >= leg.steps.length) this.endWalk(b, traffic);
+          else this.startStep(b);
+          break;
+        }
         case "board":
           b.timer -= dt;
           if (b.timer <= 0) b.mode = b.ride === "bus" ? "bus" : "train";
@@ -248,7 +275,8 @@ export class People implements WalkerView {
     const person = town.people[b.id];
     const here = b.at!;
     const atHome = here.kind === "building" && here.id === person.home;
-    const atWork = here.kind === "building" && person.job !== null && here.id === person.job.building;
+    const job = person.job;
+    const atWork = job !== null && (job.off >= 0 ? here.kind === "off" && here.id === job.off : here.kind === "building" && here.id === job.building);
     const options: Array<{ kind: TaskKind; w: number }> = [];
     if (!atHome) options.push({ kind: "home", w: atWork ? 4 : 3 });
     if (person.job && !atWork && this.time - b.lastWork > 900) options.push({ kind: "work", w: atHome ? 2.5 : 1 });
@@ -274,7 +302,7 @@ export class People implements WalkerView {
   private destination(kind: TaskKind, person: Person, here: Place): Place | null {
     const town = this.world.town;
     if (kind === "home") return { kind: "building", id: person.home };
-    if (kind === "work") return person.job ? { kind: "building", id: person.job.building } : null;
+    if (kind === "work") return !person.job ? null : person.job.off >= 0 ? { kind: "off", id: person.job.off } : { kind: "building", id: person.job.building };
     if (kind === "stroll") return town.spots.length ? { kind: "spot", id: Math.floor(this.r() * town.spots.length) } : null;
     // A visit: landmarks most often, then workplaces (shops and the like) and friends' homes, nearer ones more likely.
     const from = this.where(here);
@@ -284,12 +312,15 @@ export class People implements WalkerView {
       const w = b.functions.includes("landmark") ? 3 : b.functions.includes("workplace") ? 1 : 0.4;
       return w / (1 + Math.hypot(b.door[0] - from[0], b.door[1] - from[1]) / 300);
     };
-    const ws = town.buildings.map(weight);
+    // ... and places off the board, as much as their `visits` say.
+    const places = this.world.offLayout.places;
+    const ws = [...town.buildings.map(weight), ...places.map((p) => (here.kind === "off" && here.id === p.index ? 0 : p.visits * OFF_VISIT))];
     const total = ws.reduce((a, w) => a + w, 0);
     if (!total) return null;
     let x = this.r() * total;
-    const id = ws.findIndex((w) => (x -= w) < 0);
-    return { kind: "building", id: id < 0 ? ws.length - 1 : id };
+    let id = ws.findIndex((w) => (x -= w) < 0);
+    if (id < 0) id = ws.length - 1;
+    return id < town.buildings.length ? { kind: "building", id } : { kind: "off", id: id - town.buildings.length };
   }
 
   private where(p: Place): P3 {
@@ -299,13 +330,19 @@ export class People implements WalkerView {
       case "spot": return town.spots[p.id].at;
       case "station": return town.stations[p.id].entrances[0]?.entry ?? [0, 0, 0];
       case "bay": return town.bays[p.id].kerb;
+      case "off": {
+        const via = this.world.offLayout.places[p.id].via[0];
+        const at = via ? this.world.offLayout.exits[via.exit].at : [0, 0];
+        return [at[0], at[1], 0];
+      }
     }
   }
 
   private route(b: Body, person: Person, from: Place, to: Place, traffic: Traffic): Route | null {
-    const car = b.car;
-    const carBay = car >= 0 && traffic.cars[car].state === "parked" ? traffic.cars[car].bay : -1;
-    return this.planner.plan(person, from, to, carBay, car);
+    const car = b.car >= 0 ? traffic.cars[b.car] : null;
+    const carBay = car?.state === "parked" ? car.bay : -1;
+    const carOff = car?.state === "off" ? car.offPlace : -1;
+    return this.planner.plan(person, from, to, carBay, b.car, carOff);
   }
 
   /** Sets off on a journey: out of the building (or away from the spot). */
@@ -317,7 +354,7 @@ export class People implements WalkerView {
     if (b.reserved >= 0 && traffic.bayCar[b.reserved] === b.car) traffic.bayCar[b.reserved] = -1;
     b.reserved = -1;
     const drive = route.legs.find((l) => l.mode === "drive");
-    if (drive?.mode === "drive") { traffic.bayCar[drive.to] = drive.car; b.reserved = drive.to; }
+    if (drive?.mode === "drive" && drive.to >= 0) { traffic.bayCar[drive.to] = drive.car; b.reserved = drive.to; }
     this.nextLeg(b, traffic);
   }
 
@@ -337,6 +374,12 @@ export class People implements WalkerView {
       }
       b.mode = "walk";
       this.startStep(b);
+    } else if ((leg.mode === "bus" || leg.mode === "train") && leg.from < 0) {
+      // Off the board: wait there (out of sight) for the bus or train.
+      b.mode = "away";
+      b.off = -1 - leg.from;
+      b.stopSide = -1;
+      b.station = -1;
     } else if (leg.mode === "bus") {
       // At the stop: step to a place to wait near the sign.
       const side = this.world.buses.sides[leg.from];
@@ -346,8 +389,11 @@ export class People implements WalkerView {
       this.setLink(b, [side.at, this.stopSpot(side)]);
     } else if (leg.mode === "drive") {
       // The bay may have been taken since: then think again from here.
-      if (traffic.bayCar[leg.to] >= 0 && traffic.bayCar[leg.to] !== leg.car) { this.replan(b, { kind: "bay", id: leg.from }, traffic); return; }
-      traffic.drive(leg.car, leg.lanes, leg.to);
+      if (leg.to >= 0 && traffic.bayCar[leg.to] >= 0 && traffic.bayCar[leg.to] !== leg.car) {
+        this.replan(b, leg.from >= 0 ? { kind: "bay", id: leg.from } : { kind: "off", id: -1 - leg.from }, traffic);
+        return;
+      }
+      traffic.drive(leg.car, leg.lanes, leg.to, leg.offIn, leg.offOut);
       b.reserved = -1;
       b.mode = "drive";
     } else {
@@ -365,12 +411,13 @@ export class People implements WalkerView {
     const person = this.world.town.people[b.id];
     const route = b.task ? this.route(b, person, here, b.task.dest, traffic) : null;
     if (!route) {
-      // Stranded: give up the task and stay put (at a bay, wait there as if at a spot).
+      // Stranded: give up the task and stay put (at a bay, wait there as if at a spot; off the board, out there).
       b.task = null;
       b.route = null;
-      b.mode = "linger";
+      b.mode = here.kind === "off" ? "away" : "linger";
       b.at = here;
-      b.pos = [...this.where(here)] as P3;
+      if (here.kind === "off") b.off = here.id;
+      else b.pos = [...this.where(here)] as P3;
       return;
     }
     this.start(b, route, traffic);
@@ -391,7 +438,10 @@ export class People implements WalkerView {
     this.trips.set(modes, (this.trips.get(modes) ?? 0) + 1);
     b.modes = [];
     if (task.dest.kind === "building") b.mode = "inside";
-    else {
+    else if (task.dest.kind === "off") {
+      b.mode = "away";
+      b.off = task.dest.id;
+    } else {
       b.mode = "linger";
       b.pos = [...this.where(task.dest)] as P3;
     }
@@ -412,8 +462,14 @@ export class People implements WalkerView {
     return platformPoint(this.world, this.world.town.stations[station].station, this.clampS(station, s), across, side);
   }
 
-  private entranceOf(b: Body) {
+  private entranceOf(b: Body): Pick<Entrance, "entry" | "entryS" | "side" | "via"> {
     const st = this.world.town.stations[b.station];
+    if (!st.entrances.length) {
+      // A station nobody can walk to (people only change trains there): the middle of its platform.
+      const spec = this.world.layout.stations.find((x) => x.id === st.station)!;
+      const side: 1 | -1 = spec.side === "left" ? 1 : -1;
+      return { entry: this.platform(b.station, spec.at, 0.9, side), entryS: spec.at, side, via: "direct" };
+    }
     return st.entrances[Math.max(0, Math.min(b.entrance, st.entrances.length - 1))];
   }
 
@@ -452,6 +508,14 @@ export class People implements WalkerView {
     const leg = b.route!.legs[b.leg] as Extract<Leg, { mode: "walk" }>;
     const st = leg.steps[b.step];
     if (st.kind === "link") { this.setLink(b, st.pts); return; }
+    if (st.kind === "off") {
+      b.mode = "transit";
+      b.timer = st.dist / b.speed;
+      b.link = null;
+      b.way = -1;
+      b.off = st.place;
+      return;
+    }
     b.link = null;
     b.way = st.way;
     b.d = st.from;
@@ -530,6 +594,7 @@ export class People implements WalkerView {
       b.step++;
       if (b.step >= leg.steps.length) { this.endWalk(b, traffic); return; }
       this.startStep(b);
+      if ((b.mode as Mode) === "transit") return;         // over the edge, out of sight
     }
   }
 
@@ -555,11 +620,12 @@ export class People implements WalkerView {
     const next = b.route!.legs[b.leg + 1];
     const leg = b.route!.legs[b.leg];
     const last = leg.mode === "walk" ? leg.steps[leg.steps.length - 1] : undefined;
-    if (next?.mode === "train") {
+    const platform = next?.mode === "train" && next.from >= 0;
+    if (platform) {
       b.station = next.from;
       b.entrance = this.entranceAt(next.from, last?.kind === "link" ? last.pts[last.pts.length - 1] : null);
     }
-    if (next?.mode === "train" && this.entranceOf(b).via === "building") {
+    if (platform && this.entranceOf(b).via === "building") {
       b.mode = "pass";
       b.timer = PASS;
       b.link = null;
@@ -582,9 +648,13 @@ export class People implements WalkerView {
   // -- trains ------------------------------------------------------------------------------
 
   /** Passengers get off trains at their stop, and waiting people get on trains heading their way. */
-  private trainStops(trains: Train[]): void {
+  private trainStops(trains: Train[], traffic: Traffic): void {
     const town = this.world.town;
     trains.forEach((t, ti) => {
+      if (t.off >= 0) {
+        if (t.offAt >= 0) this.offTrainCall(t, ti, traffic);
+        return;
+      }
       if (t.phase !== "dwelling" || !t.atStation) return;
       const si = town.stations.findIndex((s) => s.station === t.atStation);
       if (si < 0) return;
@@ -604,7 +674,7 @@ export class People implements WalkerView {
       for (const b of this.bodies) {
         if (b.mode !== "platform" || b.station !== si || b.linkAt < b.linkLen[b.linkLen.length - 1]) continue;
         const leg = b.route!.legs[b.leg] as Extract<Leg, { mode: "train" }>;
-        if (!leg.services.includes(t.plan.svc.id) || !this.headsFor(t, town.stations[leg.to].station)) continue;
+        if (!leg.services.includes(t.plan.svc.id) || !this.headsFor(t, leg.to)) continue;
         b.mode = "board";
         b.ride = "train";
         b.timer = BOARD_TIME;
@@ -617,16 +687,58 @@ export class People implements WalkerView {
     });
   }
 
-  /** Whether a train standing at a station will reach `station` before turning back. */
-  private headsFor(t: Train, station: string): boolean {
+  /**
+   * Whether a train standing at a station will reach stop `to` (a station, or −1 − p
+   * an off-layout place beyond one end) before turning back.
+   */
+  private headsFor(t: Train, to: number): boolean {
     const route = t.plan.route;
-    if (route.closed) return true;
-    const stop = route.stops.find((s) => s.station === station);
-    if (!stop) return false;
+    if (route.closed || route.through) return true;
     const end = t.dir > 0 ? route.length : 0;
     const dir = Math.abs(t.r - end) < 0.5 ? -t.dir : t.dir;     // at a terminus it is about to reverse
+    if (to < 0) {
+      const p = -1 - to;
+      const beyond = route.off[1]?.calls.some((c) => c.place === p) ? 1 : route.off[0]?.calls.some((c) => c.place === p) ? -1 : 0;
+      return beyond === dir;
+    }
+    const station = this.world.town.stations[to].station;
+    const stop = route.stops.find((s) => s.station === station);
+    if (!stop) return false;
     const centre = t.r - (t.dir * t.plan.length) / 2;
     return (stop.r - centre) * dir > 0;
+  }
+
+  /** A train calling at an off-layout place: its passengers for there get off, and those waiting there get on. */
+  private offTrainCall(t: Train, ti: number, traffic: Traffic): void {
+    const ref = -1 - t.offAt;
+    if (this.served.get(ti) !== t.stops) {
+      this.served.set(ti, t.stops);
+      const stay: number[] = [];
+      const off: Body[] = [];
+      for (const id of this.riders[ti]) {
+        const b = this.bodies[id];
+        const leg = b.route?.legs[b.leg];
+        if (leg?.mode === "train" && leg.to === ref) off.push(b);
+        else stay.push(id);
+      }
+      this.riders[ti] = stay;
+      for (const b of off) {
+        b.train = -1;
+        b.mode = "away";
+        b.off = t.offAt;
+        this.nextLeg(b, traffic);
+      }
+    }
+    for (const b of this.bodies) {
+      if (b.mode !== "away" || b.off !== t.offAt || !b.route) continue;
+      const leg = b.route.legs[b.leg];
+      if (leg?.mode !== "train" || leg.from !== ref || !leg.services.includes(t.plan.svc.id)) continue;
+      b.mode = "train";
+      b.ride = "train";
+      b.train = ti;
+      b.off = -1;
+      this.riders[ti].push(b.id);
+    }
   }
 
   private alight(b: Body, t: Train, si: number): void {
@@ -664,6 +776,10 @@ export class People implements WalkerView {
         const car = traffic.cars[ci];
         let riders = this.onBus.get(ci);
         if (!riders) this.onBus.set(ci, (riders = []));
+        if (side < 0) {
+          this.offBusCall(ci, side, line.geom, riders, traffic);
+          continue;
+        }
         // Off once per stop.
         if (this.busServed.get(ci) !== car.stopCount) {
           this.busServed.set(ci, car.stopCount);
@@ -697,6 +813,37 @@ export class People implements WalkerView {
         }
       }
     });
+  }
+
+  /** A bus calling at an off-layout place (out of sight): off and on at once. */
+  private offBusCall(ci: number, side: number, geom: { id: string; capacity: number }, riders: number[], traffic: Traffic): void {
+    const car = traffic.cars[ci];
+    const p = -1 - side;
+    if (this.busServed.get(ci) !== car.stopCount) {
+      this.busServed.set(ci, car.stopCount);
+      const off = riders.filter((id) => { const leg = this.bodies[id].route?.legs[this.bodies[id].leg]; return leg?.mode === "bus" && leg.to === side; });
+      const stay = riders.filter((id) => !off.includes(id));
+      riders.length = 0;
+      riders.push(...stay);
+      for (const id of off) {
+        const b = this.bodies[id];
+        b.bus = -1;
+        b.mode = "away";
+        b.off = p;
+        this.nextLeg(b, traffic);
+      }
+    }
+    for (const b of this.bodies) {
+      if (riders.length >= geom.capacity) break;
+      if (b.mode !== "away" || b.off !== p || !b.route) continue;
+      const leg = b.route.legs[b.leg];
+      if (leg?.mode !== "bus" || leg.from !== side || !leg.lines.includes(geom.id)) continue;
+      b.mode = "bus";
+      b.ride = "bus";
+      b.bus = ci;
+      b.off = -1;
+      riders.push(b.id);
+    }
   }
 
   private alightBus(b: Body, ci: number, side: number, traffic: Traffic): void {
@@ -795,6 +942,7 @@ export class People implements WalkerView {
     const count = (m: Mode[]) => this.bodies.filter((b) => m.includes(b.mode)).length;
     return {
       people: n,
+      away: count(["away", "transit"]),
       outside: count(["walk", "wait", "platform", "board", "alight", "exit", "linger", "stop"]),
       walking: count(["walk", "wait"]),
       driving: count(["drive"]),

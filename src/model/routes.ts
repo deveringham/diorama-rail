@@ -1,12 +1,26 @@
 // Service routes: turns a service's list of track ids into one continuous path
 // of (track, s-range, direction) pieces with a route coordinate r along it.
-// Shuttle paths end where the train's head stops at each terminus.
+// Shuttle paths end where the train's head stops at each terminus — or where the
+// line leaves the board, if it does: then the trains run off the edge, call at the
+// service's off-layout stops out there and come back. A loop whose first and last
+// tracks leave the board runs through: off at the end, back on at the start.
 
 import type { ServiceSpec, StationSpec } from "./schema";
 import type { Graph, Switch, SwitchState, TrackGeom } from "./trackGraph";
+import type { OffLayout } from "./exits";
 import { mod } from "../util/vec";
 
 const BUFFER_MARGIN = 3;        // m a shuttle stops short of a buffer stop
+const OFF_TURN = 400;           // m beyond the edge where a shuttle with no stops out there turns round
+const OFF_THROUGH = 1500;       // m off the board between the ends of a loop running through it, with no stops given
+const OFF_CLEAR = 300;          // m beyond the farthest stop before a through loop comes back
+
+/**
+ * The trains' run off the board beyond one end of a route: calls at off-layout
+ * places at distances along it (m from leaving the edge), its length, and the end
+ * of the route it comes back on at (the same for a shuttle, the start for a loop).
+ */
+export type OffRun = { exit: number; calls: Array<{ place: number; at: number }>; length: number; reenter: 0 | 1 };
 
 export type PathPiece = { track: string; s0: number; s1: number; dir: 1 | -1; r0: number; length: number };
 export type RoutePath = {
@@ -16,6 +30,8 @@ export type RoutePath = {
   length: number;
   stops: Array<{ station: string; r: number }>;             // r of each platform centre
   switches: Array<{ sw: number; r: number; state: SwitchState }>;
+  through: boolean;             // a loop through the off-board world: on at r = 0, off at r = length
+  off: [OffRun | null, OffRun | null];                      // runs off the board beyond r = 0 and r = length
 };
 export type RouteIssue = { code: "ROUTE_DISCONNECTED" | "ROUTE_NOT_CLOSED" | "STOP_NOT_ON_ROUTE"; message: string; jsonPath: string };
 
@@ -48,13 +64,30 @@ function travel(t: TrackGeom, s0: number, s1: number, dir: 1 | -1): number {
  */
 export function buildRoute(
   svc: ServiceSpec, index: number, g: Graph, tracks: Map<string, TrackGeom>,
-  stations: Map<string, StationSpec>, trainLen: number,
+  stations: Map<string, StationSpec>, trainLen: number, off: OffLayout,
 ): { route: RoutePath | null; issues: RouteIssue[] } {
   const base = `services[${index}]`;
   const ids = svc.route;
-  const closed = svc.mode === "loop";
   const fail = (code: RouteIssue["code"], message: string, jsonPath = `${base}.route`) =>
     ({ route: null, issues: [{ code, message: `service '${svc.id}': ${message}`, jsonPath }] });
+  const exitAt = (track: string, end: 0 | 1) => off.exits.find((e) => e.kind === "track" && e.line === track && e.end === end);
+  const exitsOf = (track: string) => off.exits.filter((e) => e.kind === "track" && e.line === track).length;
+
+  // A loop that cannot close on the board runs through it if its first and last tracks leave it.
+  let through = false;
+  if (svc.mode === "loop") {
+    const first = tracks.get(ids[0])!;
+    const last = tracks.get(ids[ids.length - 1])!;
+    if (ids.length === 1 && !first.path.closed) {
+      if (!(exitAt(first.id, 0) && exitAt(first.id, 1))) {
+        return fail("ROUTE_NOT_CLOSED", `mode "loop" needs a closed route but '${ids[0]}' is a line; use mode "shuttle", add tracks that lead back to the start, or let both ends of the line leave the board`);
+      }
+      through = true;
+    } else if (ids.length > 1 && !hops(g, tracks, ids[ids.length - 1], ids[0]).length && !first.path.closed && !last.path.closed && exitsOf(first.id) && exitsOf(last.id)) {
+      through = true;
+    }
+  }
+  const closed = svc.mode === "loop" && !through;
 
   // Candidate hops between consecutive tracks (and back to the start for loops).
   const pairCount = closed && ids.length > 1 ? ids.length : ids.length - 1;
@@ -108,7 +141,14 @@ export function buildRoute(
       pieces.push({ track: ids[(k + 1) % ids.length], s0: into.sIn, s1: out.sOut, dir: into.dirIn, via: into });
     }
   } else {
-    const ends = shuttleEnds(ids, chosen, tracks, svcStops, trainLen);
+    const ends = shuttleEnds(ids, chosen, tracks, svcStops, trainLen, (t, e) => !!exitAt(t, e));
+    if (through) {
+      const startEnd = ids.length === 1 ? 0 : chosen[0].dirOut > 0 ? 0 : 1;
+      const endEnd = ids.length === 1 ? 1 : chosen[ids.length - 2].dirIn > 0 ? 1 : 0;
+      if (!exitAt(ids[0], startEnd) || !exitAt(ids[ids.length - 1], endEnd)) {
+        return fail("ROUTE_NOT_CLOSED", `a loop through the board's edge must start on a track coming in over the edge and end on one leaving it ('${ids[0]}' must leave the board at its ${startEnd ? "end" : "start"}, '${ids[ids.length - 1]}' at its ${endEnd ? "end" : "start"}); reverse the route or use mode "shuttle"`);
+      }
+    }
     for (let k = 0; k < ids.length; k++) {
       const s0 = k === 0 ? ends.start : chosen[k - 1].sIn;
       const s1 = k === ids.length - 1 ? ends.end : chosen[k].sOut;
@@ -118,7 +158,7 @@ export function buildRoute(
   }
 
   let r = 0;
-  const route: RoutePath = { service: svc.id, closed, pieces: [], length: 0, stops: [], switches: [] };
+  const route: RoutePath = { service: svc.id, closed, pieces: [], length: 0, stops: [], switches: [], through, off: [null, null] };
   for (const { via, ...p } of pieces) {
     const t = tracks.get(p.track)!;
     const length = closed && ids.length === 1 ? t.path.length : Math.max(0, travel(t, p.s0, p.s1, p.dir));
@@ -137,8 +177,33 @@ export function buildRoute(
     });
   });
 
+  // Where the route leaves the board: the exits its ends lie on.
+  const ends: Array<number | null> = [null, null];
+  if (!closed) {
+    const p0 = full[0];
+    const pN = full[full.length - 1];
+    const sEnd = (p: PathPiece) => p.s0 + p.dir * p.length;
+    const at = (track: string, sv: number) => {
+      const L = tracks.get(track)!.path.length;
+      return Math.abs(sv) < 1e-6 ? exitAt(track, 0) : Math.abs(sv - L) < 1e-6 ? exitAt(track, 1) : undefined;
+    };
+    ends[0] = at(p0.track, p0.s0)?.id ?? null;
+    ends[1] = at(pN.track, sEnd(pN))?.id ?? null;
+  }
+
   const issues: RouteIssue[] = [];
+  const offStops: Array<{ k: number; place: number; via: Array<{ exit: number; distance: number }> }> = [];
   svc.stops.forEach((id, k) => {
+    const place = off.places.find((p) => p.id === id);
+    if (place) {
+      const via = place.via.filter((v) => v.exit === ends[0] || v.exit === ends[1]);
+      if (!via.length) {
+        const leaving = ends.filter((e) => e !== null).map((e) => `track '${off.exits[e!].line}'`);
+        const why = leaving.length ? `it is reached by none of the route's ends leaving the board (${leaving.join(", ")}); give it a via on one of them` : "the route does not leave the board; end its first or last track on the board's edge";
+        issues.push({ code: "STOP_NOT_ON_ROUTE", jsonPath: `${base}.stops[${k}]`, message: `service '${svc.id}': stop '${id}' is off the board but ${why}` });
+      } else offStops.push({ k, place: place.index, via });
+      return;
+    }
     const st = stations.get(id);
     if (!st) return;
     const rs = full.map((p) => (p.track === st.track ? rOnPiece(p, st.at, tracks) : null)).find((x) => x !== null);
@@ -148,6 +213,37 @@ export function buildRoute(
     } else route.stops.push({ station: id, r: rs });
   });
   route.stops.sort((a, b) => a.r - b.r);
+
+  // The runs off the board beyond each end.
+  if (through) {
+    // Off at the end and back on at the start, along one way out there: the stops beyond the end
+    // (nearest first), then those beyond the start (farthest first); a place on both lies at both distances.
+    const d = (v: Array<{ exit: number; distance: number }>, e: number | null) => v.find((x) => x.exit === e)?.distance;
+    const out = offStops.filter((st) => d(st.via, ends[1]) !== undefined && d(st.via, ends[0]) === undefined).map((st) => d(st.via, ends[1])!);
+    const back = offStops.filter((st) => d(st.via, ends[0]) !== undefined && d(st.via, ends[1]) === undefined).map((st) => d(st.via, ends[0])!);
+    const both = offStops.filter((st) => d(st.via, ends[0]) !== undefined && d(st.via, ends[1]) !== undefined).map((st) => d(st.via, ends[0])! + d(st.via, ends[1])!);
+    const far = (list: number[]) => (list.length ? Math.max(...list) : 0);
+    const length = Math.max(OFF_THROUGH, ...both, far(out) + far(back) + OFF_CLEAR);
+    const calls = offStops
+      .map((st) => ({ place: st.place, at: d(st.via, ends[1]) ?? length - d(st.via, ends[0])! }))
+      .sort((a, b) => a.at - b.at);
+    route.off[1] = { exit: ends[1]!, calls, length, reenter: 0 };
+  } else if (!closed) {
+    // A shuttle runs out past its stops beyond an end (nearest first), turns at the last and calls again coming back.
+    for (const e of [0, 1] as const) {
+      if (ends[e] === null) continue;
+      const here = offStops
+        .map((st) => ({ place: st.place, at: st.via.find((v) => v.exit === ends[e])?.distance, other: st.via.find((v) => v.exit === ends[1 - e])?.distance }))
+        .filter((x) => x.at !== undefined && (x.other === undefined || x.at <= x.other))
+        .sort((a, b) => a.at! - b.at!);
+      const far = here.length ? here[here.length - 1].at! : OFF_TURN;
+      const calls = [
+        ...here.map((x) => ({ place: x.place, at: x.at! })),
+        ...here.slice(0, -1).reverse().map((x) => ({ place: x.place, at: 2 * far - x.at! })),
+      ];
+      route.off[e] = { exit: ends[e]!, calls, length: 2 * far, reenter: e };
+    }
+  }
   return { route: issues.length ? null : route, issues };
 }
 
@@ -181,7 +277,7 @@ export function locate(route: RoutePath, tracks: Map<string, TrackGeom>, r: numb
  */
 function shuttleEnds(
   ids: string[], hopsChosen: Hop[], tracks: Map<string, TrackGeom>,
-  stops: StationSpec[], trainLen: number,
+  stops: StationSpec[], trainLen: number, exit: (track: string, end: 0 | 1) => boolean,
 ): { start: number; end: number } {
   const first = tracks.get(ids[0])!;
   const last = tracks.get(ids[ids.length - 1])!;
@@ -192,15 +288,20 @@ function shuttleEnds(
 
   if (ids.length === 1) {
     const at = on(first);
-    if (at.length >= 2) return { start: clampLine(first, Math.min(...at) - trainLen / 2), end: clampLine(first, Math.max(...at) + trainLen / 2) };
-    return first.path.closed ? { start: 0, end: L0 / 2 } : { start: BUFFER_MARGIN, end: L0 - BUFFER_MARGIN };
+    const ends = at.length >= 2 ? { start: clampLine(first, Math.min(...at) - trainLen / 2), end: clampLine(first, Math.max(...at) + trainLen / 2) }
+      : first.path.closed ? { start: 0, end: L0 / 2 } : { start: BUFFER_MARGIN, end: L0 - BUFFER_MARGIN };
+    // An end that leaves the board: the trains run off it.
+    if (!first.path.closed && exit(first.id, 0)) ends.start = 0;
+    if (!first.path.closed && exit(first.id, 1)) ends.end = L0;
+    return ends;
   }
 
   // First track: the train travels from the end toward the junction in direction d.
   const h0 = hopsChosen[0];
   const before = on(first).map((c) => ({ c, d: first.path.closed ? mod((h0.sOut - c) * h0.dirOut, L0) : (h0.sOut - c) * h0.dirOut })).filter((x) => x.d > 0);
   let start: number;
-  if (before.length) start = clampLine(first, before.reduce((a, b) => (b.d > a.d ? b : a)).c - h0.dirOut * (trainLen / 2));
+  if (!first.path.closed && exit(first.id, h0.dirOut > 0 ? 0 : 1)) start = h0.dirOut > 0 ? 0 : L0;
+  else if (before.length) start = clampLine(first, before.reduce((a, b) => (b.d > a.d ? b : a)).c - h0.dirOut * (trainLen / 2));
   else if (first.path.closed) start = mod(h0.sOut - h0.dirOut * (L0 / 2), L0);
   else start = h0.dirOut > 0 ? BUFFER_MARGIN : L0 - BUFFER_MARGIN;
 
@@ -208,7 +309,8 @@ function shuttleEnds(
   const hN = hopsChosen[ids.length - 2];
   const after = on(last).map((c) => ({ c, d: last.path.closed ? mod((c - hN.sIn) * hN.dirIn, L1) : (c - hN.sIn) * hN.dirIn })).filter((x) => x.d > 0);
   let end: number;
-  if (after.length) end = clampLine(last, after.reduce((a, b) => (b.d > a.d ? b : a)).c + hN.dirIn * (trainLen / 2));
+  if (!last.path.closed && exit(last.id, hN.dirIn > 0 ? 1 : 0)) end = hN.dirIn > 0 ? L1 : 0;
+  else if (after.length) end = clampLine(last, after.reduce((a, b) => (b.d > a.d ? b : a)).c + hN.dirIn * (trainLen / 2));
   else if (last.path.closed) end = mod(hN.sIn + hN.dirIn * (L1 / 2), L1);
   else end = hN.dirIn > 0 ? L1 - BUFFER_MARGIN : BUFFER_MARGIN;
   return { start, end };

@@ -6,17 +6,18 @@ import { describe, it, expect } from "vitest";
 import { buildWorld } from "../src/model/build";
 import { Sim, DT, type SimSnapshot } from "../src/sim/sim";
 import { locate } from "../src/model/routes";
+import { onBoard } from "../src/sim/trains";
 import type { World } from "../src/model/build";
 import { example } from "./fixtures";
 
 const MINUTES = 30;
 const CHECK_EVERY = 30;     // ticks between geometric checks (1 s)
 
-/** Track positions covered by each train's consist, sampled every 0.5 m. */
+/** Track positions covered by each train's consist on the board, sampled every 0.5 m. */
 function occupancy(world: World, sim: Sim): Array<Array<{ track: string; s: number }>> {
   return sim.trains.map((t) => {
     const out: Array<{ track: string; s: number }> = [];
-    for (let d = 0; d <= t.plan.length; d += 0.5) out.push(locate(t.plan.route, world.tracks, t.r - t.dir * d));
+    for (let d = 0; d <= t.plan.length; d += 0.5) if (onBoard(t, t.r - t.dir * d)) out.push(locate(t.plan.route, world.tracks, t.r - t.dir * d));
     return out;
   });
 }
@@ -60,7 +61,9 @@ describe.each(["valley-loop", "harbour-town"])("%s simulation", (name) => {
   it("makes at least one stop per route traversal", () => {
     for (const t of sim.trains) {
       if (t.plan.svc.stops.length === 0) continue;
-      const traversals = Math.floor(t.odometer / t.plan.route.length);
+      // A traversal includes half the runs off the board (a shuttle makes one beyond each end per round trip).
+      const offRun = t.plan.route.off.reduce((a, o) => a + (o ? o.length / 2 : 0), 0);
+      const traversals = Math.floor(t.odometer / (t.plan.route.length + offRun));
       expect(t.stops, t.id).toBeGreaterThanOrEqual(Math.max(1, traversals));
     }
   });
