@@ -7,7 +7,7 @@ import type { Layout, RoadSpec } from "./schema";
 import { waypoint } from "./schema";
 import type { TrackGeom, Junction } from "./trackGraph";
 import { type Path, makePath, filletPolyline, pointAt, headingAt, sampleS } from "./geometry";
-import { type Profile, type Span, type Pin, buildProfile, classify, profileZ, structureAt } from "./heights";
+import { type Profile, type Span, type Pin, buildProfile, classify, profileZ, structureAt, opensGround } from "./heights";
 import { type Terrain, baseZ } from "./terrain";
 import { type Issue, error, warning } from "./validate";
 import { EDGE_SNAP, offEdge } from "./exits";
@@ -37,6 +37,19 @@ const JUNCTION_IGNORE = 30;       // m around a shared junction where two roads 
 export type RoadGeom = { id: string; index: number; spec: RoadSpec; path: Path; waypointS: number[] };
 export type Leg = { road: string; s: number; dir: 1 | -1 };       // leave a node along `road` from s in dir
 export type RoadNode = { id: number; at: V2; legs: Leg[] };       // 1 leg = dead end; 3+ = junction
+/**
+ * The paved area where roads meet (a junction, or a corner where one road runs on as
+ * another): each leg is cut back to where its kerbs meet the neighbouring legs' kerbs,
+ * and one surface fills the area inside. Kerbs run straight to sharp corners.
+ */
+export type JunctionArea = {
+  node: number;
+  legs: Array<{ leg: number; cut: number }>;              // counter-clockwise; leg indexes node.legs
+  outline: Array<[number, number, number]>;               // the area, counter-clockwise: each leg's right and left kerb at its cut, then the corner to the next leg
+  // The outline's outer edges, leg k's left kerb round to leg k+1's right; `out` is the
+  // mitred outward direction at each point (point + out·d lies d metres outside).
+  kerbs: Array<{ points: Array<[number, number, number]>; out: V2[]; sidewalk: boolean }>;
+};
 export type LevelCrossing = {
   id: string;
   kind: "road" | "path";         // a road (cars and its sidewalks) or a footpath crossing the line
@@ -55,7 +68,8 @@ export type RoadPoint = {
   width: number;                 // paved width: carriageway and parking strips (twice the wider side)
   left: number; right: number;   // m from the centre to the kerb on each side (carriageway plus parking)
   reach: number;                 // half-width including parking and the wider sidewalk
-  ground: boolean;
+  ground: boolean;               // the ground is shaped to it: on plain ground or just inside a tunnel mouth
+  mouth: boolean;                // inside a tunnel mouth
 };
 
 export const PARKING_WIDTH = { parallel: 2.4, perpendicular: 5.2 } as const;
@@ -102,6 +116,104 @@ export function junctionStop(net: Pick<RoadNet, "roads">, n: RoadNode, legIndex:
     box = Math.max(box, pavedHalf(other.spec) / Math.max(sin, 0.4) + 1.5);
   }
   return box;
+}
+
+const CUT_MAX = 16;              // m a junction area may cut a leg back at most
+const OUTSIDE_MAX = 12;          // m behind the node an outside corner may reach
+
+/** Each leg of a node, counter-clockwise by the heading it leaves along, with its kerb offsets (left and right of that heading). */
+export function sortedLegs(net: Pick<RoadNet, "roads">, n: RoadNode) {
+  return n.legs.map((l, i) => {
+    const r = net.roads.get(l.road)!;
+    const theta = headingAt(r.path, l.s) + (l.dir < 0 ? Math.PI : 0);
+    return {
+      l, i, r, theta, u: [Math.cos(theta), Math.sin(theta)] as V2, nrm: [-Math.sin(theta), Math.cos(theta)] as V2,
+      left: kerbOffset(r.spec, l.dir), right: kerbOffset(r.spec, -l.dir as 1 | -1),
+    };
+  }).sort((a, b) => mod(a.theta, 2 * Math.PI) - mod(b.theta, 2 * Math.PI));
+}
+
+/**
+ * Where two lines p + u·t and q + v·t2 meet, or null when (nearly) parallel.
+ */
+export function meet(p: V2, u: V2, q: V2, v: V2): { t: number; t2: number; at: V2 } | null {
+  const det = -u[0] * v[1] + v[0] * u[1];
+  if (Math.abs(det) < 1e-6) return null;
+  const [dx, dy] = [q[0] - p[0], q[1] - p[1]];
+  const t = (-dx * v[1] + v[0] * dy) / det;
+  const t2 = (u[0] * dy - dx * u[1]) / det;
+  return { t, t2, at: [p[0] + u[0] * t, p[1] + u[1] * t] };
+}
+
+/**
+ * The corner between leg A's left side and leg B's (the next counter-clockwise) right
+ * side, for lines `oa` and `ob` out from the centre line: the point where they meet,
+ * at t along A and t2 along B (negative behind the node: the outside of a bend), or
+ * null where they run on in line or meet too far away to draw.
+ */
+export function legCorner(at: V2, A: { theta: number; u: V2; nrm: V2 }, oa: number, B: { theta: number; u: V2; nrm: V2 }, ob: number) {
+  const phi = mod(B.theta - A.theta, 2 * Math.PI);
+  if (phi < 1e-3) return null;
+  const hit = meet([at[0] + A.nrm[0] * oa, at[1] + A.nrm[1] * oa], A.u, [at[0] - B.nrm[0] * ob, at[1] - B.nrm[1] * ob], B.u);
+  if (!hit || Math.max(hit.t, hit.t2) > CUT_MAX || Math.min(hit.t, hit.t2) < -OUTSIDE_MAX) return null;
+  return hit;
+}
+
+/** The offset direction where edges with outward normals a and b meet: a line d out from each passes through d·miter. */
+export function miter(a: V2, b: V2): V2 {
+  const k = Math.max(1 + a[0] * b[0] + a[1] * b[1], 0.25);
+  return [(a[0] + b[0]) / k, (a[1] + b[1]) / k];
+}
+
+/** The paved area of a node with two or more legs, or null where the roads simply run on into each other. */
+function junctionArea(net: Pick<RoadNet, "roads" | "profiles" | "stops">, n: RoadNode): JunctionArea | null {
+  const legs = sortedLegs(net, n);
+  const m = legs.length;
+  const z = legs.reduce((a, L) => a + profileZ(net.profiles.get(L.l.road)!, L.l.s), 0) / m;
+  const need = new Array<number>(m).fill(0);
+  const corners = legs.map((A, k) => {
+    const j = (k + 1) % m;
+    const hit = legCorner(n.at, A, A.left, legs[j], legs[j].right);
+    if (!hit) return [];
+    need[k] = Math.max(need[k], hit.t);
+    need[j] = Math.max(need[j], hit.t2);
+    return [hit.at];
+  });
+  const cut = legs.map((L, k) => {
+    const next = nextNode(net, L.r, L.l.s, L.l.dir);
+    const room = next ? next.dist / 2 - 0.5 : L.l.dir > 0 ? L.r.path.length - L.l.s : L.l.s;
+    return Math.max(0, Math.min(need[k], CUT_MAX, room));
+  });
+  // A point `lat` left of leg k's heading where it is cut, and the left normal there.
+  const edge = (k: number, lat: number): { p: [number, number, number]; nrm: V2 } => {
+    const L = legs[k];
+    const len = L.r.path.length;
+    const raw = L.l.s + L.l.dir * cut[k];
+    const s = L.r.path.closed ? mod(raw, len) : Math.min(Math.max(raw, 0), len);
+    const [x, y] = pointAt(L.r.path, s);
+    const h = headingAt(L.r.path, s) + (L.l.dir < 0 ? Math.PI : 0);
+    return { p: [x - Math.sin(h) * lat, y + Math.cos(h) * lat, profileZ(net.profiles.get(L.l.road)!, s)], nrm: [-Math.sin(h), Math.cos(h)] };
+  };
+  const outline: Array<[number, number, number]> = [];
+  const kerbs: JunctionArea["kerbs"] = [];
+  for (let k = 0; k < m; k++) {
+    const j = (k + 1) % m;
+    const [right, left, next] = [edge(k, -legs[k].right), edge(k, legs[k].left), edge(j, -legs[j].right)];
+    outline.push(right.p, left.p);
+    const mid = corners[k].map((c): [number, number, number] => [c[0], c[1], z]);
+    outline.push(...mid);
+    // Outward: left of leg k along its kerb, right of leg j along its kerb, mitred at the corner.
+    const out: V2[] = [left.nrm, ...mid.map(() => miter(legs[k].nrm, [-legs[j].nrm[0], -legs[j].nrm[1]])), [-next.nrm[0], -next.nrm[1]]];
+    const sidewalk = sidewalkWidth(legs[k].r.spec, legs[k].l.dir) > 0 || sidewalkWidth(legs[j].r.spec, -legs[j].l.dir as 1 | -1) > 0;
+    kerbs.push({ points: [left.p, ...mid, next.p], out, sidewalk });
+  }
+  let area = 0;
+  for (let i = 0; i < outline.length; i++) {
+    const [a, b] = [outline[i], outline[(i + 1) % outline.length]];
+    area += a[0] * b[1] - b[0] * a[1];
+  }
+  if (area / 2 < 0.5) return null;
+  return { node: n.id, legs: legs.map((L, k) => ({ leg: L.i, cut: cut[k] })), outline, kerbs };
 }
 
 const DEAD_END_TURN = 6;         // m of road a car uses to turn round at a dead end
@@ -198,14 +310,15 @@ export type RoadNet = {
   nodes: RoadNode[];
   stops: Map<string, Array<{ s: number; node: number }>>;   // nodes along each road, by s
   crossings: LevelCrossing[];
-  trims: Map<string, Array<[number, number]>>;              // s-ranges drawn by another road (junction areas)
+  junctions: JunctionArea[];
+  trims: Map<string, Array<[number, number]>>;              // s-ranges inside a junction area, which draws them
   points: RoadPoint[];
   hash: SpatialHash<RoadPoint>;
 };
 
 export const emptyRoadNet = (): RoadNet => ({
   roads: new Map(), order: [], profiles: new Map(), spans: new Map(), nodes: [], stops: new Map(), crossings: [],
-  trims: new Map(), points: [], hash: new SpatialHash<RoadPoint>(10),
+  junctions: [], trims: new Map(), points: [], hash: new SpatialHash<RoadPoint>(10),
 });
 
 type Ctx = {
@@ -449,27 +562,25 @@ export function buildRoads(ctx: Ctx): { net: RoadNet | null; issues: Issue[] } {
   }
   for (const list of stops.values()) list.sort((a, b) => a.s - b.s);
 
-  // 5. Junction areas are drawn by one road only: trim branch ends and the later crossing road.
+  // 5. Junction areas, and the stretch of each road they cover.
+  const junctions: JunctionArea[] = [];
   const trims = new Map<string, Array<[number, number]>>([...roads.keys()].map((id) => [id, []]));
-  const trimLen = (w: number, angle: number) => Math.min(12, w / 2 / Math.max(Math.sin((angle * Math.PI) / 180), 0.3));
-  for (const r of roads.values()) {
-    for (const [k, e] of [[0, r.spec.from], [1, r.spec.to]] as const) {
-      if (!e) continue;
-      const parent = roads.get(e.road)!;
-      const s = k === 0 ? 0 : r.path.length;
-      const t = trimLen(2 * pavedHalf(parent.spec), crossAngle(headingAt(r.path, s), headingAt(parent.path, endAt(e, parent))));
-      trims.get(r.id)!.push(k === 0 ? [0, t] : [r.path.length - t, r.path.length]);
+  for (const n of nodes) {
+    if (n.legs.length < 2) continue;
+    const area = junctionArea({ roads, profiles, stops }, n);
+    if (!area) continue;
+    junctions.push(area);
+    for (const a of area.legs) {
+      const l = n.legs[a.leg];
+      const r = roads.get(l.road)!;
+      const L = r.path.length;
+      const [s0, s1] = l.dir > 0 ? [l.s, l.s + a.cut] : [l.s - a.cut, l.s];
+      const list = trims.get(l.road)!;
+      // Ranges stay within [0, L]; on a loop, one that wraps is split in two.
+      if (s0 < 0 && r.path.closed) list.push([0, s1], [L + s0, L]);
+      else if (s1 > L && r.path.closed) list.push([s0, L], [0, s1 - L]);
+      else list.push([Math.max(0, s0), Math.min(L, s1)]);
     }
-  }
-  for (const c of crossroads) {
-    const [later, s, other] = rank.get(c.a)! > rank.get(c.b)! ? [c.a, c.sa, c.b] : [c.b, c.sb, c.a];
-    const t = trimLen(2 * pavedHalf(roads.get(other)!.spec), c.angle);
-    const L = roads.get(later)!.path.length;
-    const list = trims.get(later)!;
-    // Ranges stay within [0, L]; on a loop, one that wraps is split in two.
-    if (s - t < 0 && roads.get(later)!.path.closed) list.push([0, s + t], [L + s - t, L]);
-    else if (s + t > L && roads.get(later)!.path.closed) list.push([s - t, L], [0, s + t - L]);
-    else list.push([Math.max(0, s - t), Math.min(L, s + t)]);
   }
 
   // 6. Dense points for shaping, conflicts, bounds and scenery checks.
@@ -479,13 +590,14 @@ export function buildRoads(ctx: Ctx): { net: RoadNet | null; issues: Issue[] } {
       const [x, y] = pointAt(r.path, s);
       points.push({
         road: r.id, s, x, y, z: profileZ(profiles.get(r.id)!, s), heading: headingAt(r.path, s), width: 2 * pavedHalf(r.spec),
-        left: kerbOffset(r.spec, 1), right: kerbOffset(r.spec, -1), reach: roadReach(r.spec), ground: structureAt(spans.get(r.id)!, s) === "ground",
+        left: kerbOffset(r.spec, 1), right: kerbOffset(r.spec, -1), reach: roadReach(r.spec),
+        ground: opensGround(spans.get(r.id)!, r.path.closed, s), mouth: structureAt(spans.get(r.id)!, s) === "tunnel",
       });
     }
   }
   const hash = new SpatialHash<RoadPoint>(10);
   for (const p of points) hash.insert(p.x, p.y, p);
-  const net: RoadNet = { roads, order, profiles, spans, nodes, stops, crossings, trims, points, hash };
+  const net: RoadNet = { roads, order, profiles, spans, nodes, stops, crossings, junctions, trims, points, hash };
   issues.push(...checkRoads(ctx, net));
   return { net, issues };
 }

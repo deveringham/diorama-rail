@@ -52,7 +52,9 @@ The full machine-readable schema is in [`schema.json`](schema.json)
   heights are hard constraints.
 - Where the track is more than 5 m above the original ground it becomes a
   **bridge**; more than 7 m below, a **tunnel**. Elsewhere the ground is shaped
-  into embankments and cuttings (about 1:1.5).
+  into embankments and cuttings (about 1:1.5). The cutting runs 8 m on into each
+  tunnel, where a stone portal and a short box section meet the hill, so the
+  mouth stays open; trees grow on the hill above the tunnel.
 
 ### Terrain
 - `features`: smooth bumps (`height > 0`) or basins (`height < 0`); about 5% of
@@ -148,7 +150,8 @@ down for every train.
   corner). There is no `heading`: the road leaves straight toward its first
   waypoint. Roads that cross at about the same height (within 3 m) form a
   **crossroads** by themselves. Keep road junctions at least 25 m apart along a
-  road, so a car can wait between them.
+  road, so a car can wait between them. Each junction (and corner) is paved as
+  one piece out to where the roads' kerbs meet, with square corners.
 - **Heights:** a road follows the ground smoothed over 40 m, held to `maxGrade`
   (default 8%). A waypoint `z` pins the height at that point only (for example a
   dip to pass under a railway bridge). A road takes the height of the road it
@@ -225,7 +228,8 @@ People (§5) walk on **sidewalks** (raised pavements along roads) and
 
 - **Sidewalks:** a road's `sidewalks` adds raised (0.15 m) pavements of
   `sidewalkWidth` on its `left`, `right` (of increasing s) or `both` sides. They
-  follow the road, round the corners of its junctions, and at junctions of three
+  follow the kerb, turning square round the corners of its junctions (inside and
+  outside), and at junctions of three
   roads or more people cross each leg a car's length behind where the cars wait
   (unmarked: they wait for a gap in the traffic). A sidewalk is part of the road's
   footprint: houses go about 10 m from a 6 m road's centre, lamps about 4.5 m.
@@ -574,7 +578,8 @@ placed through `scenery`.
 - **Scatter:** `scatter` lists object ids picked at random (repeat an id to make
   it more common), `spacing` is the minimum distance between items, and `at` +
   `radius` limit it to a circle with a ragged edge. Scattered items skip water,
-  ground steeper than the object's `maxSlope`, the track corridor (6 m+), roads
+  ground steeper than the object's `maxSlope`, the track corridor (6 m+, but not
+  over a tunnel more than 9 m down), roads
   (3 m+ beyond the carriageway), paths and sidewalks (1.5 m+) and the footprints
   of placed objects (plus a 2 m garden). Use it for forests, orchards,
   hay bales, rocks.

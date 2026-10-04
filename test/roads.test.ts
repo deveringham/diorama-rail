@@ -12,6 +12,12 @@ import { profileZ } from "../src/model/heights";
 import { CROSSING_ROAD_Z } from "../src/model/roads";
 import { withRoads, base, example } from "./fixtures";
 
+/** Signed area of a polygon (positive when counter-clockwise). */
+const area = (pts: number[][]) => pts.reduce((a, p, i) => {
+  const q = pts[(i + 1) % pts.length];
+  return a + (p[0] * q[1] - q[0] * p[1]) / 2;
+}, 0);
+
 describe("road network", () => {
   const { world, report } = buildWorld(withRoads());
   const net = world!.roads;
@@ -57,6 +63,28 @@ describe("road network", () => {
     const { world: w } = buildWorld(L);
     const n = w!.roads.nodes.find((x) => Math.hypot(x.at[0] - 420, x.at[1] - 520) < 2)!;
     expect(n.legs.map((l) => l.road).sort()).toEqual(["corner", "lane"]);
+    // Paved as an L: both roads stop 3 m short of the node, and the square corner outside is filled.
+    const j = w!.roads.junctions.find((x) => x.node === n.id)!;
+    expect(area(j.outline)).toBeCloseTo(36, 0);
+    expect(j.legs.map((l) => l.cut)).toEqual([expect.closeTo(3, 1), expect.closeTo(3, 1)]);
+    expect(j.outline.some((p) => Math.hypot(p[0] - 423, p[1] - 523) < 0.1)).toBe(true);   // behind both: south of the lane, east of the corner road
+  });
+
+  it("paves each junction as one piece out to where the kerbs meet", () => {
+    // The crossroads and the T, all 6 m roads: a 6 m square each, counter-clockwise, every leg cut back 3 m.
+    expect(net.junctions.map((j) => net.nodes[j.node].legs.length).sort()).toEqual([3, 4]);
+    for (const j of net.junctions) {
+      expect(area(j.outline)).toBeCloseTo(36, 0);
+      for (const l of j.legs) expect(l.cut).toBeCloseTo(3, 1);
+      // Kerbs between neighbouring legs; the T's straight side has no corner.
+      expect(j.kerbs.map((k) => k.points.length).sort()).toEqual(j.legs.length === 4 ? [3, 3, 3, 3] : [2, 3, 3]);
+    }
+    expect(net.trims.get("lane")).toEqual([[0, expect.closeTo(3, 1)]]);
+    const n = net.nodes.find((x) => x.legs.length === 4)!;
+    const s = n.legs.find((l) => l.road === "cross")!.s;
+    // One range per leg: the crossing road is cut back either side of the node.
+    const near = net.trims.get("cross")!.filter(([a, b]) => Math.abs(a - s) < 1 || Math.abs(b - s) < 1).sort((a, b) => a[0] - b[0]);
+    expect(near).toEqual([[expect.closeTo(s - 3, 1), expect.closeTo(s, 3)], [expect.closeTo(s, 3), expect.closeTo(s + 3, 1)]]);
   });
 
   it("passes under a track on a bridge when far enough below it", () => {

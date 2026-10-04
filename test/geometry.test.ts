@@ -5,6 +5,8 @@ import { describe, it, expect } from "vitest";
 import { buildWorld } from "../src/model/build";
 import { filletPolyline, junctionArc, makePath, pointAt, headingAt, segHeading, segPoint, sampleS } from "../src/model/geometry";
 import { wrapAngle, dist } from "../src/util/vec";
+import { profileZ, tunnelMouths, MOUTH, type Span } from "../src/model/heights";
+import { groundZ } from "../src/model/terrain";
 import { example } from "./fixtures";
 
 const turn = (a: number, b: number) => Math.abs(wrapAngle(a - b));
@@ -79,5 +81,39 @@ describe("fillets", () => {
     const toW = Math.atan2(50 - res.end[1], 100 - res.end[0]);
     expect(turn(h, toW)).toBeLessThan(1e-9);
     expect(junctionArc([0, 0], 0, [10, 30], 40).error).toMatch(/inside/);
+  });
+});
+
+describe("tunnels", () => {
+  const { world } = buildWorld(example("valley-loop"));
+  const t = world!.tracks.get("hill")!;
+  const spans = world!.spans.get("hill")!;
+  const tunnel = spans.find((sp) => sp.kind === "tunnel")!;
+
+  it("finds each portal and which way leads into the hill", () => {
+    expect(tunnelMouths(spans, false)).toEqual([{ s: tunnel.s0, into: 1 }, { s: tunnel.s1, into: -1 }]);
+    // On a loop a tunnel may run through s = 0: one portal either side.
+    const loop: Span[] = [{ kind: "tunnel", s0: 0, s1: 40 }, { kind: "ground", s0: 40, s1: 300 }, { kind: "tunnel", s0: 300, s1: 400 }];
+    expect(tunnelMouths(loop, true)).toEqual([{ s: 40, into: -1 }, { s: 300, into: 1 }]);
+    expect(tunnelMouths(loop, false)).toEqual([{ s: 0, into: 1 }, { s: 40, into: -1 }, { s: 300, into: 1 }]);
+  });
+
+  it("keeps each mouth open: the ground is cut down to the track a few metres in", () => {
+    for (const m of tunnelMouths(spans, false)) {
+      for (const d of [0, 2, 4, MOUTH - 4]) {
+        const s = m.s + m.into * d;
+        const [x, y] = pointAt(t.path, s);
+        expect(groundZ(world!.terrain, x, y)).toBeLessThan(profileZ(world!.profiles.get("hill")!, s));
+      }
+    }
+  });
+
+  it("grows trees on the hill above it", () => {
+    let over = 0;
+    for (let s = tunnel.s0 + 30; s < tunnel.s1 - 30; s += 5) {
+      const [x, y] = pointAt(t.path, s);
+      over += world!.scenery.filter((p) => Math.hypot(p.x - x, p.y - y) < 3).length;
+    }
+    expect(over).toBeGreaterThan(3);
   });
 });

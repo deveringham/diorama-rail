@@ -4,7 +4,7 @@
 
 import { LayoutSchema, type Layout } from "./schema";
 import { type TrackGeom, type Junction, type Graph, trackOrder, buildTrack, junctionsOf, buildGraph } from "./trackGraph";
-import { type Profile, type Span, buildProfile, classify, profileZ, structureAt } from "./heights";
+import { type Profile, type Span, buildProfile, classify, profileZ, structureAt, opensGround } from "./heights";
 import { type Terrain, buildTerrain, baseZ, shapeCorridor } from "./terrain";
 import { type RoutePath, buildRoute } from "./routes";
 import { type StationGeom, type Placement, type ObjectInfo, buildStations, placeScenery, objectCatalog, stationEntries } from "./scenery";
@@ -26,6 +26,8 @@ import { SpatialHash } from "../util/spatial";
 const POINT_STEP = 2;      // m between dense track points (conflicts, shaping, queries)
 const ROAD_BED = 0.3;      // m the ground sits below a road surface (the slab's thickness hides the rest)
 const PATH_BED = 0.1;      // m the ground sits below a path's surface
+const MOUTH_FLAT = 5.5;    // m either side of a track flattened inside a tunnel mouth (the portal is 4.8)
+const CORNER_FLAT = 6;     // m outside a junction's kerb flattened: its sidewalk or verge, and a grid cell beyond
 
 export type World = {
   layout: Layout;
@@ -149,10 +151,31 @@ export function buildWorld(json: unknown): { world: World | null; report: Report
   if (bused) issues.push(...bused.issues);
   const buses = bused?.net ?? emptyBusNet();
   // Shaping in passes: track beds first, then roads, then paths, each keeping what came before flat.
-  const bed = shapeCorridor(terrain, points.map((p) => ({ x: p.x, y: p.y, z: p.z, ground: structureAt(spans.get(p.track)!, p.s) === "ground" })));
-  const roadBed = shapeCorridor(terrain, roads.points.map((p) => ({ x: p.x, y: p.y, z: p.z, ground: p.ground, flat: p.reach + 1, depth: ROAD_BED })), bed);
+  // Inside a tunnel mouth the cut is a little wider than the portal.
+  const bed = shapeCorridor(terrain, points.map((p) => {
+    const sp = spans.get(p.track)!;
+    const mouth = structureAt(sp, p.s) === "tunnel";
+    return { x: p.x, y: p.y, z: p.z, ground: opensGround(sp, tracks.get(p.track)!.path.closed, p.s), flat: mouth ? MOUTH_FLAT : undefined };
+  }));
+  const roadShape = roads.points.map((p) => ({ x: p.x, y: p.y, z: p.z, ground: p.ground, flat: p.reach + (p.mouth ? 2.5 : 1), depth: ROAD_BED }));
+  // Along junctions' kerbs too: the outside of a corner lies beyond both roads' ends.
+  for (const j of roads.junctions) {
+    const leg = roads.nodes[j.node].legs[0];
+    if (structureAt(roads.spans.get(leg.road)!, leg.s) !== "ground") continue;
+    for (const k of j.kerbs) {
+      for (let i = 0; i + 1 < k.points.length; i++) {
+        const [a, b] = [k.points[i], k.points[i + 1]];
+        const n = Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]));
+        for (let q = 0; q <= n; q++) {
+          const f = n ? q / n : 0;
+          roadShape.push({ x: a[0] + (b[0] - a[0]) * f, y: a[1] + (b[1] - a[1]) * f, z: a[2] + (b[2] - a[2]) * f, ground: true, flat: CORNER_FLAT, depth: ROAD_BED });
+        }
+      }
+    }
+  }
+  const roadBed = shapeCorridor(terrain, roadShape, bed);
   for (let v = 0; v < bed.length; v++) roadBed[v] |= bed[v];
-  shapeCorridor(terrain, walks.points.filter((p) => p.kind === "path").map((p) => ({ x: p.x, y: p.y, z: p.z, ground: p.ground, flat: p.width / 2 + 0.6, depth: PATH_BED })), roadBed);
+  shapeCorridor(terrain, walks.points.filter((p) => p.kind === "path").map((p) => ({ x: p.x, y: p.y, z: p.z, ground: p.ground, flat: p.width / 2 + (p.mouth ? 2 : 0.6), depth: PATH_BED })), roadBed);
   issues.push(...checkConflicts(tracks, junctions, points));
   issues.push(...checkStations(layout, tracks, spans));
 

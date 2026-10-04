@@ -31,6 +31,7 @@ const SCATTER_TRACK_GAP = 6;            // scattered items keep further away
 const ROAD_GAP = 0.3;                   // placed objects keep this far outside a road's edge
 const SCATTER_ROAD_GAP = 3;             // scattered items keep further away
 const ROAD_DZ = 5;                      // m; a road this far above or below an object (bridge, tunnel) does not count
+const TUNNEL_DZ = 9;                    // m; track this far below the ground (deep in a tunnel, past its portal) does not count
 const SCATTER_WALK_GAP = 1.5;           // scattered items keep this far from paths and sidewalks
 const WATER_MARGIN = 0.5;
 const MAX_SCATTERED = 20000;
@@ -229,7 +230,7 @@ export function placeScenery(ctx: Context): { placements: Placement[]; issues: I
     const scale = typeof e.scale === "number" ? e.scale : 1;
     const rotation = facing(ctx, e.face, x, y) ?? ((e.rotation ?? 0) * Math.PI) / 180;
     const box = boxOf(info, x, y, rotation, scale);
-    const hit = nearestTrack(trackHash, box);
+    const hit = nearestTrack(trackHash, box, groundZ(terrain, x, y));
     if (hit && hit.d < TRACK_GAP) {
       issues.push(error("SCENERY_ON_TRACK",
         `${e.object} at (${x}, ${y}) comes within ${hit.d.toFixed(1)} m of track '${hit.track}' (objects need ${TRACK_GAP} m from the track centre); move it about ${(TRACK_GAP - hit.d + 1).toFixed(0)} m further away or turn it`,
@@ -293,7 +294,7 @@ export function placeScenery(ctx: Context): { placements: Placement[]; issues: I
       const z = groundZ(terrain, x, y);
       if (layout.terrain.seaLevel !== null && z < layout.terrain.seaLevel + WATER_MARGIN) continue;
       if (slopeAt(terrain, x, y) > (info.def.maxSlope * Math.PI) / 180) continue;
-      const hit = nearestTrack(trackHash, box);
+      const hit = nearestTrack(trackHash, box, z);
       if (hit && hit.d < SCATTER_TRACK_GAP + reach * 0.5) continue;
       const road = nearestRoad(ctx.roadHash, box, z);
       if (road && road.d < SCATTER_ROAD_GAP + reach * 0.5) continue;
@@ -351,10 +352,14 @@ function nearestRoad(hash: SpatialHash<RoadPoint>, box: Box, z: number): { d: nu
   return best;
 }
 
-/** Nearest track point to a footprint, measured to the rectangle's edge. */
-function nearestTrack(hash: SpatialHash<TrackPoint>, box: Box): { d: number; track: string } | null {
+/**
+ * Nearest track point to a footprint standing on the ground at z, measured to the
+ * rectangle's edge; track deep in a tunnel below does not count, so trees grow on the hill.
+ */
+function nearestTrack(hash: SpatialHash<TrackPoint>, box: Box, z: number): { d: number; track: string } | null {
   let best: { d: number; track: string } | null = null;
   hash.near(box.cx, box.cy, boxRadius(box) + SCATTER_TRACK_GAP + 10, (p) => {
+    if (z - p.z > TUNNEL_DZ) return;
     const d = boxDistance(box, p.x, p.y);
     if (!best || d < best.d) best = { d, track: p.track };
   });

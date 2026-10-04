@@ -1,15 +1,16 @@
 // Road rendering: asphalt strips with sloping verges (one merged mesh), dashed
 // centre lines, bus stop boxes and level-crossing panels (a second mesh drawn just
 // above), the fixed furniture (crossing posts, St Andrew's crosses, signal housings,
-// bus stop signs and shelters) and the moving parts: barrier arms and flashing lights. Junction areas are drawn by one
-// road only (see model/roads.ts trims); deep tunnel interiors are skipped.
+// bus stop signs and shelters) and the moving parts: barrier arms and flashing lights. Each road stops
+// where a junction area begins (see model/roads.ts JunctionArea), which is drawn as one surface;
+// deep tunnel interiors are skipped.
 
 import * as THREE from "three";
 import type { World } from "../model/build";
 import type { GateSnapshot } from "../sim/traffic";
 import { pointAt, headingAt, sampleS } from "../model/geometry";
 import { profileZ, structureAt } from "../model/heights";
-import { CROSSING_ROAD_Z, sidewalkWidth, kerbOffset, pavedHalf, type LevelCrossing } from "../model/roads";
+import { CROSSING_ROAD_Z, sidewalkWidth, kerbOffset, pavedHalf, type LevelCrossing, type JunctionArea } from "../model/roads";
 import { LOT_AISLE, BAY_DEPTH, lotFrame } from "../model/parking";
 import { FRONT_PAST } from "../model/buses";
 import { PALETTE } from "./palette";
@@ -87,21 +88,6 @@ export function roadMeshes(world: World): THREE.Object3D[] {
       else if (!bridge) g.quad(side(a, -kr - VERGE, -VERGE_DROP), side(b, -kr - VERGE, -VERGE_DROP), side(b, -kr, 0), side(a, -kr, 0), PALETTE.verge[season]);
     }
 
-    // A line road ending where another road joins it (a corner or the head of a T):
-    // carry the surface on across the joining road's half-width so the corner is closed.
-    if (!r.path.closed) {
-      for (const [s, out] of [[0, Math.PI], [L, 0]] as const) {
-        const n = net.nodes.find((x) => x.legs.some((l) => l.road === r.id && Math.abs(l.s - s) < 1e-3));
-        const others = n ? n.legs.filter((l) => l.road !== r.id) : [];
-        if (!others.length) continue;
-        const ext = Math.max(...others.map((l) => pavedHalf(net.roads.get(l.road)!.spec)));
-        const a = roadFrame(world, r.id, s);
-        const b = { ...a, x: a.x + Math.cos(a.h + out) * ext, y: a.y + Math.sin(a.h + out) * ext };
-        const [p, q] = out ? [b, a] : [a, b];         // p → q runs along the road
-        g.quad(side(p, -kr, 0), side(q, -kr, 0), side(q, kl, 0), side(p, kl, 0), PALETTE.road[season]);
-      }
-    }
-
     // Dashed centre line, kept out of junctions, crossings and narrow lanes; snow hides it.
     if (r.spec.width < 5 || season === "winter") continue;
     const quiet: Array<[number, number]> = trims.map(([a, b]) => [a - 2, b + 2]);
@@ -122,6 +108,8 @@ export function roadMeshes(world: World): THREE.Object3D[] {
       marks.quad(side(a, -LINE_HALF, MARK_LIFT), side(b, -LINE_HALF, MARK_LIFT), side(b, LINE_HALF, MARK_LIFT), side(a, LINE_HALF, MARK_LIFT), PALETTE.roadLine);
     }
   }
+
+  for (const j of net.junctions) junction(g, j, season);
 
   // Level crossings: a dark panel over the track the width of the road, and posts on both approaches.
   for (const c of net.crossings) {
@@ -169,6 +157,27 @@ export function roadMeshes(world: World): THREE.Object3D[] {
     out.push(markings);
   }
   return out;
+}
+
+/** A junction area's surface, with kerb faces (where a sidewalk runs) or sloping verges round its outer edges. */
+function junction(g: GeoBuilder, j: JunctionArea, season: World["layout"]["style"]["season"]): void {
+  const pts = j.outline;
+  for (const [a, b, c] of THREE.ShapeUtils.triangulateShape(pts.map((p) => new THREE.Vector2(p[0], p[1])), [])) {
+    const [p, q, r] = [pts[a], pts[b], pts[c]];
+    const ccw = (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]) > 0;
+    if (ccw) g.tri(p, q, r, PALETTE.road[season]);
+    else g.tri(p, r, q, PALETTE.road[season]);
+  }
+  // The outline runs counter-clockwise, so outward is to the right of each kerb edge.
+  for (const k of j.kerbs) {
+    const outer = k.points.map((p, i): P3 => [p[0] + k.out[i][0] * VERGE, p[1] + k.out[i][1] * VERGE, p[2] - VERGE_DROP]);
+    for (let i = 0; i + 1 < k.points.length; i++) {
+      const [a, b] = [k.points[i], k.points[i + 1]];
+      if (Math.hypot(b[0] - a[0], b[1] - a[1]) < 1e-3) continue;
+      if (k.sidewalk) g.quad([a[0], a[1], a[2] - KERB_DROP], [b[0], b[1], b[2] - KERB_DROP], b, a, PALETTE.kerb);
+      else g.quad(outer[i], outer[i + 1], b, a, PALETTE.verge[season]);
+    }
+  }
 }
 
 /** Car park surfaces either side of their aisles, and the painted lines between parking bays. */

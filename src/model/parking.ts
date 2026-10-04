@@ -157,7 +157,7 @@ export function lotPoints(lots: LotGeom[], roads: RoadNet, trackHash: SpatialHas
         }
         mine.push({
           road: lot.id, s: bs, x, y, z: profileZ(prof, bs), heading: headingAt(aisle.path, bs), width: GRID * 1.5,
-          left: GRID * 0.75, right: GRID * 0.75, reach: GRID * 0.75, ground: true,
+          left: GRID * 0.75, right: GRID * 0.75, reach: GRID * 0.75, ground: true, mouth: false,
         });
       }
     }
