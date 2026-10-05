@@ -57,6 +57,36 @@ describe("town model", () => {
     }
   });
 
+  it("lines car park bays up in two rows inside the lot, even when the driveway comes in from the side", () => {
+    // The fixture's car park faces its road; turned a quarter, its driveway has to bend into the aisle.
+    const L = withTown();
+    L.parking![0].rotation = 90;
+    const turned = buildWorld(L);
+    expect(turned.report.issues.filter((i) => i.severity === "error")).toEqual([]);
+    for (const w of [world!, turned.world!, buildWorld(example("valley-loop")).world!, buildWorld(example("harbour-town")).world!]) {
+      for (const lot of w.town.lots) {
+        const u = [Math.cos(lot.heading), Math.sin(lot.heading)];
+        const local = w.town.bays.filter((b) => b.lot === lot.id).map((b) => {
+          const [dx, dy] = [b.x - lot.centre[0], b.y - lot.centre[1]];
+          return { b, a: dx * u[0] + dy * u[1], c: -dx * u[1] + dy * u[0] };
+        });
+        expect(local.length, lot.id).toBe(lot.spec.spaces);
+        for (const { b, a, c } of local) {
+          // Inside the lot, nose-in across the aisle, in one of its two rows.
+          expect(Math.abs(a) + b.width / 2, lot.id).toBeLessThanOrEqual(lot.length / 2 + 1e-6);
+          expect(Math.abs(c) + b.length / 2, lot.id).toBeCloseTo(lot.width / 2, 3);
+          expect(Math.abs(Math.cos(b.heading - lot.heading)), lot.id).toBeLessThan(1e-3);
+        }
+        // Side by side along each row, never overlapping.
+        for (const side of [1, -1]) {
+          const row = local.filter((x) => Math.sign(x.c) === side).map((x) => x.a).sort((p, q) => p - q);
+          for (let i = 1; i < row.length; i++) expect(row[i] - row[i - 1], lot.id).toBeCloseTo(row[1] - row[0], 3);
+          if (row.length > 1) expect(row[1] - row[0]).toBeGreaterThanOrEqual(local[0].b.width - 1e-6);
+        }
+      }
+    }
+  });
+
   it("reaches the station by its path and through its building", () => {
     expect(town.stations[0].entrances.map((e) => e.via).sort()).toEqual(["building", "path"]);
   });

@@ -56,6 +56,7 @@ export function roadMeshes(world: World): THREE.Object3D[] {
   const season = world.layout.style.season;
   const g = new GeoBuilder();
   const marks = new GeoBuilder();
+  const lots = new Set(world.town.lots.map((l) => l.id));
 
   for (const r of net.roads.values()) {
     const L = r.path.length;
@@ -88,8 +89,8 @@ export function roadMeshes(world: World): THREE.Object3D[] {
       else if (!bridge) g.quad(side(a, -kr - VERGE, -VERGE_DROP), side(b, -kr - VERGE, -VERGE_DROP), side(b, -kr, 0), side(a, -kr, 0), PALETTE.verge[season]);
     }
 
-    // Dashed centre line, kept out of junctions, crossings and narrow lanes; snow hides it.
-    if (r.spec.width < 5 || season === "winter") continue;
+    // Dashed centre line, kept out of junctions, crossings, narrow lanes and car parks; snow hides it.
+    if (r.spec.width < 5 || season === "winter" || lots.has(r.id)) continue;
     const quiet: Array<[number, number]> = trims.map(([a, b]) => [a - 2, b + 2]);
     for (const n of net.nodes) {
       if (n.legs.length < 3) continue;
@@ -204,6 +205,19 @@ function parking(world: World, g: GeoBuilder, marks: GeoBuilder): void {
         else g.quad(side(a, ev, -VERGE_DROP), side(b, ev, -VERGE_DROP), side(b, e, 0), side(a, e, 0), PALETTE.verge[season]);
       }
     }
+    // Verges along the front either side of the driveway, and right across the back, round the corners.
+    const along = (f: Frame, d: number): Frame => ({ ...f, x: f.x + Math.cos(f.h) * d, y: f.y + Math.sin(f.h) * d });
+    const ends: Array<[Frame, number, Array<[number, number]>]> = [
+      [frames[0], -VERGE, [[inner, outer], [-outer, -inner]]],
+      [frames[frames.length - 1], VERGE, [[-outer, outer]]],
+    ];
+    for (const [f, d, spans] of ends) {
+      const o = along(f, d);
+      for (const [l0, l1] of spans) facingUp(g, side(f, l0, 0), side(f, l1, 0), side(o, l1, -VERGE_DROP), side(o, l0, -VERGE_DROP), PALETTE.verge[season]);
+      for (const k of [1, -1]) {
+        facingUp(g, side(f, k * outer, 0), side(f, k * (outer + VERGE), -VERGE_DROP), side(o, k * (outer + VERGE), -VERGE_DROP), side(o, k * outer, -VERGE_DROP), PALETTE.verge[season]);
+      }
+    }
   }
   if (season === "winter") return;
   for (const bay of world.town.bays) {
@@ -222,6 +236,13 @@ function parking(world: World, g: GeoBuilder, marks: GeoBuilder): void {
       for (const k of [1, -1]) line(bay.x + n[0] * k * bay.width / 2, bay.y + n[1] * k * bay.width / 2, u[0], u[1], bay.length);
     }
   }
+}
+
+/** A quad turned to face upward, whichever way its corners were listed. */
+function facingUp(g: GeoBuilder, a: P3, b: P3, c: P3, d: P3, color: number): void {
+  const up = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]) + (c[0] - a[0]) * (d[1] - a[1]) - (c[1] - a[1]) * (d[0] - a[0]);
+  if (up >= 0) g.quad(a, b, c, d, color);
+  else g.quad(d, c, b, a, color);
 }
 
 /** Each bus stop: a painted box where the bus stands, a sign at the kerb and a shelter behind it. */

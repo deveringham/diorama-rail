@@ -183,7 +183,9 @@ down for every train.
   nose-in bays (`spaces`, default 20) either side of an aisle, 16.4 m wide and
   2 + 1.3·spaces + 8 m long. Its entrance faces the road it joins (the nearest, or
   `road`; or set `rotation`, the direction the entrance faces) by a driveway of
-  1–60 m; the aisle is a dead-end road of its own, so cars reach the bays under
+  1–60 m. If the road is off to one side, the driveway turns into the aisle just
+  outside the entrance (about 7 m out for a right angle), so the aisle runs
+  straight through the lot. The aisle is a dead-end road of its own, so cars reach the bays under
   the usual rules. The paved area must keep clear of roads, tracks and placed
   objects (`PARKING_POSITION`, `SCENERY_ON_ROAD`). `name` is how people speak of
   it (default from its id).
