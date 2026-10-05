@@ -1,6 +1,7 @@
 // Terrain as a diorama block: the shaped heightmap with per-face colour bands,
 // earthen skirt sides, a base frame and a wooden table underneath, plus a
-// translucent water plane at sea level.
+// translucent water plane at sea level. The ground is cut into tiles about TILE
+// metres across, so a close-up view skips the ones off screen.
 
 import * as THREE from "three";
 import type { World } from "../model/build";
@@ -13,13 +14,17 @@ const TABLE_MARGIN = 0.08;      // table extends this fraction beyond the block
 const ROCK_NORMAL_Z = 0.8;      // faces steeper than ~37° show rock
 const SNOW_LINE = 26;           // m; winter snow above this even on rock
 const WATER_CELL = 25;
+const TILE = 500;               // m: about how big each ground tile is
 
 export function terrainMeshes(world: World): THREE.Object3D[] {
   const t = world.terrain;
   const season = world.layout.style.season;
   const pal = PALETTE.terrain[season];
   const sea = t.seaLevel;
-  const g = new GeoBuilder();
+  const tx = Math.max(1, Math.round(t.width / TILE));
+  const ty = Math.max(1, Math.round(t.height / TILE));
+  const tiles = Array.from({ length: tx * ty }, () => new GeoBuilder());
+  const g = new GeoBuilder();          // skirt, frame and table
   const w = t.nx + 1;
   const vz = (i: number, j: number) => t.shaped[j * w + i];
   const P = (i: number, j: number): P3 => [i * t.cx, j * t.cy, vz(i, j)];
@@ -46,15 +51,17 @@ export function terrainMeshes(world: World): THREE.Object3D[] {
   };
 
   for (let j = 0; j < t.ny; j++) {
+    const row = Math.min(ty - 1, Math.floor((j * ty) / t.ny)) * tx;
     for (let i = 0; i < t.nx; i++) {
+      const tile = tiles[row + Math.min(tx - 1, Math.floor((i * tx) / t.nx))];
       const a = P(i, j), b = P(i + 1, j), c = P(i + 1, j + 1), d = P(i, j + 1);
       // Alternate the diagonal so the low-poly facets don't all lean one way.
       if ((i + j) % 2 === 0) {
-        g.tri(a, b, c, faceColor(a, b, c));
-        g.tri(a, c, d, faceColor(a, c, d));
+        tile.tri(a, b, c, faceColor(a, b, c));
+        tile.tri(a, c, d, faceColor(a, c, d));
       } else {
-        g.tri(a, b, d, faceColor(a, b, d));
-        g.tri(b, c, d, faceColor(b, c, d));
+        tile.tri(a, b, d, faceColor(a, b, d));
+        tile.tri(b, c, d, faceColor(b, c, d));
       }
     }
   }
@@ -87,11 +94,16 @@ export function terrainMeshes(world: World): THREE.Object3D[] {
   const m = Math.max(W, H) * TABLE_MARGIN;
   g.box(W / 2, H / 2, bottom - 6, W + 2 * m, H + 2 * m, 4, 0, PALETTE.table);
 
-  const ground = new THREE.Mesh(g.build(), flatMaterial());
-  ground.name = "terrain";
-  ground.receiveShadow = true;
-  ground.castShadow = false;     // 175k triangles; flat shading already shows the relief
-  const out: THREE.Object3D[] = [ground];
+  const material = flatMaterial();
+  const out: THREE.Object3D[] = [];
+  for (const b of [...tiles, g]) {
+    if (!b.triangles) continue;
+    const ground = new THREE.Mesh(b.build(), material);
+    ground.name = b === g ? "terrain-base" : "terrain";
+    ground.receiveShadow = true;
+    ground.castShadow = false;   // 175k triangles; flat shading already shows the relief
+    out.push(ground);
+  }
   if (sea !== null && minZ < sea) out.push(waterMesh(world, sea));
   return out;
 }

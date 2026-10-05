@@ -1,6 +1,7 @@
 // npm run screenshot -- layouts/x.json [--out shot.png] [--t 120] [--view overview|top|follow]
 //                      [--size 1600x1000] [--url http://localhost:5173] [--cam x,y,z,tx,ty,tz]
 //                      [--object id[,id...]|all] [--season summer|autumn|winter]
+//                      [--quality low|medium|high] (graphics preset; default high)
 // Builds and previews the app on a free port (or reuses a running server via --url),
 // renders the layout (or, with --object, just those scenery objects) in headless
 // Chromium (SwiftShader WebGL) and saves a PNG.
@@ -26,6 +27,7 @@ const { values, positionals } = parseArgs({
     cam: { type: "string" },
     object: { type: "string" },
     season: { type: "string" },
+    quality: { type: "string" },
   },
 });
 
@@ -45,8 +47,9 @@ async function main(): Promise<number> {
     return 1;
   }
   const [width, height] = values.size.split("x").map(Number);
-  if (!["overview", "top", "follow"].includes(values.view) || !(width > 0 && height > 0)) {
-    console.error("usage: screenshot <layout.json> [--out f.png] [--t s] [--view overview|top|follow] [--size WxH] [--url base]");
+  if (!["overview", "top", "follow"].includes(values.view) || !(width > 0 && height > 0)
+    || (values.quality !== undefined && !["low", "medium", "high"].includes(values.quality))) {
+    console.error("usage: screenshot <layout.json> [--out f.png] [--t s] [--view overview|top|follow] [--size WxH] [--url base] [--quality low|medium|high]");
     return 1;
   }
   // Layouts in ./layouts load by name; anything else is served by the vite plugin's /__layout route.
@@ -73,6 +76,7 @@ async function main(): Promise<number> {
     if (values.cam) q.set("cam", values.cam);
     if (values.object) q.set("object", values.object === "all" ? "*" : values.object);
     if (values.season) q.set("season", values.season);
+    if (values.quality) q.set("quality", values.quality);
     await page.goto(`${base.replace(/\/$/, "")}/?${q}`);
     await page.waitForFunction(() => window.__drReady === true, undefined, { timeout: READY_TIMEOUT, polling: 250 });
     const err = await page.evaluate(() => window.__drError);

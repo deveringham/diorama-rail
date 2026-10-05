@@ -9,6 +9,7 @@ import { groundZ, baseZ } from "../model/terrain";
 import { PLATFORM_OFFSET, PLATFORM_WIDTH, PLATFORM_TOP } from "../model/scenery";
 import { PALETTE } from "./palette";
 import { GeoBuilder, flatMaterial } from "./geo";
+import { keepPoints } from "./simplify";
 import { type Frame, frameAt, side } from "./trackMesh";
 import { roadFrame, pathFrame } from "./roadMesh";
 import { roadReach } from "../model/roads";
@@ -57,6 +58,13 @@ export function structureMeshes(world: World): THREE.Object3D[] {
   return [mesh];
 }
 
+/** Frames every STEP metres from s0 to s1, less those a straight stretch between its neighbours can stand in for. */
+function simplified(frame: (s: number) => Frame, s0: number, s1: number): Frame[] {
+  const n = Math.max(1, Math.round((s1 - s0) / STEP));
+  const fine = Array.from({ length: n + 1 }, (_, i) => frame(s0 + ((s1 - s0) * i) / n));
+  return keepPoints(fine.map((f) => f.x), fine.map((f) => f.y), fine.map((f) => f.z)).map((i) => fine[i]);
+}
+
 /** Bridges over every bridge span and a portal wherever ground meets tunnel, facing out of the hill. */
 function spanStructures(world: World, g: GeoBuilder, spans: Span[], closed: boolean, frame: (s: number) => Frame, deck: Deck, clear: number): void {
   for (const sp of spans) if (sp.kind === "bridge") bridge(world, g, frame, sp.s0, sp.s1, deck);
@@ -75,9 +83,8 @@ function spanStructures(world: World, g: GeoBuilder, spans: Span[], closed: bool
 
 function bridge(world: World, g: GeoBuilder, frame: (s: number) => Frame, s0: number, s1: number, deck: Deck): void {
   const { half, top: deckTop } = deck;
-  const n = Math.max(1, Math.round((s1 - s0) / STEP));
-  const fr: Frame[] = Array.from({ length: n + 1 }, (_, i) => frame(s0 + ((s1 - s0) * i) / n));
-  for (let i = 0; i < n; i++) {
+  const fr = simplified(frame, s0, s1);
+  for (let i = 0; i + 1 < fr.length; i++) {
     const [a, b] = [fr[i], fr[i + 1]];
     const top = (f: Frame, l: number) => side(f, l, deckTop);
     const bot = (f: Frame, l: number) => side(f, l, deckTop - DECK_THICK);
@@ -151,8 +158,8 @@ function portal(g: GeoBuilder, fr: Frame[], len: number, clear: number): void {
 }
 
 function station(world: World, g: GeoBuilder, st: World["stations"][number]): void {
-  const n = Math.max(2, Math.round((st.s1 - st.s0) / STEP));
-  const fr = Array.from({ length: n + 1 }, (_, i) => frameAt(world, st.track, st.s0 + ((st.s1 - st.s0) * i) / n));
+  const fr = simplified((s) => frameAt(world, st.track, s), st.s0, st.s1);
+  const n = fr.length - 1;
   if (st.kind === "freight") { dock(g, st, fr); return; }
   for (const sd of st.sides) {
     const inner = sd * (PLATFORM_OFFSET - PLATFORM_WIDTH / 2);

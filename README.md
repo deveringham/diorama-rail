@@ -23,7 +23,8 @@ from the command line, so an LLM (or you) can write and repair them in a loop.
 (works on a phone or tablet too). Pick a layout from the list in the top-left
 corner; drag to look around, scroll or pinch to zoom, and click or tap anyone or
 anything to see what they are doing. The buttons beside the list pause the
-trains, speed them up, ride along with one, and show the controls.
+trains, speed them up, ride along with one, change the graphics settings (for a
+smoother picture on a slow computer or phone), and show the controls.
 
 ## Quick start
 
@@ -41,13 +42,14 @@ URL parameters: `layout=<name>` (file in `layouts/`), `seed=N` (override the
 seed), `t=SECONDS` (pre-run the simulation), `view=overview|top|follow`, `shot=1`
 (screenshot mode), `cam=x,y,z,tx,ty,tz` (eye and target in model metres),
 `object=<id>[,<id>…]` or `object=*` (preview scenery objects alone, with
-`season=summer|autumn|winter`).
+`season=summer|autumn|winter`), `quality=low|medium|high` (graphics preset for
+this visit, see [Graphics settings](#graphics-settings)).
 
 ### Controls
 
 The buttons in the top-left corner switch layout, pause and resume, set the
 speed (1×, 2×, 4×), follow a train (again for the next, "Stop following" to look
-around freely) and show the HUD. The HUD in the bottom-left corner shows the
+around freely), open the graphics settings and show the HUD. The HUD in the bottom-left corner shows the
 layout, simulated time, fps, draw calls and triangles, and this list of controls
 with the current state of each (shown by default on a wide screen; on a phone,
 behind the `?` button). On a touch screen: one finger orbits, a pinch zooms, two
@@ -59,14 +61,45 @@ fingers pan, a tap inspects.
 | `Space` | pause / resume |
 | `1` `2` `3` | time scale 1×, 2×, 4× |
 | `F` | follow the next train; `Esc` stops following |
-| `S` | shadows on/off |
+| `S` | shadows off, or back on as they were (static or full) |
+| `G` | graphics settings |
 | `H` | hide / show the HUD (shown by default on a wide screen; hidden in screenshots) |
 | `R` | auto-rotate on/off |
 | click | inspect a person, building, car, bus, delivery van, train, bus stop or goods yard (names in the panel are links); `Esc` closes |
 
 In the browser console, `dr` holds the API plus `world`, `sim`, `scene`,
 `renderer`, `camera` and `inspector`, e.g. `dr.query(dr.world).describe()` or
-`dr.describePerson(dr.sim, 12)`.
+`dr.describePerson(dr.sim, 12)`; `dr.graphics()` and `dr.setGraphics("low")` (or
+`dr.setGraphics({ shadows: "static" })`) read and change the graphics settings.
+
+### Graphics settings
+
+The **Graphics** button (or `G`) opens a panel with a preset and six settings, the
+frame rate and triangle count beside them so the effect shows at once. The choice is
+remembered in the browser (`localStorage`); `?quality=low|medium|high` overrides it
+for one visit.
+
+| Setting | Choices | What it costs, what it saves |
+|---|---|---|
+| Resolution | 50%, 75%, 100% | pixels drawn, relative to the default (the screen's own, up to 1.5× on a high-density screen); the main saving on a weak graphics chip driving a big or sharp screen |
+| Smooth edges | off, on | multisampled antialiasing: on a weak chip it can cost as much as everything else together; switching starts a fresh WebGL context |
+| Shadows | off, static, full | *full*: everything casts a shadow, redrawn every frame; *static*: buildings, trees, bridges and structures only, redrawn each time the sun has moved ¾° (every 3 s in a 24-minute day; never when time stands still), so most frames draw no shadow pass at all |
+| Shadow detail | low, medium, high | shadow map 1024², 2048², 4096² |
+| Small things | near, mid, all | how far out things under 3 m (lamp posts, benches, bushes, sleepers, people and, by day, windows) are drawn: *mid* leaves out whatever would be under 1.5 px tall, *near* under 3 px; trees and buildings always show, and so do lit windows |
+| Frame rate | unlimited, 30 fps | a cap keeps a slow machine steady and cool rather than faster |
+
+| Preset | Resolution | Smooth edges | Shadows | Shadow detail | Small things |
+|---|---|---|---|---|---|
+| High | 100% | on | full | medium | all |
+| Medium | 100% | on | static | medium | mid |
+| Low | 75% | off | off | — | near |
+
+**Auto** (the default until a preset or setting is picked) starts at High, or at Low
+on a software renderer, and steps down a preset whenever the median frame rate
+stays below 40 fps for two 3-second spells in a row, with a note at the bottom of
+the screen; it never steps back up by itself. Screenshots draw at High unless
+`--quality` says otherwise. [docs/PERFORMANCE.md](docs/PERFORMANCE.md) has the
+measurements behind all this.
 
 ## Publishing the site
 
@@ -85,6 +118,8 @@ npm run simulate -- layouts/valley-loop.json --minutes 30   # per-service stops,
 npm run screenshot -- layouts/valley-loop.json --out shot.png --t 120 --view top --size 1600x1000
 npm run screenshot -- layouts/valley-loop.json --object windmill --out mill.png     # one object alone
 npm run screenshot -- layouts/valley-loop.json --object all --season winter         # every object
+npm run screenshot -- layouts/spreeviertel.json --quality low                       # a graphics preset (default high)
+npm run bench -- layouts/spreeviertel.json                  # ms per frame, draw calls, triangles at each preset
 npm run schema                                              # writes docs/schema.json
 npm test                                                    # vitest: geometry, validation, sim invariants
 npm run typecheck
@@ -117,7 +152,8 @@ layout.json ─► model/  parse (zod) → refs → track geometry (fillets, jun
                  │             errands, freight (orders, consignments, jobs), fixed 1/30 s step,
                  │             deadlock check; describe.ts for the inspect panel
                  └───► scene/  three.js meshes built once; trains (and their loads), vehicles, barriers,
-                               people, crates, smoke, light updated per frame
+                               people, crates, smoke, light updated per frame; small things culled
+                               by distance; graphics settings (quality.ts, qualityMenu.ts)
 cli/ check | simulate | schema | screenshot        api.ts: the stable public API (also window.dr)
 ```
 
@@ -419,8 +455,10 @@ needs and has on its way. `simulate` prints a freight line.
   `radius`).
 - The terrain mesh receives but does not cast shadows (it would double its
   175k-triangle cost); trees, buildings, structures and trains cast them.
-- The renderer's triangle count includes the shadow pass. Both examples render
-  in about 90–100 draw calls and ~420–460k triangles (shadow pass included). Each object
-  type in use costs 2–3 instanced draw calls (fixed colours, tinted parts,
-  glowing windows), however many times it is placed; vehicles likewise per type.
+- The renderer's triangle count includes the shadow pass. At High both examples
+  render in about 90–100 draw calls and 410–450k triangles (shadow pass included),
+  at Medium and Low about 50 and 300k; see [docs/PERFORMANCE.md](docs/PERFORMANCE.md). Each object
+  type in use costs 1–2 instanced draw calls (its body, with fixed and tinted
+  parts told apart by a per-vertex mask, and its glowing windows), however many
+  times it is placed; vehicles likewise per type.
 - Turnouts are drawn as overlapping track; no signals, sound or timetables.

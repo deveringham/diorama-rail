@@ -13,7 +13,8 @@
     "check": "tsx src/cli/check.ts",
     "simulate": "tsx src/cli/simulate.ts",
     "schema": "tsx src/cli/schema.ts",
-    "screenshot": "tsx src/cli/screenshot.ts"
+    "screenshot": "tsx src/cli/screenshot.ts",
+    "bench": "tsx src/cli/bench.ts"
   },
   "dependencies": {
     "three": "^0.186.1",

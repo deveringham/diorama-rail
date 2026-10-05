@@ -158,7 +158,7 @@ export class Inspector {
     scene.traverse((o) => { if (o instanceof THREE.InstancedMesh && o.userData.placements) targets.push(o); });
     for (const hit of this.ray.intersectObjects(targets, false)) {
       if (hit.instanceId === undefined) continue;
-      const placement = (hit.object.userData.placements as number[])[hit.instanceId];
+      const placement = (hit.object.userData.placements as ArrayLike<number>)[hit.instanceId];
       const b = this.buildingOf.get(placement);
       if (b !== undefined) return { kind: "building", id: b };
       if (hit.distance > 0) break;                        // something else (a tree) is in front
