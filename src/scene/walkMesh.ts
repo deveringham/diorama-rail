@@ -7,6 +7,8 @@ import * as THREE from "three";
 import type { World } from "../model/build";
 import type { Walkway } from "../model/walks";
 import { headingAt } from "../model/geometry";
+import { miter } from "../model/roads";
+import type { V2 } from "../util/vec";
 import { PALETTE } from "./palette";
 import { GeoBuilder, flatMaterial, type P3 } from "./geo";
 import { side } from "./trackMesh";
@@ -27,13 +29,19 @@ function strip(g: GeoBuilder, w: Walkway, lift: number, top: number, edge: numbe
   const half = w.width / 2;
   const left: P3[] = [];
   const right: P3[] = [];
+  // Each segment's left normal (a repeated point borrows its neighbour's), mitred where segments meet.
+  const seg: Array<V2 | null> = [];
+  for (let i = 0; i + 1 < n; i++) {
+    const [dx, dy] = [w.x[i + 1] - w.x[i], w.y[i + 1] - w.y[i]];
+    const len = Math.hypot(dx, dy);
+    seg.push(len > 1e-6 ? [-dy / len, dx / len] : null);
+  }
+  for (let i = 1; i < seg.length; i++) seg[i] ??= seg[i - 1];
+  for (let i = seg.length - 2; i >= 0; i--) seg[i] ??= seg[i + 1];
   for (let i = 0; i < n; i++) {
-    // Normal averaged over the neighbouring segments.
-    const a = Math.max(0, i - 1);
-    const b = Math.min(n - 1, i + 1);
-    const h = Math.atan2(w.y[b] - w.y[a], w.x[b] - w.x[a]);
-    const nx = -Math.sin(h);
-    const ny = Math.cos(h);
+    const a = seg[Math.max(0, i - 1)] ?? [0, 1];
+    const b = seg[Math.min(seg.length - 1, i)] ?? a;
+    const [nx, ny] = miter(a, b);
     const z = w.z[i] + lift;
     left.push([w.x[i] + nx * half, w.y[i] + ny * half, z]);
     right.push([w.x[i] - nx * half, w.y[i] - ny * half, z]);

@@ -10,10 +10,11 @@ export { LayoutSchema, type Layout, layoutJsonSchema } from "./model/schema";
 export { buildWorld, validate, type World } from "./model/build";
 export type { Issue, Report } from "./model/validate";
 export { Sim, simulate, type SimReport, type SimSnapshot, type SimEvent } from "./sim/sim";
-export { describePerson, describeBuilding, describeVehicle, describeTrain, doing, type Info } from "./sim/describe";
+export { describePerson, describeBuilding, describeVehicle, describeTrain, describeBusStop, describeYard, doing, type Info } from "./sim/describe";
 export { TRAIN_CATALOG } from "./model/catalog";
 export { OBJECT_LIBRARY } from "./model/objectLibrary";
 
+const f1 = (x: number) => (Math.round(x * 10) / 10).toString();
 const f0 = (x: number) => x.toFixed(0);
 
 export function query(world: World) {
@@ -159,6 +160,52 @@ export function query(world: World) {
         out.push(`  homes: ${homes.length} buildings for ${homes.reduce((a, b) => a + b.residents, 0)} people; ${town.people.length} live here, ${town.people.filter((p) => p.job).length} with jobs, ${town.people.filter((p) => p.car).length} with cars (${town.bays.length} parking bays)`);
         for (const st of town.stations) out.push(`  station ${st.station} entered ${st.entrances.map((e) => `${e.via === "path" ? "by path" : e.via === "building" ? "through its building" : "from the nearest walkway"} (${e.side > 0 ? "left" : "right"} platform)`).join(", ") || "nowhere: no walkway reaches it"}`);
         out.push(`  places to stroll to: ${town.spots.length}`);
+      }
+      const buses = world.buses;
+      if (buses.stops.length) {
+        out.push("Buses:");
+        const sideName = (id: number) => (id < 0 ? `${world.offLayout.places[-1 - id].id}(off)`
+          : `${buses.stops[buses.sides[id].stop].id}${buses.stops[buses.sides[id].stop].sides.length > 1 ? `(${buses.sides[id].side > 0 ? "L" : "R"})` : ""}`);
+        for (const st of buses.stops) {
+          const sides = st.sides.map((k) => `${buses.sides[k].side > 0 ? "left" : "right"}${town.stops[k]?.access ? "" : " UNREACHABLE"}`);
+          out.push(`  stop ${st.id} "${st.name}" on ${st.road} s=${f0(st.s)}, ${sides.join(" + ")} side${sides.length > 1 ? "s" : ""}`);
+        }
+        for (const l of buses.lines) {
+          out.push(`  line ${l.id} "${l.name}" ${l.mode}, ${l.count}× ${l.vehicle} (${l.color}): ${l.visits.map((v) => sideName(v.side)).join(" → ")} → back; round ${f0(l.distance)} m in about ${f0(l.cycle)} s, a bus every ${f0(l.cycle / l.count)} s`);
+        }
+      }
+      const off = world.offLayout;
+      if (off.exits.length) {
+        out.push("Off the board:");
+        for (const e of off.exits) out.push(`  exit: ${e.kind} ${e.line} leaves at its ${e.end ? "end" : "start"}, (${f0(e.at[0])}, ${f0(e.at[1])})`);
+        for (const p of off.places) {
+          const via = p.via.map((v) => `${off.exits[v.exit].kind} ${off.exits[v.exit].line} ${f0(v.distance)} m`).join(", ");
+          const services = L.services.filter((s) => s.stops.includes(p.id)).map((s) => s.id);
+          const lines = L.busLines.filter((l) => l.stops.includes(p.id)).map((l) => l.id);
+          out.push(`  place ${p.id} "${p.name}" via ${via || "nothing"}; ${p.jobs.length} jobs, visits ${p.visits}`
+            + (services.length ? `; trains ${services.join(", ")}` : "") + (lines.length ? `; buses ${lines.join(", ")}` : ""));
+        }
+      }
+      const freight = world.freight;
+      if (freight.sites.length || freight.yards.length) {
+        out.push("Freight:");
+        for (const y of freight.yards) {
+          const services = L.services.filter((s) => s.stops.includes(y.id)).map((s) => s.id);
+          out.push(`  yard ${y.id} "${y.name}" on ${y.track} s=${f0(y.at - y.length / 2)}–${f0(y.at + y.length / 2)} (${y.side > 0 ? "left" : "right"} side); lorries stop ${y.dock ? `on ${y.dock.road} s=${f0(y.dock.s)}` : "NOWHERE (no road along the dock)"}; freight trains ${services.join(", ") || "none"}`);
+        }
+        for (const g of freight.goods) {
+          const who = (key: "supplies" | "demands") => freight.sites.filter((s) => s[key].some((r) => r.goods === g));
+          const list = (sites: typeof freight.sites, key: "supplies" | "demands") => {
+            const total = sites.reduce((a, s) => a + s[key].find((r) => r.goods === g)!.rate, 0);
+            const named = sites.filter((s) => s.kind !== "building" || world.town.buildings[s.ref].residents === 0)
+              .map((s) => `${s.name}${s.kind === "off" ? " (off)" : s.dock ? "" : " UNREACHABLE"}`);
+            const homes = sites.length - named.length;
+            return `${f1(total)}/h by ${[...named, ...(homes ? [`${homes} homes`] : [])].join(", ") || "nobody"}`;
+          };
+          out.push(`  ${g}: sent ${list(who("supplies"), "supplies")}; needed ${list(who("demands"), "demands")}`);
+        }
+        out.push(`  delivery vehicles: ${freight.fleet.map((f) => `${f.count}× ${f.name} (${f.object}, ${f.capacity} loads${f.goods ? `, ${f.goods.join("/")} only` : ""})`).join(", ") || "none"}`);
+        if (freight.services.length) out.push(`  freight trains: ${freight.services.join(", ")}`);
       }
       const counts = new Map<string, number>();
       for (const p of world.scenery) counts.set(p.object, (counts.get(p.object) ?? 0) + 1);

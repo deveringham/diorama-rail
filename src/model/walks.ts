@@ -12,13 +12,14 @@ import type { Layout, PathSpec } from "./schema";
 import { waypoint } from "./schema";
 import type { TrackGeom, Junction } from "./trackGraph";
 import { type Path, makePath, filletPolyline, pointAt, headingAt, sampleS } from "./geometry";
-import { type Profile, type Span, type Pin, buildProfile, classify, profileZ, structureAt } from "./heights";
+import { type Profile, type Span, type Pin, buildProfile, classify, profileZ, structureAt, tunnelMouths, MOUTH } from "./heights";
 import { type Terrain, baseZ } from "./terrain";
 import {
   type RoadNet, type RoadGeom, type LevelCrossing, polyline, intersections, crossAngle, endAt, sidewalkWidth, roadReach, junctionStop,
-  kerbOffset, SHALLOWEST_CROSSING,
+  kerbOffset, legCorner, sortedLegs, SHALLOWEST_CROSSING,
 } from "./roads";
 import { type Issue, error, warning } from "./validate";
+import { offEdge } from "./exits";
 import { SpatialHash } from "../util/spatial";
 import { type V2, mod } from "../util/vec";
 
@@ -36,9 +37,8 @@ const CROSSING_GROUP_GAP = 6;        // m: foot crossings closer than this along
 const MIN_CROSSING_ANGLE = 30;
 const TURNOUT_CLEAR = 35;
 const CROSS_BACK = 6;                // m behind the cars' junction stop line where people cross a side road
-const CORNER_ROUND = 1.5;            // m added to a corner's cut so the sidewalk curves round it
+const CORNER_RUN = 1.5;              // m of each leg's sidewalk past its corner that the corner piece takes
 const CUT_MAX = 16;                  // m
-const STRAIGHT = (160 * Math.PI) / 180;   // corners wider than this need no cut
 const ZEBRA_WIDTH = 3;               // m along the road
 const CROSSING_WIDTH = 2.5;          // m along the road, unmarked crossings at junctions
 const ZEBRA_JUNCTION_CLEAR = 5;      // m a zebra keeps beyond a junction's sidewalk corners
@@ -52,7 +52,6 @@ const BOUNDS_MARGIN = 3;
 const END_SNAP = 2;                  // m: a path crossing another this close to its end meets it at a T
 const JOIN_REACH = 1.5;              // m beyond a road's sidewalks within which a path end joins it
 const SHARED_NODE = 10;              // m round a shared node where walkways may overlap
-const PORTAL_EDGE = 30;              // m: walkway ends this close to the board edge lead off it
 const SMALL = 1.2;                   // m: objects at most this wide may stand on a walkway (lamps, bollards)
 
 export type PathGeom = { id: string; index: number; spec: PathSpec; path: Path; waypointS: number[] };
@@ -71,10 +70,14 @@ export type Walkway = {
   // nearly touch are one: `gate` is the first crossing's, `also` the others'.
   gates: Array<{ gate: number; also: number[]; at: number; zone: number }>;
 };
-export type WalkNode = { id: number; at: V2; z: number; ways: Array<{ way: number; end: 0 | 1 }>; portal: boolean };
+export type WalkNode = {
+  id: number; at: V2; z: number; ways: Array<{ way: number; end: 0 | 1 }>;
+  exit: number;                      // the exit (world.offLayout.exits) a path or sidewalk leaves the board by here, else -1
+};
 /** Where people cross a road: cars on its lanes stop for them (zebra) or they wait for a gap (crossing). */
 export type RoadCrossing = { id: number; kind: "zebra" | "crossing"; road: string; roadS: number; half: number; way: number; at: V2 };
-export type WalkPoint = { x: number; y: number; z: number; width: number; kind: WalkKind; owner: string; ground: boolean };
+/** `ground`: the ground is shaped to it (a path on plain ground or just inside a tunnel mouth). */
+export type WalkPoint = { x: number; y: number; z: number; width: number; kind: WalkKind; owner: string; ground: boolean; mouth: boolean };
 export type WalkNet = {
   paths: Map<string, PathGeom>;
   stationNodes: Array<{ station: string; node: number }>;   // path ends on station platforms
@@ -594,29 +597,33 @@ export function buildWalks(ctx: Ctx): { net: WalkNet | null; issues: Issue[] } {
     }
   }
 
-  // 5f. Nodes at dead ends near the board edge lead off the board.
-  const [W, H] = layout.terrain.size;
-  for (const n of g.nodes) {
-    n.portal = n.ways.length === 1 && Math.min(n.at[0], n.at[1], W - n.at[0], H - n.at[1]) < PORTAL_EDGE;
-  }
-
   // 6. Dense points for shaping, conflicts, bounds and scenery checks.
   const points: WalkPoint[] = [];
+  // Each path's tunnel mouths: where they are and which way leads in.
+  const mouths = new Map([...paths.values()].map((p) => [p.id, tunnelMouths(spans.get(p.id)!, p.path.closed).map((m) => {
+    const h = headingAt(p.path, m.s) + (m.into > 0 ? 0 : Math.PI);
+    return { at: pointAt(p.path, m.s), dir: [Math.cos(h), Math.sin(h)] as V2 };
+  })]));
   for (const w of g.ways) {
     if (w.kind === "zebra" || w.kind === "crossing") continue;
     for (let d = 0; d <= w.length; d += POINT_STEP) {
       const [x, y, z] = wayPoint(w, d);
-      // Paths shape the ground unless on a bridge, a pier or in a tunnel; sidewalks sit on the road's bed.
+      // Paths shape the ground unless on a bridge, a pier or in a tunnel (bar its mouths); sidewalks sit on the road's bed.
       const gap = z - base(x, y);
-      const ground = w.kind === "path" && gap < 5 && gap > -7 && (sea === null || base(x, y) >= sea);
-      points.push({ x, y, z, width: w.width, kind: w.kind, owner: w.owner, ground });
+      const mouth = w.kind === "path" && (mouths.get(w.owner) ?? []).some((m) => {
+        const fwd = (x - m.at[0]) * m.dir[0] + (y - m.at[1]) * m.dir[1];
+        const lat = -(x - m.at[0]) * m.dir[1] + (y - m.at[1]) * m.dir[0];
+        return fwd >= 0 && fwd <= MOUTH && Math.abs(lat) < w.width / 2 + 1;
+      });
+      const ground = w.kind === "path" && (mouth || (gap < 5 && gap > -7 && (sea === null || base(x, y) >= sea)));
+      points.push({ x, y, z, width: w.width, kind: w.kind, owner: w.owner, ground, mouth });
     }
   }
   const hash = new SpatialHash<WalkPoint>(10);
   for (const p of points) hash.insert(p.x, p.y, p);
 
   const net: WalkNet = {
-    paths, stationNodes, order, profiles, spans, ways: g.ways, nodes: g.nodes.map((n) => ({ id: n.id, at: n.at, z: n.at3[2], ways: n.ways, portal: n.portal })),
+    paths, stationNodes, order, profiles, spans, ways: g.ways, nodes: g.nodes.map((n) => ({ id: n.id, at: n.at, z: n.at3[2], ways: n.ways, exit: -1 })),
     crossings, footCrossings, points, hash,
   };
   issues.push(...checkWalks(ctx, net, zebras, cuts, joins));
@@ -708,7 +715,7 @@ function buildPathGeom(
 // ---------------------------------------------------------------------------
 // Graph building
 
-type BNode = { id: number; at: V2; at3: P3; ways: Array<{ way: number; end: 0 | 1 }>; portal: boolean };
+type BNode = { id: number; at: V2; at3: P3; ways: Array<{ way: number; end: 0 | 1 }> };
 
 class GraphBuilder {
   nodes: BNode[] = [];
@@ -717,7 +724,7 @@ class GraphBuilder {
   constructor(private roads: RoadNet) {}
 
   node(at: P3): number {
-    this.nodes.push({ id: this.nodes.length, at: [at[0], at[1]], at3: at, ways: [], portal: false });
+    this.nodes.push({ id: this.nodes.length, at: [at[0], at[1]], at3: at, ways: [] });
     return this.nodes.length - 1;
   }
 
@@ -751,7 +758,8 @@ class GraphBuilder {
 
 /**
  * Sidewalks at road nodes. Each leg's sidewalks end where the corner to the next
- * leg begins; corners join one leg's sidewalk to its neighbour's; at junctions,
+ * leg begins; corners join one leg's sidewalk to its neighbour's, straight along the
+ * kerbs to a square turn (inside the corner or round its outside); at junctions,
  * people cross each leg a car's length behind where cars wait. Returns where every
  * sidewalk piece runs.
  */
@@ -776,43 +784,31 @@ function roadJunctions(g: GraphBuilder, roads: RoadNet) {
   };
 
   for (const n of roads.nodes) {
-    const legs = n.legs.map((l, i) => {
-      const r = roads.roads.get(l.road)!;
-      const theta = headingAt(r.path, l.s) + (l.dir < 0 ? Math.PI : 0);
-      return { l, i, r, theta, u: [Math.cos(theta), Math.sin(theta)] as V2, nrm: [-Math.sin(theta), Math.cos(theta)] as V2 };
-    }).sort((a, b) => mod(a.theta, 2 * Math.PI) - mod(b.theta, 2 * Math.PI));
+    const legs = sortedLegs(roads, n);
     const m = legs.length;
     const sw = (k: number, legSide: 1 | -1) => sidewalkWidth(legs[k].r.spec, (legSide * legs[k].l.dir) as 1 | -1);
     const offset = (k: number, legSide: 1 | -1) =>
       kerbOffset(legs[k].r.spec, (legSide * legs[k].l.dir) as 1 | -1) + (sw(k, legSide) > 0 ? sw(k, legSide) / 2 : 1);
-    // Corner between leg k (its left) and the next leg counter-clockwise (its right).
+    // Corner between leg k (its left) and the next leg counter-clockwise (its right): where
+    // their sidewalks' centre lines meet, in front of the node or (round the outside of a bend) behind it.
     const tLeft = new Array<number>(m).fill(0);
     const tRight = new Array<number>(m).fill(0);
-    const corner: Array<V2 | null> = new Array(m).fill(null);
+    const corner: Array<{ at: V2; t: number; t2: number } | null> = new Array(m).fill(null);
     if (m >= 2) {
       for (let k = 0; k < m; k++) {
         const j = (k + 1) % m;
-        const phi = mod(legs[j].theta - legs[k].theta, 2 * Math.PI);
-        if (phi >= STRAIGHT || (m === 2 && phi < 1e-3)) continue;
-        // Solve u_k·t − u_j·t' = −n_j·o_j − n_k·o_k for the meeting point of the two sidewalk lines.
-        const ok = offset(k, 1);
-        const oj = offset(j, -1);
-        const [a, b] = [legs[k].u, legs[j].u];
-        const rhs: V2 = [-legs[j].nrm[0] * oj - legs[k].nrm[0] * ok, -legs[j].nrm[1] * oj - legs[k].nrm[1] * ok];
-        const det = a[0] * -b[1] - -b[0] * a[1];
-        if (Math.abs(det) < 1e-9) continue;
-        const t = (rhs[0] * -b[1] - -b[0] * rhs[1]) / det;
-        const t2 = (a[0] * rhs[1] - rhs[0] * a[1]) / det;
-        tLeft[k] = Math.min(Math.max(t, 0), CUT_MAX);
-        tRight[j] = Math.min(Math.max(t2, 0), CUT_MAX);
-        corner[k] = [n.at[0] + a[0] * t + legs[k].nrm[0] * ok, n.at[1] + a[1] * t + legs[k].nrm[1] * ok];
+        const hit = legCorner(n.at, legs[k], offset(k, 1), legs[j], offset(j, -1));
+        if (!hit) continue;
+        tLeft[k] = Math.min(Math.max(hit.t, 0), CUT_MAX);
+        tRight[j] = Math.min(Math.max(hit.t2, 0), CUT_MAX);
+        corner[k] = hit;
       }
     }
     // Each leg's cut: both its sidewalks end at the same distance, a car's length behind the stop line at junctions.
     const cut = legs.map((L, k) => {
       if (m === 1) return 0;
       const c = Math.max(tLeft[k], tRight[k]);
-      let v = c > 0 ? c + CORNER_ROUND : 0;
+      let v = c > 0 ? c + CORNER_RUN : 0;
       if (m >= 3 && sw(k, 1) > 0 && sw(k, -1) > 0) v = Math.max(v, junctionStop(roads, n, L.i) + CROSS_BACK);
       return Math.min(v, Math.max(0, nextNodeDist(L.l.road, L.l.s, L.l.dir) / 2 - 1));
     });
@@ -842,13 +838,24 @@ function roadJunctions(g: GraphBuilder, roads: RoadNet) {
       if (!e1 || !e2) continue;
       const p1 = g.nodes[e1.node].at3;
       const p2 = g.nodes[e2.node].at3;
-      const c = corner[k] ?? [(p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2];
-      const line: P3[] = [];
-      const N = Math.max(2, Math.ceil(dist2(p1, p2) / SAMPLE));
-      for (let i = 0; i <= N; i++) {
-        const t = i / N;
-        const [qa, qb, qc] = [(1 - t) * (1 - t), 2 * t * (1 - t), t * t];
-        line.push([qa * p1[0] + qb * c[0] + qc * p2[0], qa * p1[1] + qb * c[1] + qc * p2[1], p1[2] + (p2[2] - p1[2]) * t]);
+      // Straight along leg k's kerb to the corner, then straight out along leg j's; or straight
+      // across where the legs run on in line (or the corner lies past a sidewalk's end).
+      const hit = corner[k];
+      const turn = hit && hit.t <= cut[k] + 1e-6 && hit.t2 <= cut[j] + 1e-6 ? [hit.at] : [];
+      const plan: V2[] = [[p1[0], p1[1]], ...turn, [p2[0], p2[1]]];
+      const total = plan.slice(1).reduce((a, q, i) => a + dist2(plan[i], q), 0);
+      const line: P3[] = [p1];
+      let run = 0;
+      for (let i = 0; i + 1 < plan.length; i++) {
+        const [a, b] = [plan[i], plan[i + 1]];
+        const len = dist2(a, b);
+        const N = Math.ceil(len / SAMPLE);
+        for (let q = 1; q <= N; q++) {
+          const f = q / N;
+          const z = p1[2] + (p2[2] - p1[2]) * (total > 0 ? (run + len * f) / total : 1);
+          line.push([a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, z]);
+        }
+        run += len;
       }
       g.way("corner", `${legs[k].l.road}/${legs[j].l.road}`, line, e1.node, e2.node, Math.min(sw(k, 1), sw(j, -1)), "paved");
     }
@@ -937,8 +944,8 @@ function checkWalks(
   for (const p of net.paths.values()) {
     for (const s of sampleS(p.path, POINT_STEP)) {
       const [x, y] = pointAt(p.path, s);
-      if (x < BOUNDS_MARGIN || y < BOUNDS_MARGIN || x > W - BOUNDS_MARGIN || y > H - BOUNDS_MARGIN) {
-        issues.push(error("OUT_OF_BOUNDS", `path '${p.id}' leaves the terrain around (${x.toFixed(0)}, ${y.toFixed(0)}); keep paths ${BOUNDS_MARGIN} m inside`, `paths[${p.index}].points`, [x, y]));
+      if ((x < BOUNDS_MARGIN || y < BOUNDS_MARGIN || x > W - BOUNDS_MARGIN || y > H - BOUNDS_MARGIN) && !offEdge(ctx.layout.terrain.size, p, s, BOUNDS_MARGIN)) {
+        issues.push(error("OUT_OF_BOUNDS", `path '${p.id}' leaves the terrain around (${x.toFixed(0)}, ${y.toFixed(0)}); keep paths ${BOUNDS_MARGIN} m inside, or end the path on the edge to let it leave the board`, `paths[${p.index}].points`, [x, y]));
         break;
       }
     }

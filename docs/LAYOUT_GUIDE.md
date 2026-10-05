@@ -52,7 +52,9 @@ The full machine-readable schema is in [`schema.json`](schema.json)
   heights are hard constraints.
 - Where the track is more than 5 m above the original ground it becomes a
   **bridge**; more than 7 m below, a **tunnel**. Elsewhere the ground is shaped
-  into embankments and cuttings (about 1:1.5).
+  into embankments and cuttings (about 1:1.5). The cutting runs 8 m on into each
+  tunnel, where a stone portal and a short box section meet the hill, so the
+  mouth stays open; trees grow on the hill above the tunnel.
 
 ### Terrain
 - `features`: smooth bumps (`height > 0`) or basins (`height < 0`); about 5% of
@@ -69,26 +71,34 @@ version: 1, name, seed (int, default 1)
 terrain: { size [w,h], cell 4, baseHeight 0, seaLevel null, features [{at,radius,height}], noise {amplitude 2, scale 120} }
 tracks[]: { id /^[a-z][a-z0-9-]*$/, kind "loop"|"line", points [[x,y] | {at,z?,radius?}], minRadius 40, maxGrade 0.035,
             from? {track, at, heading "forward"|"backward"}, to? {…} }      loop ≥ 3 points; line ≥ 2 (≥ 1 with from/to)
-stations[]: { id, name, track, at (s of platform centre), length 120, side "left"|"right"|"both" (relative to +s),
-              building "station-building" (object id, or null for none) }
-services[]: { id, train "regional-3"|"express-6"|"freight-10"|"tram-2", color? "#rrggbb", route [track ids],
-              mode "loop"|"shuttle", stops [station ids], dwell 25, count 1 }
-roads[]: { id, kind "line"|"loop", points [[x,y] | {at,z?,radius?}], width 6, minRadius 10, maxGrade 0.08, speed 13,
+stations[]: { id, name, kind "passenger"|"freight", track, at (s of platform centre), length 120,
+              side "left"|"right"|"both" (relative to +s; a freight yard one side), road? (freight: the road along the dock),
+              building "station-building" / freight "goods-shed" (object id, or null for none) }   (freight §8)
+services[]: { id, train "regional-3"|"express-6"|"freight-4"|"freight-10"|"tram-2", color? "#rrggbb", route [track ids],
+              mode "loop"|"shuttle", stops [station or off-layout ids], dwell 25, count 1 }
+roads[]: { id, kind "line"|"loop", points [[x,y] | {at,z?,radius?}], lanes 1, width 6·lanes, minRadius 10, maxGrade 0.08, speed 13,
            sidewalks "none"|"both"|"left"|"right", sidewalkWidth 2, parking "none"|"both"|"left"|"right",
            parkingStyle "parallel"|"perpendicular", name?, from? {road, at (s) | "start" | "end"}, to? {…} }   (§3, §4)
 paths[]: { id, kind "line"|"loop", points [[x,y] | {at,z?,radius?}], width 2, surface "gravel"|"paved", minRadius 3,
            maxGrade 0.12, name?, from? {path | road, at (s) | "start" | "end"} | {station}, to? {…} }   (§4)
+trafficLights[]: { at [x,y] (a junction of 3+ roads within 15 m), green 20 }                    traffic lights (§3)
 parking[]: { id, at [x,y], spaces 20, rotation?, road?, name? }                                  car parks (§3)
+busStops[]: { id, name?, road, at (s of the sign), side "both"|"left"|"right", shelter true }      bus stops (§6)
+busLines[]: { id, name?, stops [bus stop or off-layout ids], mode "shuttle"|"loop", count 1, dwell 12, capacity 40, vehicle "bus", color? }
+offLayout[]: { id, name?, via [{ track | road | path, end? "start"|"end", distance 2000 }], jobs 0, titles ["Employee"], visits 1,
+               supplies {}, demands {} }   (§7, §8)
+freight: { vehicles? [{ name?, object "van", count 2, capacity 6, goods? [ids], color? }] }      delivery fleet (§8)
 people: { count? (default: as many as the homes hold, ≤ 600), cars 0.45, vehicles ["car","car","car","van"] }   (§5)
-traffic: { cars? (through traffic; default ≈ 1 per 200 m of road, ≤ 30), vehicles ["car","van","bus","truck"] }
-objects: { <id>: { description?, building?, parts [part…], tint "walls", smoke 0, maxSlope 30 } }   custom objects (§7)
+traffic: { cars? (through traffic; default ≈ 1 per 200 m of road, ≤ 30), vehicles ["car","car","van","truck"] }
+objects: { <id>: { description?, building?, parts [part…], tint "walls", smoke 0, maxSlope 30 } }   custom objects (§10)
 scenery[]: { object, at [x,y], rotation 0 | face "track"|"road"|[x,y], scale 1, z?, color?, smoke?, name?, building? }
          | { scatter [ids], spacing, at? [x,y], radius?, scale [0.8, 1.2] }                     many, randomly
-building: { functions ["accommodation"|"workplace"|"landmark"], residents 3, jobs 3, titles ["Employee"], kind?, door? [x,y] }
+building: { functions ["accommodation"|"workplace"|"landmark"], residents 3, jobs 3, titles ["Employee"], kind?, door? [x,y],
+            supplies? { goods: loads/h }, demands? { goods: loads/h } }
 style: { season "summer"|"autumn"|"winter", timeOfDay 15, dayLengthSeconds null }
 ```
 
-Train lengths: `regional-3` 66 m, `express-6` 145 m, `freight-10` 158 m, `tram-2` 28 m.
+Train lengths: `regional-3` 66 m, `express-6` 145 m, `freight-4` 74 m, `freight-10` 158 m, `tram-2` 28 m.
 
 ### Services and routes
 - `route` lists tracks in travel order; consecutive tracks must share a junction,
@@ -113,7 +123,8 @@ Train lengths: `regional-3` 66 m, `express-6` 145 m, `freight-10` 158 m, `tram-2
 
 Roads are a second network built the way track is — waypoints with filleted
 corners, heights held to a grade, bridges, tunnels and terrain shaping — and cars,
-vans, buses and lorries drive on them. Where a road meets a track at the same
+vans and lorries drive on them, and buses on their lines (§6). A road has one lane
+each way or more, and junctions may have traffic lights. Where a road meets a track at the same
 height there is a **level crossing**, with flashing lights and barriers that come
 down for every train.
 
@@ -133,15 +144,27 @@ down for every train.
 
 - **Geometry** works as for tracks: `points` are waypoints whose corners become
   arcs of `minRadius` (default 10 m) or a waypoint's `radius`; `kind` is `"line"`
-  or `"loop"`. `width` (default 6 m) is the carriageway, two lanes, driving on the
-  right. `speed` is the limit in m/s (default 13 ≈ 50 km/h); cars also slow for
-  curves and turns.
+  or `"loop"`. Traffic drives on the right. `lanes` (1–3, default 1) is the number
+  of lanes **each way**, and `width` the carriageway: by default 6 m for each lane
+  each way (6, 12 or 18 m). Lanes of a road with several each way should be at least
+  2.75 m wide (`ROAD_LANES`). `speed` is the limit in m/s (default 13 ≈ 50 km/h);
+  cars also slow for curves and turns.
+- **Several lanes each way:** a road gets a double centre line and dashed lines
+  between its lanes. Cars turn right from the lane by the kerb, left (or round)
+  from the one by the centre line, and go straight on from any (where nothing goes
+  straight on, the lanes are shared between the turns); turning, they go into the
+  nearest lane of the road they turn into, straight on into the same lane. Between
+  junctions they move across into the lane their next turn needs when there is a
+  gap (the car behind lets in one that waits), and buses, delivery vehicles and cars
+  going into a bay move into the lane by the kerb first; the others pass them. A road
+  of two lanes may run on as one of one lane: the lanes merge at the node.
 - **Junctions:** `from` / `to: { road, at }` starts or ends a road on another
   road: at `s = at` along it (a T-junction) or at its `"start"` / `"end"` (a
   corner). There is no `heading`: the road leaves straight toward its first
   waypoint. Roads that cross at about the same height (within 3 m) form a
   **crossroads** by themselves. Keep road junctions at least 25 m apart along a
-  road, so a car can wait between them.
+  road, so a car can wait between them. Each junction (and corner) is paved as
+  one piece out to where the roads' kerbs meet, with square corners.
 - **Heights:** a road follows the ground smoothed over 40 m, held to `maxGrade`
   (default 8%). A waypoint `z` pins the height at that point only (for example a
   dip to pass under a railway bridge). A road takes the height of the road it
@@ -159,8 +182,9 @@ down for every train.
   them work as one for the cars, which wait before the first while either is shut.
   Elsewhere keep roads half their width + 2.5 m from track centres.
 - **Dead ends:** a road end that joins nothing is a dead end where cars turn
-  round — unless it is within 30 m of the board edge: there cars drive off the
-  board and come back a few seconds later, as if the road went on.
+  round — unless it lies on the board's edge: then the road leads off the board
+  (§7), and through traffic drives off and comes back a few seconds later, as if
+  the road went on.
 - **Street parking:** `parking` (`left`, `right` or `both`, of increasing s) adds
   a strip of bays between the carriageway and the sidewalk: 2.4 m of parallel
   bays 6 m long (`parkingStyle: "parallel"`, the default) or 5.2 m of nose-in
@@ -172,7 +196,9 @@ down for every train.
   nose-in bays (`spaces`, default 20) either side of an aisle, 16.4 m wide and
   2 + 1.3·spaces + 8 m long. Its entrance faces the road it joins (the nearest, or
   `road`; or set `rotation`, the direction the entrance faces) by a driveway of
-  1–60 m; the aisle is a dead-end road of its own, so cars reach the bays under
+  1–60 m. If the road is off to one side, the driveway turns into the aisle just
+  outside the entrance (about 7 m out for a right angle), so the aisle runs
+  straight through the lot. The aisle is a dead-end road of its own, so cars reach the bays under
   the usual rules. The paved area must keep clear of roads, tracks and placed
   objects (`PARKING_POSITION`, `SCENERY_ON_ROAD`). `name` is how people speak of
   it (default from its id).
@@ -180,11 +206,25 @@ down for every train.
   is a gap, along the quickest lanes, into a free bay near where they are going.
   On top of that, `traffic.cars` vehicles of **through traffic** (default about
   one per 200 m of road, at most 30) are picked from `traffic.vehicles` — object
-  ids, so the built-in `car`, `van`, `bus` and `truck` or your own (front toward
+  ids, so the built-in `car`, `van` and `truck` or your own (front toward
   +x, origin at the centre, like any object; parts coloured `lamp` are
   headlights) — and drive about at random (straight on is twice as likely). All
-  keep their distance, take a junction only when it is free and there is room
-  beyond it, and never stop on a level crossing.
+  keep their distance and never stop on a level crossing. At a junction a car goes
+  when there is room beyond it and nobody is driving a way across the junction that
+  crosses or touches its own (judged by the sweep of a bus's body), first come first
+  served: so cars side by side, or coming straight toward each other, go together.
+  Where a turn's sweep would touch a car waiting at another road's line, cars there
+  wait a little further back.
+- **Traffic lights:** `trafficLights` puts lights at the junction of three or more
+  roads nearest each `at` (within 15 m; `SIGNAL_POSITION` otherwise, or for a
+  second set at one junction). Opposite roads share a green, any other road has one
+  of its own, each in turn: a green lasts at least 6 s and at most `green` (default
+  20 s), ending sooner when nobody more is coming and someone waits on red; then 3 s
+  of amber, and red all round until the junction is clear. With nobody waiting
+  elsewhere a green stays on. Cars go on green, and on amber only when too close to
+  stop. Each road gets a stop line and a pole on the drivers' right at it; a road of
+  several lanes also an arm with a second set of lamps over its lanes. People
+  crossing at the junction still wait for a gap in the traffic.
 - **Level crossings** start flashing when a train could arrive within about
   11 s (or is close enough to need to brake), lower their barriers once no car is
   on the crossing, and open when the train's tail has passed. A train only has to
@@ -217,7 +257,8 @@ People (§5) walk on **sidewalks** (raised pavements along roads) and
 
 - **Sidewalks:** a road's `sidewalks` adds raised (0.15 m) pavements of
   `sidewalkWidth` on its `left`, `right` (of increasing s) or `both` sides. They
-  follow the road, round the corners of its junctions, and at junctions of three
+  follow the kerb, turning square round the corners of its junctions (inside and
+  outside), and at junctions of three
   roads or more people cross each leg a car's length behind where the cars wait
   (unmarked: they wait for a gap in the traffic). A sidewalk is part of the road's
   footprint: houses go about 10 m from a 6 m road's centre, lamps about 4.5 m.
@@ -259,8 +300,8 @@ somewhere people live (`accommodation`), work (`workplace`) or go to visit
 homes — each has a name, a home, usually a job and perhaps a car — and run
 errands: go to work, go home, visit a shop or a friend, stroll along a footpath.
 For each they take the quickest way by their own lights: on foot, in their own
-car, by train, or a mix (driving to the station and taking the train is
-common). At the destination they go inside for a while, then think of the next
+car, by train, by bus (§6), or a mix (driving to the station and taking the
+train is common) — and some errands take them off the board (§7). At the destination they go inside for a while, then think of the next
 thing to do and come out again.
 
 ```jsonc
@@ -274,14 +315,14 @@ thing to do and come out again.
 "people": { "cars": 0.3 }
 ```
 
-- **Buildings:** built-in buildings come with their uses (table in §6): a house is
+- **Buildings:** built-in buildings come with their uses (table in §9): a house is
   a home for 3, a terrace for 7, flats for 20; the church, barn (a farm), station
   building, shop, office block and inn have jobs. A placement's `building`
   overrides any of `functions`, `residents`, `jobs`, `titles` (the first job gets
   the first title, the last title fills the rest), `kind` (what sort of place it
   is, shown with its name) and `door` ([x, y] in the object frame; default the
   middle of its front). A custom object becomes a building with a `building`
-  block in its definition (§7). Scattered objects are buildings too, if their
+  block in its definition (§10). Scattered objects are buildings too, if their
   object is.
 - **Names and addresses:** `name` names a placed building. Otherwise it gets an
   address on the nearest street within 60 m — numbered along the street, odd on
@@ -314,15 +355,228 @@ thing to do and come out again.
   `both` sides can be entered from either (by the station's underpass). A station
   that trains stop at but no walkway reaches gets `STATION_UNREACHABLE`. People
   wait on the platform and every train keeps a list of who is aboard.
-- **Click to inspect:** in the viewer, click a person, building, car or train to
-  see who they are and what they are doing: a person's home, job, car, current
-  errand and journey; who lives, works and is inside a building; whose car it is
-  and where it is going; a train's passengers and where each is going. Names in
-  the panel can be clicked in turn; Esc closes it. The same descriptions are in
-  `describePerson`, `describeBuilding`, `describeVehicle` and `describeTrain`
-  (`src/sim/describe.ts`).
+- **Click to inspect:** in the viewer, click a person, building, car, bus, train,
+  bus stop or goods yard to see who they are and what they are doing: a person's home, job,
+  car, current errand and journey; who lives, works and is inside a building;
+  whose car it is and where it is going; a bus's line, next stops and passengers;
+  a train's passengers and where each is going; the lines calling at a stop, when
+  the next bus is due and who is waiting. Names in the panel can be clicked in
+  turn; Esc closes it. The same descriptions are in `describePerson`,
+  `describeBuilding`, `describeVehicle`, `describeTrain`, `describeBusStop` and
+  `describeYard` (`src/sim/describe.ts`). For freight, see §8.
 
-## 6. Scenery: buildings, trees and other objects
+## 6. Buses
+
+Buses are trains for the roads: a **bus stop** stands beside a road, and a
+**bus line** calls at a list of stops in order, there and back (`shuttle`, the
+default) or round and round (`loop`). The buses drive in the traffic like any
+car, taking the quickest way along the roads from stop to stop, and stop in
+their lane at each stop (the traffic behind waits) while people get off and on.
+People plan bus legs like train legs: they walk to the stop, wait, board the
+first bus of a line that calls at their destination stop, and get off there.
+
+```jsonc
+"busStops": [
+  { "id": "westfeld", "road": "country-west", "at": 316, "side": "right" },
+  { "id": "market-square", "road": "market-street", "at": 70 },
+  { "id": "lindenau-station", "name": "Lindenau Station", "road": "station-street", "at": 100 }
+],
+"busLines": [
+  { "id": "line-2", "name": "2", "stops": ["westfeld", "market-square", "lindenau-station"], "count": 2 }
+]
+```
+
+- **Stops:** `at` is the s of the stop's sign along `road`; the bus stops with its
+  front door beside it (its front 2 m past the sign, its body behind). `side`
+  (left/right of increasing s, default `both`) says which sides have a stop.
+  Buses drive on the right and call at the stop on their right-hand side: the
+  right side serves buses going toward increasing s, the left side buses coming
+  back. People wait on the sidewalk by the sign (or just off the road where there
+  is none), so each side needs a sidewalk or path within 45 m that it can reach
+  without crossing the road — else `BUS_STOP_UNREACHABLE`. A stop has a yellow
+  box painted in the lane, a sign at the kerb and (`shelter`, default true) a
+  shelter behind the kerb, left out where a building or tree already stands.
+  Parked cars keep clear of the box. Ids share the one namespace with roads,
+  paths and stations, so name a stop `"market-square"` rather than after its
+  street; its `name` (default from the id) is what people and the panel see.
+- **Where stops may go:** a waiting bus must not block anything, so the bus's
+  whole length (11 m for the built-in `bus`) plus a margin must lie between a
+  road's junctions (3 m clear of a junction's area), 6 m clear of a level
+  crossing's zone, 3 m clear of a zebra or pedestrian crossing, short of a dead
+  end's turning space, out of tunnels, and clear of another stop on the same side.
+  `BUS_STOP_POSITION` says what is in the way and suggests an `at` that works.
+- **Lines:** list at least two stops. A `shuttle` runs to the last stop and back
+  the same way, calling at each stop in between again on the way back (on its
+  other side where it has both); a `loop` returns from the last stop to the
+  first. Between stops the buses take the quickest roads, turning round at dead
+  ends or off the board's edge (where a road leads off it) when they must, so
+  the order of the stops matters: list them in the order a bus passes them. A
+  stop with one side is called at once, by the buses passing it on that side. If
+  no road leads from one stop to the next (on a side buses can serve), the line
+  gets `BUS_ROUTE`. `describe()` lists each line's calls (with the side of a
+  two-sided stop) and how long a round takes.
+- **Buses:** `count` buses (default 1) spread evenly along the line, in its
+  `color` (default one per line) and drawn as `vehicle` (default `bus`). Each
+  waits `dwell` s (default 12) at every stop, longer while people get on and
+  off; a bus that has caught up with the one ahead waits a little longer, so
+  they stay apart. A bus takes `capacity` passengers (default 40); the rest
+  wait for the next. A line whose round holds fewer buses than `count` (about
+  one per 70 m) gets a `CAPACITY` warning.
+- **Off the board:** a line may call at an off-layout place reached by a road
+  that leaves the board (§7): its buses drive off the edge, call there out of
+  sight and come back on (by the same road, or another that leads there). A line
+  needs at least one stop on the board.
+- **Riding:** buses do best where walking is slow: between towns or out to
+  hamlets, along roads without sidewalks, to places by the road like a farm or a
+  beach path. People combine buses with walking, trains and their cars. Through
+  traffic (`traffic.vehicles`) no longer includes buses; list `"bus"` there only
+  for buses that never stop.
+
+## 7. Off the board
+
+The board is a piece of a bigger world. A track, road or footpath **line** whose
+first or last waypoint lies on the board's edge (x = 0 or the width, y = 0 or the
+height), and that does not join another line there, **leaves the board** at that
+end — an *exit*. `offLayout` names the places out there and how far beyond the
+edge each lies along each way:
+
+```jsonc
+"offLayout": [
+  { "id": "neustadt", "via": [{ "road": "country-east", "distance": 3000 }], "jobs": 40,
+    "titles": ["Office worker", "Shop assistant", "Nurse"], "visits": 2 },
+  { "id": "hochdorf", "via": [{ "track": "hill", "distance": 2200 }, { "road": "bergdorf-lane", "distance": 1800 }] },
+  { "id": "muehlbach", "name": "Mühlbach", "via": [{ "path": "field-path", "distance": 1200 }], "visits": 0.6 }
+]
+```
+
+- **Exits:** cross the edge squarely (at least 45°, else `EXIT_POSITION`). Near an
+  exit a line may run right up to the edge (the bounds checks let it); a line
+  that ends a few metres short of the edge is neither in bounds nor an exit
+  (`OUT_OF_BOUNDS`). No buffer stop is drawn where a track leaves the board.
+  `describe()` lists every exit.
+- **Places:** each `via` names a line that leaves the board (and with `end`,
+  which end, if both do — else `EXIT_REF`), and `distance` (m beyond the edge,
+  default 2000). Places have no model; they are destinations and stops. `jobs`
+  are posts for residents of the board (they commute; `titles` as for
+  buildings), and `visits` how often people go there on a visit (1 is about one
+  landmark on the board).
+- **Trains:** a service's `stops` may list off-layout places reached by a track
+  at an end of its route that leaves the board. A **shuttle** whose route ends on
+  a track that leaves the board runs off that end instead of turning at its last
+  platform: out of sight it runs out past its stops beyond the edge (nearest
+  first), turns at the farthest (400 m out if there are none), calls at them again
+  coming back, and comes back on where it left, the other way round. A **loop**
+  that cannot close on the board but whose first track comes in over the edge and
+  last leaves it runs **through**: off at the end, round to the start (calling at
+  its off-layout stops in the order they lie: those beyond the end first, nearest
+  first, then those beyond the start, farthest first; 1500 m off the board if none)
+  and back on at the start. Trains travel at 80% of their top speed out there,
+  hold no blocks while away, and come back on only when the first stretch is free
+  (at a speed they can stop from); level crossings near the edge close for a
+  train about to come back. Their cars vanish one by one at the edge and appear
+  the same way.
+- **Buses:** see §6; buses off the board are out of sight but keep their place
+  in the line, so the next one is still due on time.
+- **Cars:** residents drive off the board along roads that leave it (to an
+  off-layout place, where the car stays parked until they drive it back) and
+  through traffic drives off and back.
+- **People:** errands may lead to an off-layout place: work there (for those
+  with a job there), or a visit. People go by train, bus, car or on foot (along
+  a path, or a road's sidewalk, that leaves the board, walking the distance out
+  of sight) — whatever is quickest — stay there out of sight for the errand's
+  length, and come back later the same way or another (a car left out there is
+  fetched on a later trip there). The inspect panel says where they are ("at
+  work in Neustadt (off the board)", "waiting in Neustadt for a train to
+  Lindenau"), and `simulate` counts those off the board.
+
+## 8. Freight and deliveries
+
+Goods move about the board. Buildings and off-layout places **send out** goods
+(`supplies`) and **need** goods delivered (`demands`), each a map of goods ids to
+loads per hour. Delivery vans and lorries carry them by road; freight trains carry
+them between **goods yards** and off-layout places, where lorries take over.
+
+```jsonc
+"stations": [
+  { "id": "lindenau-goods", "name": "Lindenau Goods Yard", "kind": "freight", "track": "goods-line",
+    "at": 149, "length": 100, "side": "right", "road": "goods-road" }
+],
+"services": [
+  { "id": "goods", "train": "freight-4", "route": ["goods-line"], "mode": "shuttle", "stops": ["lindenau-goods", "kreisstadt"] }
+],
+"offLayout": [
+  { "id": "kreisstadt", "via": [{ "track": "goods-line", "distance": 3000 }], "visits": 0,
+    "supplies": { "goods": 20, "mail": 40 }, "demands": { "food": 6 } }
+],
+"scenery": [
+  { "object": "shop", "at": [751, 286], "rotation": 90, "name": "Lindenau Post Office",
+    "building": { "kind": "Post office", "supplies": { "mail": 12 }, "demands": { "goods": 1 } } }
+],
+"freight": { "vehicles": [
+  { "name": "Post van", "object": "van", "count": 2, "capacity": 8, "goods": ["mail"], "color": "#d9a43a" },
+  { "name": "Lorry", "object": "truck", "count": 2, "capacity": 16 }
+] }
+```
+
+- **Goods:** any id. Built in, with a name and a crate colour: `mail`, `food`,
+  `goods`, `drinks`, `materials`, `timber`, `coal`, `fuel`, `fish`. The built-in
+  buildings send and need some by default: a farm (`barn`) sends 10 food an hour;
+  a shop needs 3 food, 3 goods and 1 mail; an inn 2 food, 3 drinks and ½ mail; an
+  office block 3 mail and 1 goods; homes need mail (house 0.4, terrace 1, flats
+  2); the `post-office` sends 12 mail, the `warehouse` 10 goods, and the `factory`
+  8 goods (needing 3 materials and 2 coal). A placement's `building` overrides
+  `supplies` or `demands` (`{}` turns them off), as can a custom object's.
+- **Orders:** a source makes its goods into stock (at most two hours' worth). A
+  consumer's need grows at its rate, and it orders about half an hour's worth at a
+  time (at least one load). The order goes to a source with goods ready, picked by
+  how quickly the goods can come: straight by road, or by road to a yard, by
+  freight train, and by road from the yard (or straight from or to an off-layout
+  place a freight train calls at). Quicker ways are likelier; a train's time
+  counts for less, since it carries a lot at once. Each shipment travels as one or
+  more *consignments*, leg by leg.
+- **Goods yards:** a station with `"kind": "freight"`. It is a 7 m loading dock
+  beside the track on `side` `"left"` or `"right"`, with its `building` (default
+  `goods-shed`) standing on the dock. Lorries load and unload on the road along
+  the dock's back edge: `road`, or by default the nearest one within 30 m. Nobody
+  boards there. Crates on the dock show what is waiting, in the goods' colours.
+  A yard with no road along its dock gets `YARD_ROAD`.
+- **Freight trains:** services running a freight train (`freight-4` 74 m,
+  `freight-10` 158 m) stop at yards and off-layout places. At each stop they
+  unload what is for there and load what waits there for a stop ahead (8 loads a
+  wagon), waiting longer while the goods are moved; their wagons show their loads.
+  A shuttle on a line that leaves the board with one stop on it turns at that
+  stop. Give a yard a branch or siding of its own: a freight train standing at a
+  yard on a single-track main line blocks the trains that need it (harbour-town's
+  yard is on a siding).
+- **Delivery vehicles:** `freight.vehicles` wait off the board beyond a road that
+  leaves it (or, with none, drive about like through traffic) until they get a
+  job. After a job they drive about for a minute and a half in case another comes
+  up, then go back out to wait. The default fleet is a few vans (6 loads) and
+  lorries (16) when anything can move: at most one vehicle per 400 m of road. A job collects everything waiting at one place that fits
+  (for as many destinations as that takes), then drops it off in turn, nearest
+  first. At a building or yard a vehicle stops in the lane at the kerb nearest the
+  door or dock while traffic behind waits. That stopping place is the building's
+  *dock*: within 40 m of the door (30 m of a yard's dock), clear of junctions,
+  crossings, bus stops, bridges and tunnels. For an off-layout place reached by
+  road the vehicle drives off the board and back. `goods` limits a group to some
+  goods (post vans); `color` paints its vehicles.
+- **Warnings:** these come only once the layout itself says something about
+  freight (a yard, `freight`, or `supplies` / `demands` anywhere).
+  `FREIGHT_UNREACHABLE` is a building that sends goods, or needs them and is not
+  just a home, but has no dock. `FREIGHT_UNMATCHED` is goods sent out but needed
+  nowhere, or needed but sent from nowhere.
+- **Seeing it:** click a delivery van, a freight train, a yard's dock or a
+  building:
+  - a van's job and load;
+  - a train's goods and where each comes off;
+  - what waits on a dock and which lorries are coming;
+  - what a building sends out and needs, and what is on its way there.
+
+  `simulate` prints a freight line (orders, deliveries by road and by rail, time
+  from order to door), and `describe()` has a Freight section listing who sends
+  and needs what.
+
+## 9. Scenery: buildings, trees and other objects
 
 Everything beside the track — houses, churches, trees, lamps, boats — is an
 **object**: a small low-poly model described in JSON. Many are built in (below);
@@ -353,7 +607,8 @@ placed through `scenery`.
 - **Scatter:** `scatter` lists object ids picked at random (repeat an id to make
   it more common), `spacing` is the minimum distance between items, and `at` +
   `radius` limit it to a circle with a ragged edge. Scattered items skip water,
-  ground steeper than the object's `maxSlope`, the track corridor (6 m+), roads
+  ground steeper than the object's `maxSlope`, the track corridor (6 m+, but not
+  over a tunnel more than 9 m down), roads
   (3 m+ beyond the carriageway), paths and sidewalks (1.5 m+) and the footprints
   of placed objects (plus a 2 m garden). Use it for forests, orchards,
   hay bales, rocks.
@@ -363,7 +618,8 @@ placed through `scenery`.
   standing inside another placed object → `SCENERY_OVERLAP` (warning). Flat pieces under 0.5 m
   tall (`paving`) may overlap other objects.
 - Stations add their own `building` (beside the platform, facing it; its door is
-  at the back, toward the town) and benches (`bench`).
+  at the back, toward the town) and benches (`bench`); a freight yard's shed
+  stands on its dock.
 - **Buildings:** `name` and `building` (§5) apply to single objects.
 
 ### Built-in objects
@@ -374,19 +630,23 @@ placed through `scenery`.
 | `terrace` | row of three terraced houses; homes for 7 | 8.8 × 22.8 |
 | `flats` | four-storey block of flats; homes for 20 | 12.4 × 16.4 |
 | `church` | church with tower and spire, the tower end the front; landmark, vicar and verger | 25 × 10.8 |
-| `barn` | timber barn with big doors; a farm, farmer and farmhand | 11 × 16.8 |
+| `barn` | timber barn with big doors; a farm (sends food), farmer and farmhand | 11 × 16.8 |
 | `shop` | shop with a flat above, shop window and awning; landmark, shopkeeper and assistant | 9.6 × 10.6 |
 | `pub` | village inn, sign by the door; landmark, landlord, cook and bar staff | 11.5 × 12.8 |
 | `office` | three-storey office block; 16 jobs | 15.6 × 20.4 |
 | `station-building` | used for every station unless `building` says otherwise; door at the back, 3 jobs | 9.8 × 16.8 |
+| `goods-shed` | a freight yard's shed, standing on its dock, open doors toward the track; door at the back, 3 jobs | 5.8 × 18.6 |
+| `post-office` | post office with a sorting office behind and a post box; sends 12 mail an hour, 3 jobs | 16.2 × 12.8 |
+| `warehouse` | warehouse with three roller doors; sends 10 goods an hour, 4 jobs | 16.6 × 24.6 |
+| `factory` | brick factory, sawtooth roof, tall smoking chimney; sends goods, needs materials and coal, 14 jobs | 25.8 × 30.2 |
 | `bench` | platform bench | 0.6 × 1.8 |
 | `lamp-post` | street lamp, lit at night | 0.6 × 0.6 |
 | `fence` | 10 m of wooden fence along y | 0.2 × 10.2 |
 | `paving` | 10 × 10 m paved square | 10 × 10 |
 | `car` | small car (traffic, residents' cars) | 4.3 × 1.8 |
-| `van` | delivery van (traffic) | 5.1 × 2 |
-| `bus` | single-deck bus, windows lit at night (traffic) | 11.1 × 2.6 |
-| `truck` | box lorry (traffic) | 8 × 2.5 |
+| `van` | delivery van (traffic, deliveries) | 5.1 × 2 |
+| `bus` | single-deck bus, windows lit at night (bus lines) | 11.1 × 2.6 |
+| `truck` | box lorry (traffic, deliveries) | 8 × 2.5 |
 | `conifer` | spruce, ~10 m, snow on top in winter | 4.6 × 5.4 |
 | `deciduous` | broadleaf tree, ~8 m, autumn colours, bare in winter | 5.4 × 5.4 |
 | `poplar` | tall narrow poplar, ~16 m | 3.2 × 3.2 |
@@ -395,7 +655,7 @@ placed through `scenery`.
 
 See them all with `npm run screenshot -- layouts/valley-loop.json --object all --out objects.png`.
 
-## 7. Designing objects (`objects`)
+## 10. Designing objects (`objects`)
 
 An object is a list of **parts**, each a low-poly primitive in the object's own
 frame: **x = front, y = left, z = up**, metres, origin on the ground at the
@@ -468,7 +728,7 @@ lights the part warmly at night; `smoke: true` marks a chimney, and the object's
 - Budget: a house is ~60 triangles; keep objects under ~500. Every object type
   in use costs 2–3 draw calls, however many times it is placed.
 
-## 8. Rules of thumb (avoid most errors)
+## 11. Rules of thumb (avoid most errors)
 
 1. Keep waypoints at least `2·minRadius` apart where the track turns.
 2. Put junctions on straights (`at` well away from curves); turnouts on curves
@@ -476,7 +736,8 @@ lights the part warmly at night; `smoke: true` marks a chimney, and the object's
 3. Keep parallel tracks at least 5 m apart (centre to centre).
 4. Give each station straight, level track at least as long as its trains.
 5. A 30 m climb needs about 860 m of track at 3.5%.
-6. Keep all track at least 20 m inside the terrain edge.
+6. Keep all track at least 20 m inside the terrain edge — except where it leaves
+   the board: then end it on the edge, crossing it squarely.
 7. Branch first waypoints need room to curve: well outside a circle of radius
    `minRadius` touching the parent at the junction.
 8. Avoid gentle bumps that leave the track 5–7 m above or below the ground over
@@ -495,16 +756,25 @@ lights the part warmly at night; `smoke: true` marks a chimney, and the object's
     Town section for anything unreachable.
 15. Give the streets where people live parking (`parking`, with houses set back
     a further 2.4 m), and a car park by each station for park and ride.
+16. Put bus stops in the middle of a stretch between junctions, list a line's
+    stops in the order a bus passes them, and give each stop's sides a sidewalk;
+    run buses where walking is slow (between towns, out to hamlets).
+17. Let a country road, a branch line or a footpath run off the board to an
+    `offLayout` place, and give it some jobs: commuters come and go all day.
+18. For freight, put a goods yard on a branch or siding of its own with a road
+    along its dock, run a freight shuttle from it to an off-layout place that
+    sends and needs goods, and keep shops, farms and the like within 40 m of a
+    road (doors toward it).
 
-## 9. Validation codes
+## 12. Validation codes
 
 | Code | Severity | Fix |
 |---|---|---|
 | `SCHEMA` | error | Match `schema.json`: fix the type, add the missing field, or remove the unknown key. |
-| `DUPLICATE_ID` | error | Rename one of the two; ids are shared by tracks, roads, paths, car parks, stations and services (objects have their own namespace). |
-| `UNKNOWN_REF` | error | Use an existing id (the message lists the known ones): track, road, path, station, train type or object (also in `traffic.vehicles` and `people.vehicles`). |
+| `DUPLICATE_ID` | error | Rename one of the two; ids are shared by tracks, roads, paths, car parks, stations (and freight yards), services, bus stops, bus lines and off-layout places (objects and goods have their own namespaces). |
+| `UNKNOWN_REF` | error | Use an existing id (the message lists the known ones): track, road, path, station, bus stop, off-layout place, train type or object (also in `traffic.vehicles`, `people.vehicles`, `freight.vehicles`, a bus line's `vehicle`, a freight yard's `road` and a place's `via`). |
 | `TRACK_REF_CYCLE` | error | A branch can't (indirectly) be its own parent; make one track (road, path) a plain line/loop. |
-| `OUT_OF_BOUNDS` | error | Move waypoints inward (track must stay 20 m inside the terrain, roads 5 m, paths 3 m), or move a placed object onto the board. |
+| `OUT_OF_BOUNDS` | error | Move waypoints inward (track must stay 20 m inside the terrain, roads 5 m, paths 3 m), end the line exactly on the edge to let it leave the board, or move a placed object onto the board. |
 | `FILLET_OVERLAP` | error | Spread the two named waypoints apart or lower `minRadius` / waypoint `radius`. |
 | `CORNER_TOO_SHARP` | error | Split the hairpin with an extra waypoint so no single turn exceeds 170°. |
 | `JUNCTION_UNREACHABLE` | error | Move the branch's first (or last, for `to`) waypoint further from the junction, or flip `heading`. |
@@ -514,11 +784,13 @@ lights the part warmly at night; `smoke: true` marks a chimney, and the object's
 | `STATION_RANGE` | error | Move `at` so `at ± length/2` lies within the track. |
 | `STATION_CURVE` | warning | Move the platform onto a straight (curves tighter than 300 m). |
 | `STATION_STRUCTURE` | warning | Move the platform off the bridge/tunnel, onto level ground. |
+| `ROAD_LANES` | warning | A road of several lanes each way is too narrow for them: give it 6 m of width for each lane each way, or fewer `lanes`. |
+| `SIGNAL_POSITION` | error | Traffic lights must be within 15 m of a junction of three or more roads (the message names the nearest), one entry per junction. |
 | `ROUTE_DISCONNECTED` | error | Consecutive route tracks must share a junction facing the right way; insert the connecting track. |
-| `ROUTE_NOT_CLOSED` | error | Use `mode: "shuttle"` or add tracks that lead back to the first one. |
-| `STOP_NOT_ON_ROUTE` | error | Add the station's track to the route or drop the stop. |
-| `TRAIN_TOO_LONG` | warning | Lengthen the platform or use a shorter train. |
-| `CAPACITY` | warning | Fewer trains, or a longer route. (`simulate`: also vehicles that found no room on the roads — lower `traffic.cars`. And `people.count` above what the homes hold.) |
+| `ROUTE_NOT_CLOSED` | error | Use `mode: "shuttle"`, add tracks that lead back to the first one, or let the first track come in over the board's edge and the last leave it (a loop through the board). |
+| `STOP_NOT_ON_ROUTE` | error | Add the station's track to the route or drop the stop. An off-layout stop needs a `via` on a track at an end of the route that leaves the board. |
+| `TRAIN_TOO_LONG` | warning | Lengthen the platform (or a freight yard's dock) or use a shorter train. |
+| `CAPACITY` | warning | Fewer trains (or buses), or a longer route. (`simulate`: also vehicles that found no room on the roads — lower `traffic.cars`. And `people.count` above what the homes hold.) |
 | `ROAD_CONFLICT` | error | A road crosses a track (or road) 3–6.5 m (5.5 m) apart in height, runs too close beside a track, or overlaps another road without a junction: make it a level crossing / crossroads, clear it in height with a waypoint `z`, move it, or join the roads with `from`/`to`. |
 | `LEVEL_CROSSING_POSITION` | error | Move the crossing onto plain ground, off the platform, 35 m from railway junctions and 25 m from road junctions and road ends — or take the road over or under the line. The same for a path's foot crossing (without the road rules). |
 | `LEVEL_CROSSING_ANGLE` | warning / error | Cross the track at 30° or more (ideally square) so the crossing stays short; below 15° it is an error. Also for paths. |
@@ -530,19 +802,33 @@ lights the part warmly at night; `smoke: true` marks a chimney, and the object's
 | `PARKING_POSITION` | error | A car park has no road within 300 m, is more than 60 m from the road it joins, or overlaps a road or track: move it beside the road, clear of both. |
 | `BUILDING_UNREACHABLE` | warning | Nobody can reach the building's door: run a sidewalk or path within 45 m of it (in a straight line not crossing a road or track), turn its door toward the street, or give it parking beside it. |
 | `STATION_UNREACHABLE` | warning | No walkway reaches the station: end a path at it (`"to": { "station": id }`) or run a sidewalk past its building or platform. |
+| `BUS_STOP_POSITION` | error | A bus waiting at the stop would reach into a junction, a crossing or a dead end's turning space, stand in a tunnel, overlap another stop on the same side, or the stop is off the road: move `at` (the message suggests where). |
+| `BUS_ROUTE` | error | A bus line can't get by road from one stop to the next on a side it serves (connect the roads, give the stop both sides, or reorder the stops), lists a stop twice in a row, or is a loop ending at its first stop (leave the last one out). |
+| `BUS_STOP_UNREACHABLE` | warning | Nobody can walk to that side of the stop: give the road a sidewalk on that side, run a path to it, or give the stop the other side only. |
+| `BUS_STOP_UNUSED` | warning | No line calls at the stop: add it to a line's `stops` or remove it. |
+| `EXIT_POSITION` | error | A line ends on the board's edge at less than 45° to it: move the waypoint before its end so it leaves the board squarely. |
+| `STATION_KIND` | error | A path ends at a freight yard, which has no platform for people: end it at a passenger station, a road or another path. |
+| `STOP_KIND` | warning | A passenger service stops at a freight yard, where nobody can get on or off: drop the stop, or run a freight train there. |
+| `YARD_ROAD` | warning | No lorry can stop beside the yard's dock: run a road along the dock's back edge (within 30 m, with room clear of junctions, crossings and bus stops), or name the right one in `road`. |
+| `FREIGHT_UNREACHABLE` | warning | A building that sends goods (or needs them and is not just a home) has no road within 40 m of its door where a lorry could stop: run a road past it or turn its door toward one. |
+| `FREIGHT_UNMATCHED` | warning | Goods are sent out but needed nowhere, or needed but sent from nowhere: add a building or off-layout place with the matching `demands` or `supplies`. |
+| `EXIT_REF` | error | An off-layout place's `via` names a line that does not leave the board (end its first or last waypoint on the edge), or one that leaves at both ends without `end`. |
 | `DEADLOCK` | error | (`simulate` only) Trains wait on each other: add a passing loop, fewer trains, or different routes. |
 
 Every issue has `path` (JSON path such as `tracks[1].points[2]`), a one-sentence
 `message` with numbers and a suggested fix, and often `at` (map coordinates).
 
-## 10. Authoring loop
+## 13. Authoring loop
 
 1. Write the JSON (start from an example).
 2. `npm run check -- my.json --json` → fix every error (warnings are advisory).
 3. `npm run simulate -- my.json --minutes 30` → every service should stop
    regularly, no `DEADLOCK`, and `max wait` should be modest; road traffic and
    people should show nobody stuck and a longest wait under a minute or two, and
-   the journeys line shows how people got about (walk, drive, train and mixes).
+   the journeys line shows how people got about (walk, drive, train, bus and
+   mixes); buses should make stops and miss none; "off the board" counts people
+   out at the off-layout places; freight should show deliveries by road and by
+   freight train, nothing `LOST` and few orders nothing could reach.
 4. New objects: `npm run screenshot -- my.json --object <id> --out obj.png` and
    look at it from the front-right before placing it.
 5. `npm run screenshot -- my.json --view top --out top.png` to verify geometry
@@ -553,10 +839,12 @@ Every issue has `path` (JSON path such as `tracks[1].points[2]`), a one-sentence
 6. Iterate. Use `query(world).describe()` from `src/api.ts` for a compact text
    summary (track, road and path lengths, structures, junctions, level, zebra
    and foot crossings, parking, the town's buildings, homes and station
-   entrances, placed objects) when choosing `at` values; `query(world).roadAt(x, y)` and
+   entrances, bus stops and lines, exits and off-layout places, goods yards and
+   who sends and needs what, placed objects)
+   when choosing `at` values; `query(world).roadAt(x, y)` and
    `trackAt(x, y)` give the `s` of a point near a road or track.
 
-## 11. Examples
+## 14. Examples
 
 Both examples are in `layouts/`. Their tracks and services are short; most of
 each file is the scenery list, one placement per line.
@@ -565,20 +853,24 @@ each file is the scenery list, one placement per line.
 - Terrain: a big wooded hill (north-east, 55 m), a smaller hill (north-west) and
   a shallow valley inside an oval main line (`main`, five corners at r = 120 m).
 - `hill` leaves `main` at s = 700, crosses over the main line on a 350 m viaduct,
-  tunnels under the hill's shoulder and ends at Bergdorf at z = 26.
-- Roads: a country road from the west edge to the east edge (three roads joined
-  end to end, so only the town stretch, `market-street`, has sidewalks), over
+  tunnels under the hill's shoulder, climbs to Bergdorf at z = 26 and runs on
+  over a short viaduct to the north edge; the tram calls at Bergdorf and runs on
+  off the board to Hochdorf.
+- Roads: a country road from the west edge to the east edge, leaving the board
+  at both (three roads joined end to end: two lanes each way out of town, one lane
+  and sidewalks along `market-street`, with traffic lights at its three crossroads), over
   both sides of the main line at level crossings and through a dip under the
   `hill` viaduct;
   Lindenau's streets as a small grid of crossroads, T-junctions and corners; a
   lane from the south street over a third level crossing just past the
-  platforms; and a steep lane (`maxGrade` 0.1) up to Bergdorf from the north
-  edge. Lindenau's streets have sidewalks and street parking (their houses set
+  platforms; and a steep lane (`maxGrade` 0.1) up from Bergdorf to the north
+  edge and off the board. Lindenau's streets have sidewalks and street parking (their houses set
   back for it), the country roads a sidewalk on the farms' side; a car park by
   the station; 10 vehicles of through traffic.
 - Paths: `mill-walk` from the church square out to the windmill, `field-path`
   on from there over the country road (a zebra) and the main line (a foot
-  crossing) to the south edge of the board, and `chapel-path` to St. Anne's door.
+  crossing) off the south edge of the board to Mühlbach, and `chapel-path` to
+  St. Anne's door.
 - The town: about 420 people in Lindenau's houses, terraces and flats and
   Bergdorf's cottages; shops, an inn, a post office and a café on Market Street,
   offices behind the station, the churches, farms and the windmill as
@@ -590,6 +882,21 @@ each file is the scenery list, one placement per line.
   farms to the west and east.
 - Bergdorf: a village lane below the station, with church and barn, in a
   clearing of the hill forest.
+- Hamlets on the country roads, Westfeld (with The Plough inn) to the west and
+  Ostend (with a farm shop) to the east, and bus line 2 through them and the
+  town between Altheim and Neustadt off the board: Altheim, Westfeld, Market
+  Square, Lindenau Station, Ostend, Neustadt and back, three buses.
+- Off the board: Altheim (west, by the country road), Neustadt (east, by the
+  country road; 40 jobs), Hochdorf (north, by the tram and the Bergdorf lane) and
+  Mühlbach (south, on foot by the field path). Commuters to Neustadt take the bus
+  or drive; a few dozen people are out there at any time.
+- Freight: a goods branch (`goods-line`) leaves the main line east of the
+  station and runs off the south edge to Kreisstadt; Lindenau Goods Yard sits on
+  its straight with Goods Road along its dock, and a `freight-4` shuttles between
+  them. The farms send food, the post office mail; Kreisstadt (by train) and
+  Neustadt (by road) send goods and mail, Altheim drinks, and both towns want food.
+  Two yellow post vans, two delivery vans and two lorries carry it; `f1` is a
+  freight train running round the main line for show (it calls nowhere).
 - Custom objects defined in the layout: `windmill` (a tapered tower, cap and four
   sails made from rotated boxes) and `hay-bale` (a cylinder on its side,
   scattered over a field):
@@ -613,13 +920,16 @@ each file is the scenery list, one placement per line.
 ### `layouts/harbour-town.json`
 - Terrain falls from wooded hills in the north to the sea (`seaLevel: 0`) in the
   south, with a bay that the coastal line crosses on a 225 m bridge.
-- `coast` runs between the termini Westhafen and Ostkap, with a 6 m-offset
-  passing loop; two shuttles (one per loop track) cross there every cycle.
+- `coast` runs from the terminus at Westhafen past Ostkap and off the east edge,
+  with a 6 m-offset passing loop; two shuttles (one per loop track) cross there,
+  and run on beyond Ostkap off the board to Neuhafen and back.
 - Westhafen: a waterfront road (kept 1 m above the sea) with sidewalks, lamps and
   a row of houses facing the sea, joined round the end of the line to streets
   inland up to a church; a `pier` (a path running out over the sea, so it stands
   on piles) and moored `fishing-boat`s placed at `z: 0`.
-- An inland road climbs over the hills past a hamlet to Ostkap's streets; a
+- An inland road of two lanes each way climbs over the hills past a hamlet to
+  Ostkap's streets, with traffic lights where the goods yard's lane and the
+  lighthouse lane leave it; a
   lane leaves it over a level crossing west of Ostkap station and runs along the
   shore to the `lighthouse`. 8 vehicles of through traffic. A `beach-path`
   leaves the inland road and crosses the line at a foot crossing (a waypoint `z`
@@ -629,6 +939,17 @@ each file is the scenery list, one placement per line.
   the church, the farm and the lighthouse; street parking in Westhafen, a car
   park there and one by Ostkap station — people drive to Ostkap, park, and take
   the train to Westhafen, and back.
+- Bus line 1, the coast line: three buses from Harbour Front through Westhafen
+  and over the inland road (calling at the farm and the beach path, where short
+  paths with zebras reach both sides of the road) to Ostkap and the lighthouse,
+  and on along Ostkap Street off the board to Neuhafen, and back — five buses.
+  It is the busiest way between the towns after walking.
+- Off the board: Neuhafen (east, by the coast line and Ostkap Street; 30 jobs).
+- Freight: Harbour Goods Yard on a siding beside the coast line west of Ostkap,
+  with Yard Lane down to it from the inland road; a `freight-4` shuttles between
+  the yard and Neuhafen. The fishmonger sends fish to Neuhafen, the farm food; Neuhafen sends
+  goods, mail, drinks and food — by train to the yard or by lorry along Ostkap
+  Street. The default fleet: three vans and a lorry.
 - Custom objects: `lighthouse` (stacked red and white cylinders using `grid`
   steps, a glowing `lamp` lantern) and `fishing-boat` (an upside-down tapered
   box as the hull, a cabin, a mast; tinted per boat).

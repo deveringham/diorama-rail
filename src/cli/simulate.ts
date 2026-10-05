@@ -1,6 +1,6 @@
 // npm run simulate -- layouts/x.json [--minutes 30] [--json]
 // Validates, then runs the simulation headlessly and prints per-service stats,
-// road traffic and pedestrian stats and any deadlock. Exit 1 on validation errors or deadlock.
+// road traffic, bus and pedestrian stats and any deadlock. Exit 1 on validation errors or deadlock.
 
 import { parseArgs } from "node:util";
 import { simulate, type SimReport } from "../sim/sim";
@@ -30,13 +30,21 @@ if (values.json) {
   if (tr) {
     console.log(`\nroad traffic: ${tr.cars} through-traffic vehicles, avg ${tr.avgSpeed.toFixed(1)} m/s; ${tr.own} residents' cars drove ${(tr.ownDistance / 1000).toFixed(1)} km;`
       + ` longest wait ${tr.maxWait.toFixed(0)} s${tr.stuck ? `, ${tr.stuck} stuck` : ""}; level crossings closed ${tr.closures} times, ${(tr.closedShare * 100).toFixed(0)}% of the time`);
+    if (tr.buses) console.log(`buses: ${tr.buses} in service, ${tr.busStops} stops made${tr.busSkipped ? `, ${tr.busSkipped} stops missed` : ""}`);
   }
   const pp = res.people;
   if (pp) {
     console.log(`people: ${pp.people} residents, ${pp.tasks} errands done, ${Object.values(pp.trips).reduce((a, b) => a + b, 0)} journeys (avg ${(pp.avgTrip / 60).toFixed(1)} min),`
       + ` longest wait ${pp.maxWait.toFixed(0)} s${pp.stuck ? `, ${pp.stuck} stuck` : ""}; ${pp.crossed} road crossings`);
     console.log(`  journeys by way of travel: ${Object.entries(pp.trips).map(([k, n]) => `${k} ${n}`).join("; ") || "none"}`);
-    console.log(`  now: ${pp.outside} outside (${pp.walking} walking, ${pp.waiting} on platforms), ${pp.driving} driving, ${pp.riding} on trains`);
+    console.log(`  now: ${pp.outside} outside (${pp.walking} walking, ${pp.waiting} on platforms, ${pp.atStops} at bus stops), ${pp.driving} driving, ${pp.riding} on trains, ${pp.onBus} on buses, ${pp.away} off the board`
+      + (pp.maxStopWait ? `; longest wait at a bus stop ${pp.maxStopWait.toFixed(0)} s` : ""));
+  }
+  const fr = res.freight;
+  if (fr) {
+    console.log(`freight: ${fr.orders} orders, ${fr.delivered} deliveries (${fr.loads} loads; ${fr.byRoad} by road, ${fr.byRail} by freight train), avg ${(fr.avgTime / 60).toFixed(1)} min from order to door;`
+      + ` ${fr.underWay} under way (${fr.waiting} waiting, ${fr.onTrains} loads on trains); ${fr.busy} of ${fr.vehicles} delivery vehicles busy`
+      + (fr.unserved ? `; ${fr.unserved} orders nothing could reach` : "") + (fr.lost ? `; ${fr.lost} LOST` : ""));
   }
   if (res.deadlock) console.log(`\nDEADLOCK: ${res.deadlock.message}`);
 }

@@ -21,6 +21,8 @@ const DRIVE_MAX = 60;                  // m from the entrance to the road's edge
 const DRIVE_MIN = 1;                   // m of driveway at least, outside the road
 const SEARCH = 300;                    // m to look for the nearest road
 const GRID = 2;                        // m between the lot's clearance points
+const AISLE_RADIUS = 6;                // m: the driveway's turn into the aisle
+const TURN_MAX = (150 * Math.PI) / 180; // the sharpest turn a driveway is allowed room for
 
 export type LotGeom = {
   id: string;
@@ -108,9 +110,19 @@ export function planLots(layout: Layout, roads: Map<string, RoadGeom>): { lots: 
       issues.push(error("PARKING_POSITION", `car park '${spec.id}' (${length.toFixed(0)} × ${width.toFixed(0)} m) overlaps road '${hit.id}'; move it clear of the road (its entrance faces the road it joins)`, `${where}.at`, spec.at));
       return;
     }
+    // The aisle runs straight through the lot: where the driveway comes in from the side,
+    // it turns into the aisle outside the entrance, far enough out for the curve.
+    const J = pointAt(best.road.path, join.s);
+    let front: V2 = entrance;
+    for (let i = 0; i < 3; i++) {
+      const [dx, dy] = [front[0] - J[0], front[1] - J[1]];
+      const turn = Math.acos(Math.max(-1, Math.min(1, -(dx * u[0] + dy * u[1]) / (Math.hypot(dx, dy) || 1))));
+      const room = turn < (10 * Math.PI) / 180 ? 0 : AISLE_RADIUS * Math.tan(Math.min(turn, TURN_MAX) / 2) + 1;
+      front = [entrance[0] + u[0] * room, entrance[1] + u[1] * room];
+    }
     lots.push({ id: spec.id, index, name: spec.name ?? displayName(spec), spec, centre: spec.at, heading, length, width, entrance, perSide, parent: best.road.id });
     specs.push({
-      id: spec.id, kind: "line", points: [entrance, back], width: LOT_AISLE, minRadius: 6, maxGrade: 0.12, speed: 5,
+      id: spec.id, kind: "line", points: [front, back], lanes: 1, width: LOT_AISLE, minRadius: AISLE_RADIUS, maxGrade: 0.12, speed: 5,
       sidewalks: "none", sidewalkWidth: 2, parking: "none", parkingStyle: "parallel", name: spec.name ?? displayName(spec),
       from: { road: best.road.id, at: join.s },
     });
@@ -118,15 +130,16 @@ export function planLots(layout: Layout, roads: Map<string, RoadGeom>): { lots: 
   return { lots, specs, issues };
 }
 
-/** Where the bays start along a lot's aisle road (s), and its frame. */
-export function lotFrame(lot: LotGeom, aisle: RoadGeom): { bayS0: number } {
-  // The aisle starts at the driveway's junction; the lot starts at the entrance.
+/** Where a lot's entrance is along its aisle road (s; the aisle starts at the driveway's junction), and where its bays start. */
+export function lotFrame(lot: LotGeom, aisle: RoadGeom): { entranceS: number; bayS0: number } {
   let s0 = 0;
-  for (let s = 0; s <= aisle.path.length; s += 0.5) {
+  let best = Infinity;
+  for (let s = 0; s <= aisle.path.length; s += 0.25) {
     const [x, y] = pointAt(aisle.path, s);
-    if (Math.hypot(x - lot.entrance[0], y - lot.entrance[1]) < 0.6) { s0 = s; break; }
+    const d = Math.hypot(x - lot.entrance[0], y - lot.entrance[1]);
+    if (d < best) { best = d; s0 = s; }
   }
-  return { bayS0: s0 + LOT_HEAD };
+  return { entranceS: s0, bayS0: s0 + LOT_HEAD };
 }
 
 /**
@@ -157,7 +170,7 @@ export function lotPoints(lots: LotGeom[], roads: RoadNet, trackHash: SpatialHas
         }
         mine.push({
           road: lot.id, s: bs, x, y, z: profileZ(prof, bs), heading: headingAt(aisle.path, bs), width: GRID * 1.5,
-          left: GRID * 0.75, right: GRID * 0.75, reach: GRID * 0.75, ground: true,
+          left: GRID * 0.75, right: GRID * 0.75, reach: GRID * 0.75, ground: true, mouth: false,
         });
       }
     }

@@ -16,7 +16,10 @@ import { type WalkNet, type Walkway, KERB, wayPoint } from "./walks";
 import { type LotGeom, LOT_AISLE, BAY_PITCH, BAY_DEPTH, lotFrame } from "./parking";
 import type { Placement, ObjectInfo, StationGeom, StationEntry } from "./scenery";
 import type { BuildingFunction } from "./objects";
+import { type BusNet, FRONT_PAST } from "./buses";
+import type { OffLayout } from "./exits";
 import type { TrackPoint } from "./validate";
+import { TRAIN_CATALOG, isTrainType } from "./catalog";
 import { type Issue, warning } from "./validate";
 import { SpatialHash } from "../util/spatial";
 import { rng, range, type Rng } from "../util/rng";
@@ -34,6 +37,7 @@ export const PULL_OUT = 7;             // m along the lane a car pulling out of 
 const JUNCTION_CLEAR = 6;              // m bays keep beyond a junction's box
 const CROSSING_CLEAR = 6;              // m beyond a level crossing's zone
 const ZEBRA_CLEAR = 4;                 // m beyond a zebra or a crossing over a junction's leg
+const BUS_CLEAR = 3;                   // m beyond where a bus stands at a stop
 const END_CLEAR = 10;                  // m from a dead end (cars turn there)
 const STREET_REACH = 60;               // m from a door to the street that gives its address
 const SPOT_SPACING = 70;               // m between places to stroll to along a footpath
@@ -61,7 +65,9 @@ export type Building = {
   door: P3;
   access: Attach | null;
   bays: Array<{ bay: number; link: P3[]; length: number }>;   // bays its people reach straight from the door
-  station: string | null;              // the station it belongs to (a station building)
+  station: string | null;              // the station it belongs to (a station building, or a goods yard's shed)
+  supplies: Record<string, number>;    // goods it sends out, loads per hour
+  demands: Record<string, number>;     // goods it needs delivered, loads per hour
   where: string;                       // layout path, for issues
 };
 
@@ -100,15 +106,18 @@ export type StationAccess = {
 
 export type Spot = { id: number; name: string; way: number; d: number; at: P3 };
 
+/** How people reach one side of a bus stop (indexed like BusNet.sides), and whether it has a shelter. */
+export type StopAccess = { access: Attach | null; shelter: boolean };
+
 export type Person = {
   id: number;
   first: string;
   last: string;
   name: string;
   home: number;                        // building
-  job: { title: string; building: number } | null;
+  job: { title: string; building: number; off: number } | null;   // at a building, or (building −1) at off-layout place `off`
   car: { object: string; bay: number } | null;   // their car and where it is parked at the start
-  prefs: { walk: number; drive: number; train: number };   // how much they mind each (cost factors)
+  prefs: { walk: number; drive: number; train: number; bus: number };   // how much they mind each (cost factors)
 };
 
 export type Town = {
@@ -118,9 +127,10 @@ export type Town = {
   spots: Spot[];
   people: Person[];
   lots: LotGeom[];
+  stops: StopAccess[];
 };
 
-export const emptyTown = (): Town => ({ buildings: [], bays: [], stations: [], spots: [], people: [], lots: [] });
+export const emptyTown = (): Town => ({ buildings: [], bays: [], stations: [], spots: [], people: [], lots: [], stops: [] });
 
 type Ctx = {
   layout: Layout;
@@ -135,6 +145,8 @@ type Ctx = {
   stationEntries: Map<string, StationEntry[]>;
   objects: Map<string, ObjectInfo>;
   scenery: Placement[];
+  buses: BusNet;
+  off: OffLayout;
 };
 
 const FIRST = [
@@ -174,11 +186,11 @@ export function buildTown(ctx: Ctx): { town: Town; issues: Issue[] } {
     const jobCount = functions.includes("workplace") ? meta.jobs ?? DEFAULT_JOBS : 0;
     buildings.push({
       id: buildings.length, placement: k, object: p.object,
-      name: station ? `${station.name} Station` : entry?.object && entry.name ? entry.name : "",
+      name: station ? (station.kind === "freight" ? station.name : `${station.name} Station`) : entry?.object && entry.name ? entry.name : "",
       kind: meta.kind ?? titleCase(p.object), functions,
       residents: functions.includes("accommodation") ? meta.residents ?? DEFAULT_RESIDENTS : 0,
       jobs: Array.from({ length: jobCount }, (_, j) => titles[Math.min(j, titles.length - 1)]),
-      at: [p.x, p.y, p.z], door, access: null, bays: [], station: station?.id ?? null,
+      at: [p.x, p.y, p.z], door, access: null, bays: [], station: station?.id ?? null, supplies: { ...meta.supplies }, demands: { ...meta.demands },
       where: station ? `stations[${layout.stations.indexOf(station)}].building` : `scenery[${p.entry}]`,
     });
   });
@@ -212,7 +224,7 @@ export function buildTown(ctx: Ctx): { town: Town; issues: Issue[] } {
   for (const st of layout.stations) {
     const t = ctx.tracks.get(st.track);
     const entries = ctx.stationEntries.get(st.id);
-    if (!t || !entries) continue;
+    if (!t || !entries || st.kind === "freight") continue;          // goods yards take no passengers
     const home: 1 | -1 = st.side === "left" ? 1 : -1;
     const sOf = (p: P3) => nearestS(t, p, st.at, st.length);
     const building = buildings.find((b) => b.station === st.id);
@@ -241,6 +253,12 @@ export function buildTown(ctx: Ctx): { town: Town; issues: Issue[] } {
     stations.push({ station: st.id, name: st.name, track: st.track, building: building?.id ?? -1, entrances });
   }
 
+  // --- bus stops: the walkway beside each, and room for its shelter -----------------------
+  const stops: StopAccess[] = ctx.buses.sides.map((side) => ({
+    access: links.attach(side.at, ACCESS_REACH),
+    shelter: side.shelter !== null && shelterFits(ctx, links, side.shelter, side.heading),
+  }));
+
   // --- places to stroll to ------------------------------------------------------------
   const spots: Spot[] = [];
   for (const w of walks.ways) {
@@ -260,12 +278,18 @@ export function buildTown(ctx: Ctx): { town: Town; issues: Issue[] } {
 
   // --- people ------------------------------------------------------------------------
   const people = residents(ctx, buildings, bays, issues);
+  const passengerServices = layout.services.filter((s) => !isTrainType(s.train) || TRAIN_CATALOG[s.train].shape !== "freight");
   layout.stations.forEach((st, i) => {
     const access = stations.find((x) => x.station === st.id);
-    if (!people.length || access?.entrances.length || !layout.services.some((s) => s.stops.includes(st.id))) return;
+    if (!people.length || st.kind === "freight" || access?.entrances.length || !passengerServices.some((s) => s.stops.includes(st.id))) return;
     issues.push(warning("STATION_UNREACHABLE", `station '${st.id}' has no walkway within ${ACCESS_REACH} m of its platforms or building, so nobody can catch a train there; end a path at it ("to": { "station": "${st.id}" }) or run a sidewalk past it`, `stations[${i}]`));
   });
-  return { town: { buildings, bays, stations, spots, people, lots: ctx.lots }, issues };
+  ctx.buses.sides.forEach((side, k) => {
+    if (!people.length || stops[k].access) return;
+    const stop = ctx.buses.stops[side.stop];
+    issues.push(warning("BUS_STOP_UNREACHABLE", `bus stop '${stop.id}' (${side.side > 0 ? "left" : "right"} side of '${stop.road}') has no walkway within ${ACCESS_REACH} m, so nobody can catch a bus there; give the road a sidewalk on that side or run a path to it`, `busStops[${stop.index}]`, [side.at[0], side.at[1]]));
+  });
+  return { town: { buildings, bays, stations, spots, people, lots: ctx.lots, stops }, issues };
 }
 
 const titleCase = (id: string) => id.split("-").map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w)).join(" ");
@@ -301,6 +325,30 @@ export function platformPoint(ctx: Pick<Ctx, "layout" | "tracks" | "profiles">, 
 
 /** Whether d along a walkway is in (or near) the zone of a level or foot crossing, where nobody may join it. */
 const inGateZone = (w: Walkway, d: number) => w.gates.some((g) => Math.abs(d - g.at) < g.zone + GATE_CLEAR);
+
+/** Whether a bus shelter (3.2 × 1.4 m, its back to the road) has room: no road, track, walkway or object there. */
+function shelterFits(ctx: Ctx, links: ReturnType<typeof linker>, at: P3, heading: number): boolean {
+  const [c, s] = [Math.cos(heading), Math.sin(heading)];
+  const solids = ctx.scenery.filter((p) => ctx.objects.get(p.object)!.mesh.max[2] * p.scale >= 0.5);
+  for (const u of [-1.7, 0, 1.7]) {
+    for (const v of [-0.7, 0, 0.7]) {
+      const x = at[0] + c * u - s * v;
+      const y = at[1] + s * u + c * v;
+      if (links.onRoad(x, y, at[2], null) || links.onTrack(x, y, at[2])) return false;
+      let walk = false;
+      ctx.walks.hash.near(x, y, 4, (q) => { if (!walk && Math.hypot(q.x - x, q.y - y) < q.width / 2 && Math.abs(q.z - at[2]) < 3) walk = true; });
+      if (walk) return false;
+      for (const p of solids) {
+        const m = ctx.objects.get(p.object)!.mesh;
+        const [pc, ps] = [Math.cos(p.rotation), Math.sin(p.rotation)];
+        const lx = ((x - p.x) * pc + (y - p.y) * ps) / p.scale;
+        const ly = (-(x - p.x) * ps + (y - p.y) * pc) / p.scale;
+        if (lx > m.min[0] - 0.2 && lx < m.max[0] + 0.2 && ly > m.min[1] - 0.2 && ly < m.max[1] + 0.2) return false;
+      }
+    }
+  }
+  return true;
+}
 
 // ---------------------------------------------------------------------------
 // Links from doors, bays and platforms to the walkways
@@ -373,7 +421,7 @@ function linker(ctx: Ctx) {
     }
     return null;
   };
-  return { attach, clear };
+  return { attach, clear, onRoad, onTrack };
 }
 
 // ---------------------------------------------------------------------------
@@ -466,6 +514,13 @@ function streetBays(ctx: Ctx, bays: Bay[]): void {
       }
       for (const c of roads.crossings) if (c.road === r.id) blocked.push([c.roadS - c.zone - CROSSING_CLEAR, c.roadS + c.zone + CROSSING_CLEAR]);
       for (const c of walks.crossings) if (c.road === r.id) blocked.push([c.roadS - c.half - ZEBRA_CLEAR, c.roadS + c.half + ZEBRA_CLEAR]);
+      // Nobody parks where a bus stops.
+      for (const st of ctx.buses.sides) {
+        if (st.side !== side || ctx.buses.stops[st.stop].road !== r.id) continue;
+        const front = st.s + st.dir * FRONT_PAST;
+        const back = front - st.dir * st.reach;
+        blocked.push([Math.min(front, back) - BUS_CLEAR, Math.max(front, back) + BUS_CLEAR]);
+      }
       // Where a path meets this side of the road, people step off the kerb: keep it free.
       for (const p of walks.paths.values()) {
         for (const [k, e] of [[0, p.spec.from], [1, p.spec.to]] as const) {
@@ -578,6 +633,7 @@ function nearestRoadS(path: { length: number; closed: boolean } & Parameters<typ
 function residents(ctx: Ctx, buildings: Building[], bays: Bay[], issues: Issue[]): Person[] {
   const { layout } = ctx;
   const r = rng(layout.seed, "people");
+  const tastes = rng(layout.seed, "bus-tastes");
   const reachable = (b: Building) => b.access !== null || b.bays.length > 0;
   const homes = buildings.filter((b) => b.residents > 0 && reachable(b));
   const capacity = homes.reduce((a, b) => a + b.residents, 0);
@@ -606,17 +662,18 @@ function residents(ctx: Ctx, buildings: Building[], bays: Bay[], issues: Issue[]
     const first = FIRST[Math.floor(r() * FIRST.length)];
     people.push({
       id: people.length, first, last: surname, name: `${first} ${surname}`, home, job: null, car: null,
-      prefs: { walk: range(r, 0.9, 1.7), drive: range(r, 0.8, 1.4), train: range(r, 0.75, 1.3) },
+      prefs: { walk: range(r, 0.9, 1.7), drive: range(r, 0.8, 1.4), train: range(r, 0.75, 1.3), bus: range(tastes, 0.8, 1.35) },
     });
   }
-  // Jobs: workplaces' posts go to people picked at random, up to the employment rate.
-  const posts: Array<{ title: string; building: number }> = [];
-  for (const b of buildings) if (reachable(b) || b.station) for (const title of b.jobs) posts.push({ title, building: b.id });
+  // Jobs: workplaces' posts (and those off the board) go to people picked at random, up to the employment rate.
+  const posts: Array<{ title: string; building: number; off: number; rank: number }> = [];
+  for (const b of buildings) if (reachable(b) || b.station) b.jobs.forEach((title) => posts.push({ title, building: b.id, off: -1, rank: b.jobs.indexOf(title) }));
+  for (const place of ctx.off.places) place.jobs.forEach((title) => posts.push({ title, building: -1, off: place.index, rank: place.jobs.indexOf(title) }));
   const workers = shuffle(r, people.slice()).slice(0, Math.min(posts.length, Math.round(people.length * EMPLOYMENT)));
   shuffle(r, posts);
   // Leading posts (the first titles of each workplace) are filled first.
-  posts.sort((a, b) => buildings[a.building].jobs.indexOf(a.title) - buildings[b.building].jobs.indexOf(b.title));
-  workers.forEach((p, k) => { p.job = posts[k]; });
+  posts.sort((a, b) => a.rank - b.rank);
+  workers.forEach((p, k) => { p.job = { title: posts[k].title, building: posts[k].building, off: posts[k].off }; });
   // Cars: parked at the nearest free bay to home.
   const taken = new Set<number>();
   const vehicles = layout.people.vehicles;

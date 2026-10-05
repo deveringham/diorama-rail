@@ -268,7 +268,6 @@
       }
     },
     "stations": {
-      "default": [],
       "type": "array",
       "items": {
         "type": "object",
@@ -280,13 +279,22 @@
           "name": {
             "type": "string"
           },
+          "kind": {
+            "default": "passenger",
+            "description": "passenger: platforms people use; freight: a goods yard, a loading dock beside the track where freight trains and lorries exchange goods",
+            "type": "string",
+            "enum": [
+              "passenger",
+              "freight"
+            ]
+          },
           "track": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9-]*$"
           },
           "at": {
             "type": "number",
-            "description": "s of the platform centre (m)"
+            "description": "s of the platform (or dock) centre (m)"
           },
           "length": {
             "default": 120,
@@ -295,6 +303,7 @@
           },
           "side": {
             "default": "right",
+            "description": "Which side of the track the platform is on (left/right of increasing s); a freight yard has one dock, left or right",
             "type": "string",
             "enum": [
               "left",
@@ -303,8 +312,7 @@
             ]
           },
           "building": {
-            "default": "station-building",
-            "description": "Object drawn as the station building beside the platform, or null for none",
+            "description": "Object drawn as the station building behind the platform (default \"station-building\"), or for a freight yard the shed standing on its dock (default \"goods-shed\"); null for none",
             "anyOf": [
               {
                 "type": "string",
@@ -314,6 +322,11 @@
                 "type": "null"
               }
             ]
+          },
+          "road": {
+            "description": "freight only: the road along the back of the dock, where lorries stop to load and unload; default the nearest one within 30 m",
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$"
           }
         },
         "required": [
@@ -337,7 +350,7 @@
           },
           "train": {
             "type": "string",
-            "description": "Train type id: regional-3, express-6, freight-10, tram-2"
+            "description": "Train type id: regional-3, express-6, freight-10, freight-4, tram-2"
           },
           "color": {
             "type": "string",
@@ -361,6 +374,7 @@
           },
           "stops": {
             "default": [],
+            "description": "Station ids, and off-layout place ids reached by a track at an end of the route that leaves the board",
             "type": "array",
             "items": {
               "type": "string",
@@ -389,7 +403,6 @@
       }
     },
     "roads": {
-      "default": [],
       "description": "Road network: crossroads form automatically, level crossings where a road meets a track at grade",
       "type": "array",
       "items": {
@@ -464,12 +477,18 @@
             },
             "description": "Waypoints like a track's; corners are rounded with `minRadius`"
           },
+          "lanes": {
+            "default": 1,
+            "description": "Traffic lanes in each direction",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 3
+          },
           "width": {
-            "default": 6,
-            "description": "Carriageway width (m); two-way traffic, drive on the right",
+            "description": "Carriageway width (m); two-way traffic, drive on the right; default 6 m for each lane each way (6, 12, 18)",
             "type": "number",
             "minimum": 3,
-            "maximum": 14
+            "maximum": 24
           },
           "minRadius": {
             "default": 10,
@@ -786,6 +805,42 @@
         "additionalProperties": false
       }
     },
+    "trafficLights": {
+      "default": [],
+      "description": "Traffic lights at road junctions: opposite approaches share a green, each direction in turn",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "at": {
+            "type": "array",
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "items": false,
+            "minItems": 2,
+            "maxItems": 2,
+            "description": "Where the road junction is: the nearest junction of three or more roads within 15 m gets the lights"
+          },
+          "green": {
+            "default": 20,
+            "description": "Longest green for each direction (s); it ends sooner when nothing more is coming and someone waits on red",
+            "type": "number",
+            "minimum": 5,
+            "maximum": 90
+          }
+        },
+        "required": [
+          "at"
+        ],
+        "additionalProperties": false
+      }
+    },
     "parking": {
       "default": [],
       "description": "Car parks: rows of bays along an aisle, joined to a road by a driveway",
@@ -841,6 +896,303 @@
         "additionalProperties": false
       }
     },
+    "busStops": {
+      "default": [],
+      "description": "Bus stops beside roads, on one side or both",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$"
+          },
+          "name": {
+            "description": "Shown on the stop and in journeys; default from the id (\"market-square\" → \"Market Square\")",
+            "type": "string",
+            "minLength": 1
+          },
+          "road": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$",
+            "description": "Road the stop stands beside"
+          },
+          "at": {
+            "type": "number",
+            "description": "s along the road (m) of the stop's sign; buses stop with their front door beside it"
+          },
+          "side": {
+            "default": "both",
+            "description": "Which side of the road (left/right of increasing s) has a stop; buses drive on the right, so the right side serves buses going toward increasing s",
+            "type": "string",
+            "enum": [
+              "both",
+              "left",
+              "right"
+            ]
+          },
+          "shelter": {
+            "default": true,
+            "description": "Draw a shelter behind the kerb (left out where something already stands there)",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "road",
+          "at"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "busLines": {
+      "default": [],
+      "description": "Bus lines: buses calling at stops in order along the roads; people ride them like trains",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$"
+          },
+          "name": {
+            "description": "Shown on the buses and in journeys, e.g. \"3\" or \"Harbour Hopper\"; default from the id",
+            "type": "string",
+            "minLength": 1
+          },
+          "stops": {
+            "minItems": 2,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]*$"
+            },
+            "description": "Bus stop ids (or off-layout place ids reached by road) in the order the buses call; they take the quickest way along the roads between them"
+          },
+          "mode": {
+            "default": "shuttle",
+            "description": "shuttle: there and back along the list, turning round after the last stop; loop: from the last stop back to the first",
+            "type": "string",
+            "enum": [
+              "shuttle",
+              "loop"
+            ]
+          },
+          "count": {
+            "default": 1,
+            "description": "Buses on the line, spread evenly along it",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20
+          },
+          "dwell": {
+            "default": 12,
+            "description": "s a bus waits at each stop (longer while people get on and off)",
+            "type": "number",
+            "minimum": 2,
+            "maximum": 120
+          },
+          "capacity": {
+            "default": 40,
+            "description": "Passengers a bus takes",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200
+          },
+          "vehicle": {
+            "default": "bus",
+            "description": "Object id drawn as the bus",
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$"
+          },
+          "color": {
+            "description": "Colour of the line's buses; default one per line",
+            "type": "string",
+            "pattern": "^#[0-9a-fA-F]{6}$"
+          }
+        },
+        "required": [
+          "id",
+          "stops"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "offLayout": {
+      "default": [],
+      "description": "Places off the board, reached by tracks, roads and paths that leave it (end on its edge): stops for services and bus lines, and destinations for errands",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$"
+          },
+          "name": {
+            "description": "Shown in journeys and timetables; default from the id (\"neustadt\" → \"Neustadt\")",
+            "type": "string",
+            "minLength": 1
+          },
+          "via": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "track": {
+                  "description": "A track that leaves the board toward the place",
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]*$"
+                },
+                "road": {
+                  "description": "A road that leaves the board toward the place (cars and buses; people on foot along its sidewalks)",
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]*$"
+                },
+                "path": {
+                  "description": "A footpath that leaves the board toward the place",
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]*$"
+                },
+                "end": {
+                  "description": "Which end of the line leaves the board, if both do",
+                  "type": "string",
+                  "enum": [
+                    "start",
+                    "end"
+                  ]
+                },
+                "distance": {
+                  "default": 2000,
+                  "description": "m from the board's edge to the place along this way",
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                }
+              },
+              "additionalProperties": false
+            },
+            "description": "The lines leading off the board to it, each with the distance beyond the edge"
+          },
+          "jobs": {
+            "default": 0,
+            "description": "Posts there that residents of the board may hold (they commute)",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000
+          },
+          "titles": {
+            "default": [
+              "Employee"
+            ],
+            "description": "Job titles, as for buildings: the last fills the rest",
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "visits": {
+            "default": 1,
+            "description": "How often people go there on a visit; 1 ≈ one landmark on the board",
+            "type": "number",
+            "minimum": 0,
+            "maximum": 20
+          },
+          "supplies": {
+            "default": {},
+            "description": "Goods sent out from there (loads per hour), by freight train or lorry",
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]*$"
+            },
+            "additionalProperties": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 500
+            }
+          },
+          "demands": {
+            "default": {},
+            "description": "Goods delivered there (loads per hour)",
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]*$"
+            },
+            "additionalProperties": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 500
+            }
+          }
+        },
+        "required": [
+          "id",
+          "via"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "freight": {
+      "description": "Deliveries: goods supplied and demanded by buildings and off-layout places move by road and by freight train",
+      "default": {},
+      "type": "object",
+      "properties": {
+        "vehicles": {
+          "description": "Delivery vans and lorries; default a few of each when anything needs delivering by road. Idle ones drive about until given a job",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "description": "What these vehicles are called, e.g. \"Post van\"; default \"Delivery van\" or \"Lorry\" (from the object)",
+                "type": "string",
+                "minLength": 1
+              },
+              "object": {
+                "default": "van",
+                "description": "Object id drawn as the vehicle",
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]*$"
+              },
+              "count": {
+                "default": 2,
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 40
+              },
+              "capacity": {
+                "default": 6,
+                "description": "Loads it carries at once",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              },
+              "goods": {
+                "description": "Only these goods (default: any)",
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]*$"
+                }
+              },
+              "color": {
+                "description": "Colour of these vehicles; default one picked per vehicle",
+                "type": "string",
+                "pattern": "^#[0-9a-fA-F]{6}$"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "people": {
       "default": {},
       "type": "object",
@@ -889,11 +1241,11 @@
         "vehicles": {
           "default": [
             "car",
+            "car",
             "van",
-            "bus",
             "truck"
           ],
-          "description": "Object ids for through traffic, picked at random (repeat an id to make it more common)",
+          "description": "Object ids for through traffic, picked at random (repeat an id to make it more common); real buses run on busLines",
           "minItems": 1,
           "type": "array",
           "items": {
@@ -976,6 +1328,32 @@
                 "items": false,
                 "minItems": 2,
                 "maxItems": 2
+              },
+              "supplies": {
+                "description": "Goods it sends out, in loads per hour, e.g. { \"food\": 8 } for a farm; lorries and vans collect them",
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]*$"
+                },
+                "additionalProperties": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 500
+                }
+              },
+              "demands": {
+                "description": "Goods it needs delivered, in loads per hour, e.g. { \"food\": 3, \"mail\": 1 } for a shop",
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]*$"
+                },
+                "additionalProperties": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 500
+                }
               }
             },
             "required": [
@@ -1602,6 +1980,32 @@
                 "items": false,
                 "minItems": 2,
                 "maxItems": 2
+              },
+              "supplies": {
+                "description": "Goods it sends out, in loads per hour, e.g. { \"food\": 8 } for a farm; lorries and vans collect them",
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]*$"
+                },
+                "additionalProperties": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 500
+                }
+              },
+              "demands": {
+                "description": "Goods it needs delivered, in loads per hour, e.g. { \"food\": 3, \"mail\": 1 } for a shop",
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]*$"
+                },
+                "additionalProperties": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 500
+                }
               }
             },
             "additionalProperties": false

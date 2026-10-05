@@ -9,7 +9,7 @@ const LIBRARY: Record<string, ObjectInput> = {
   house: {
     description: "Two-storey house, 7 × 9 m, front door facing +x, chimney that sometimes smokes",
     tint: "walls",
-    building: { functions: ["accommodation"], residents: 3, kind: "House" },
+    building: { functions: ["accommodation"], residents: 3, kind: "House", demands: { mail: 0.4 } },
     smoke: 0.1,
     parts: [
       { shape: "box", at: [0, 0, -3], size: [7, 9, 8.2] },
@@ -23,7 +23,7 @@ const LIBRARY: Record<string, ObjectInput> = {
   terrace: {
     description: "Row of three terraced houses, 8 × 22 m, fronts facing +x",
     tint: "walls",
-    building: { functions: ["accommodation"], residents: 7, kind: "Terrace" },
+    building: { functions: ["accommodation"], residents: 7, kind: "Terrace", demands: { mail: 1 } },
     smoke: 0.1,
     parts: [
       { shape: "box", at: [0, 0, -3], size: [8, 22, 10.5] },
@@ -37,7 +37,7 @@ const LIBRARY: Record<string, ObjectInput> = {
   flats: {
     description: "Four-storey block of flats, 12 × 16 m, flat roof",
     tint: "walls",
-    building: { functions: ["accommodation"], residents: 20, kind: "Flats" },
+    building: { functions: ["accommodation"], residents: 20, kind: "Flats", demands: { mail: 2 } },
     parts: [
       { shape: "box", at: [0, 0, -3], size: [12, 16, 18] },
       { shape: "box", at: [0, 0, 15], size: [12.4, 16.4, 0.7], color: "roof-grey", winter: "snow" },
@@ -63,7 +63,7 @@ const LIBRARY: Record<string, ObjectInput> = {
   barn: {
     description: "Timber barn, 10 × 16 m, big doors facing +x",
     tint: ["#8a4a3a", "#7a5a44", "#6e6a5e"],
-    building: { functions: ["workplace"], jobs: 2, titles: ["Farmer", "Farmhand"], kind: "Farm" },
+    building: { functions: ["workplace"], jobs: 2, titles: ["Farmer", "Farmhand"], kind: "Farm", supplies: { food: 10 } },
     parts: [
       { shape: "box", at: [0, 0, -2], size: [10, 16, 7] },
       { shape: "gable", at: [0, 0, 5], size: [16.8, 11, 4.5], rotate: [0, 0, 90], color: "roof-grey", winter: "snow" },
@@ -85,7 +85,7 @@ const LIBRARY: Record<string, ObjectInput> = {
   shop: {
     description: "Shop with a flat above, 8 × 10 m, shop window and awning facing +x",
     tint: "walls",
-    building: { functions: ["workplace", "landmark"], jobs: 2, titles: ["Shopkeeper", "Shop assistant"], kind: "Shop" },
+    building: { functions: ["workplace", "landmark"], jobs: 2, titles: ["Shopkeeper", "Shop assistant"], kind: "Shop", demands: { food: 3, goods: 3, mail: 1 } },
     parts: [
       { shape: "box", at: [0, 0, -3], size: [8, 10, 9.2] },
       { shape: "gable", at: [0, 0, 6.2], size: [10.6, 8.6, 2.8], rotate: [0, 0, 90], color: "roof", winter: "snow" },
@@ -100,7 +100,7 @@ const LIBRARY: Record<string, ObjectInput> = {
   office: {
     description: "Office block, 14 × 20 m, three storeys of window bands, entrance facing +x",
     tint: ["#d8d4cc", "#c9cfd4", "#e2dccf"],
-    building: { functions: ["workplace"], jobs: 16, titles: ["Director", "Accountant", "Engineer", "Clerk"], kind: "Offices" },
+    building: { functions: ["workplace"], jobs: 16, titles: ["Director", "Accountant", "Engineer", "Clerk"], kind: "Offices", demands: { mail: 3, goods: 1 } },
     parts: [
       { shape: "box", at: [0, 0, -3], size: [14, 20, 15] },
       { shape: "box", at: [0, 0, 12], size: [14.4, 20.4, 0.6], color: "concrete", winter: "snow" },
@@ -116,7 +116,7 @@ const LIBRARY: Record<string, ObjectInput> = {
     description: "Village inn, 10 × 12 m, two storeys, sign beside the door facing +x",
     tint: ["#f0e7d5", "#e8d2a6", "#d9c4a0"],
     smoke: 0.5,
-    building: { functions: ["workplace", "landmark"], jobs: 3, titles: ["Landlord", "Cook", "Bar staff"], kind: "Inn" },
+    building: { functions: ["workplace", "landmark"], jobs: 3, titles: ["Landlord", "Cook", "Bar staff"], kind: "Inn", demands: { food: 2, drinks: 3, mail: 0.5 } },
     parts: [
       { shape: "box", at: [0, 0, -3], size: [10, 12, 9.5] },
       { shape: "gable", at: [0, 0, 6.5], size: [12.8, 10.8, 3.8], rotate: [0, 0, 90], color: "roof-dark", winter: "snow" },
@@ -126,6 +126,63 @@ const LIBRARY: Record<string, ObjectInput> = {
       { shape: "box", at: [5.5, 1.7, 2.9], size: [1, 0.08, 0.08], color: "dark" },
       { shape: "box", at: [5.7, 1.7, 2.0], size: [0.8, 0.06, 0.8], color: "red" },
       { shape: "panel", at: [0, 6.03, 0.9], size: [0.1, 1.4, 1.3], rotate: [0, 0, 90], color: "window", grid: [2, 1, 2], step: [4, 0, 3.1], mirror: "y" },
+    ],
+  },
+  "goods-shed": {
+    description: "Goods shed for a freight yard's dock, 5 × 18 m, open doors and a canopy facing +x (toward the track); its door for people is at the back",
+    tint: ["#b8a58a", "#a8957a", "#c2b49c"],
+    building: { functions: ["workplace"], jobs: 3, titles: ["Yard foreman", "Porter", "Clerk"], kind: "Goods shed", door: [-2.9, 0] },
+    parts: [
+      { shape: "box", at: [-0.25, 0, -1], size: [4.5, 18, 5.6] },
+      { shape: "gable", at: [-0.25, 0, 4.6], size: [18.6, 5.2, 1.5], rotate: [0, 0, 90], color: "roof-grey", winter: "snow" },
+      { shape: "box", at: [2.35, 0, 4.0], size: [1.3, 18.4, 0.15], rotate: [0, -8, 0], color: "roof-grey", winter: "snow" },
+      { shape: "panel", at: [2.03, -5.5, 0], size: [0.1, 3.2, 3.2], color: "dark", grid: [1, 3, 1], step: [0, 5.5, 0] },
+      { shape: "panel", at: [-2.53, 3, 0], size: [0.1, 1.2, 2.2], rotate: [0, 0, 180], color: "timber" },
+      { shape: "panel", at: [-2.53, -4, 1.6], size: [0.1, 1.2, 1], rotate: [0, 0, 180], color: "window", grid: [1, 2, 1], step: [0, -4, 0] },
+    ],
+  },
+  "post-office": {
+    description: "Post office, 10 × 12 m, sorting office behind, post box out front; sends out the town's mail",
+    tint: ["#e8d2a6", "#f0e7d5", "#d9c4a0"],
+    building: { functions: ["workplace", "landmark"], jobs: 3, titles: ["Postmaster", "Counter clerk", "Postman"], kind: "Post office", supplies: { mail: 12 } },
+    parts: [
+      { shape: "box", at: [0, 0, -3], size: [10, 12, 9.5] },
+      { shape: "gable", at: [0, 0, 6.5], size: [12.8, 10.8, 3.4], rotate: [0, 0, 90], color: "roof", winter: "snow" },
+      { shape: "panel", at: [5.03, -3.5, 0.6], size: [0.1, 3.2, 1.8], color: "window" },
+      { shape: "panel", at: [5.03, 2.4, 0], size: [0.1, 1.4, 2.3], color: "timber" },
+      { shape: "panel", at: [5.04, 0, 2.9], size: [0.1, 9, 0.7], color: "#d9a43a" },
+      { shape: "panel", at: [5.03, -3, 4.2], size: [0.1, 1.2, 1.3], color: "window", grid: [1, 3, 1], step: [0, 3, 0] },
+      { shape: "cylinder", at: [5.9, 4.2, 0], size: [0.55, 0.55, 1.25], sides: 8, color: "red" },
+      { shape: "box", at: [-7.5, 0, -2], size: [5, 10, 6], color: "#c9bda6" },
+    ],
+  },
+  warehouse: {
+    description: "Warehouse, 16 × 24 m, three roller doors facing +x; sends out goods",
+    tint: ["#9aa3a8", "#b5b0a4", "#8a9496"],
+    building: { functions: ["workplace"], jobs: 4, titles: ["Warehouse manager", "Storeman", "Forklift driver"], kind: "Warehouse", supplies: { goods: 10 } },
+    parts: [
+      { shape: "box", at: [0, 0, -2], size: [16, 24, 9] },
+      { shape: "gable", at: [0, 0, 7], size: [24.6, 16.6, 2.2], rotate: [0, 0, 90], color: "roof-grey", winter: "snow" },
+      { shape: "panel", at: [8.03, -7, 0], size: [0.1, 4, 4.2], color: "#6e7478", grid: [1, 3, 1], step: [0, 7, 0] },
+      { shape: "panel", at: [8.03, 10.6, 0], size: [0.1, 1.1, 2.2], color: "timber" },
+      { shape: "panel", at: [0, 12.03, 4.6], size: [0.1, 12, 0.8], rotate: [0, 0, 90], color: "window", mirror: "y" },
+    ],
+  },
+  factory: {
+    description: "Brick factory, 20 × 30 m, sawtooth roof and a tall smoking chimney; makes goods from materials and coal",
+    tint: ["#a8584a", "#9a6a52", "#8e7a6a"],
+    smoke: 0.8,
+    building: {
+      functions: ["workplace"], jobs: 14, titles: ["Works manager", "Foreman", "Fitter", "Machinist"], kind: "Factory",
+      supplies: { goods: 8 }, demands: { materials: 3, coal: 2 },
+    },
+    parts: [
+      { shape: "box", at: [0, 0, -2], size: [20, 30, 10] },
+      { shape: "gable", at: [0, -10, 8], size: [20.4, 10, 3], ridge: 0, grid: [1, 3, 1], step: [0, 10, 0], color: "roof-grey", winter: "snow" },
+      { shape: "cylinder", at: [-6, 11, 0], size: [2.2, 2.2, 22], sides: 8, taper: 0.7, color: "chimney", smoke: true },
+      { shape: "panel", at: [10.03, -12, 2], size: [0.1, 2.4, 3], color: "window", grid: [1, 6, 1], step: [0, 4.8, 0] },
+      { shape: "panel", at: [10.03, 0, 0], size: [0.1, 4.5, 4.4], color: "#6e7478" },
+      { shape: "panel", at: [0, 15.03, 2], size: [0.1, 2.4, 3], rotate: [0, 0, 90], color: "window", grid: [4, 1, 1], step: [4.8, 0, 0], mirror: "y" },
     ],
   },
   bench: {

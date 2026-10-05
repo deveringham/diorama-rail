@@ -17,7 +17,7 @@ const CSS = `
 .dr-hint { position: fixed; left: 12px; bottom: 12px; padding: 3px 8px; border-radius: 6px; pointer-events: none;
   background: rgba(24, 26, 30, 0.4); color: #eef0f2; font: 11px ui-monospace, Menlo, Consolas, monospace; display: none; }
 .dr-hint.on { display: block; }
-.dr-issues { position: fixed; top: 12px; left: 12px; right: 12px; max-width: 760px; max-height: 60vh; overflow: auto;
+.dr-issues { position: fixed; top: 56px; left: 12px; right: 12px; max-width: 760px; max-height: 60vh; overflow: auto;
   padding: 12px 14px; border-radius: 10px; background: rgba(40, 16, 16, 0.9); color: #fbeaea;
   font: 13px/1.5 system-ui, sans-serif; display: none; }
 .dr-issues.on { display: block; }
@@ -42,10 +42,10 @@ export type HudInfo = {
 
 /** Keys, what they do, and (optionally) the state to show next to them. */
 const CONTROLS: Array<[keys: string, action: string, state?: (i: HudInfo) => string]> = [
-  ["drag", "orbit"],
-  ["wheel", "zoom"],
-  ["right-drag", "pan"],
-  ["click", "inspect a person, building, car or train"],
+  ["drag", "orbit (one finger)"],
+  ["wheel", "zoom (pinch)"],
+  ["right-drag", "pan (two fingers)"],
+  ["click", "inspect a person, building, vehicle, train or yard (tap)"],
   ["Space", "pause / resume", (i) => (i.paused ? "paused" : "running")],
   ["1 2 3", "speed 1× 2× 4×", (i) => `${i.speed}×`],
   ["F", "follow next train", (i) => i.follow?.service ?? "off"],
@@ -81,7 +81,7 @@ export class Hud {
     }
     this.el.append(this.stats, keys);
     this.hint.className = "dr-hint";
-    this.hint.textContent = "H: show HUD & controls";
+    this.hint.textContent = "H or ?: show HUD & controls";
     this.issuesEl.className = "dr-issues";
     parent.append(this.el, this.hint, this.issuesEl);
     this.visible = !visible;

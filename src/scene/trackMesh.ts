@@ -69,10 +69,11 @@ export function trackMeshes(world: World): THREE.Object3D[] {
     }
     for (let s = spacing / 2; s < t.path.length; s += spacing) if (!hidden(world, t.id, s)) sleeperAt.push(frameAt(world, t.id, s));
 
-    // Buffer stops where a line simply ends.
+    // Buffer stops where a line simply ends (not where it leaves the board).
     if (!t.path.closed) {
-      if (!t.spec.from) bufferStop(g, frameAt(world, t.id, 1.5), Math.PI);
-      if (!t.spec.to) bufferStop(g, frameAt(world, t.id, t.path.length - 1.5), 0);
+      const leaves = (end: 0 | 1) => world.offLayout.exits.some((e) => e.kind === "track" && e.line === t.id && e.end === end);
+      if (!t.spec.from && !leaves(0)) bufferStop(g, frameAt(world, t.id, 1.5), Math.PI);
+      if (!t.spec.to && !leaves(1)) bufferStop(g, frameAt(world, t.id, t.path.length - 1.5), 0);
     }
   }
 

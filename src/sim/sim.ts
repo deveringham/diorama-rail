@@ -13,9 +13,10 @@ import type { SwitchState } from "../model/trackGraph";
 import { TIME_SCALE } from "../model/catalog";
 import { type Blocks, buildBlocks } from "./blocks";
 import { type Plan, buildPlans } from "./services";
-import { type Train, type Phase, type World4Trains, spawn, stepTrain, forEachCar, nextStopOf, entryOf } from "./trains";
-import { type VehicleSnapshot, type GateSnapshot, type TrafficStats, Traffic } from "./traffic";
+import { type Train, type Phase, type World4Trains, spawn, stepTrain, forEachCar, nextStopOf, entryOf, onBoard } from "./trains";
+import { type VehicleSnapshot, type GateSnapshot, type SignalSnapshot, type TrafficStats, Traffic } from "./traffic";
 import { type PersonSnapshot, type PeopleStats, People } from "./people";
+import { type FreightSnapshot, type FreightStats, Freight } from "./freight";
 import { rng } from "../util/rng";
 
 export const DT = (1 / 30) * TIME_SCALE;
@@ -25,7 +26,7 @@ export type SimEvent =
   | { t: number; type: "arrived" | "departed"; train: string; service: string; station: string }
   | { t: number; type: "deadlock"; issue: Issue };
 
-export type CarPose = { x: number; y: number; z: number; heading: number; pitch: number };
+export type CarPose = { x: number; y: number; z: number; heading: number; pitch: number; visible: boolean };
 export type TrainSnapshot = {
   id: string;
   service: string;
@@ -39,6 +40,8 @@ export type TrainSnapshot = {
   length: number;             // m, whole consist
   atStation: string | null;
   nextStop: string | null;
+  offBoard: boolean;          // off the board (every car hidden), travelling or calling at an off-layout stop
+  offAt: string | null;       // the off-layout place it is calling at
   cars: CarPose[];
   reserved: number[];
 };
@@ -46,7 +49,9 @@ export type SimSnapshot = {
   time: number; trains: TrainSnapshot[]; switches: SwitchState[]; blocks: number[];
   vehicles: VehicleSnapshot[];        // road traffic
   gates: GateSnapshot[];              // level crossings (world.roads.crossings), then foot crossings (world.walks.footCrossings)
+  signals: SignalSnapshot;            // traffic light heads (world.roads.signals, their heads in order): 0 red, 1 amber, 2 green
   people: PersonSnapshot[];           // every resident (hidden while indoors, driving or on a train)
+  freight: FreightSnapshot;           // goods waiting at yards, ready at sources, aboard trains
 };
 
 export class Sim {
@@ -56,6 +61,7 @@ export class Sim {
   readonly trains: Train[] = [];
   readonly traffic: Traffic;
   readonly people: People;
+  readonly freight: Freight;
   /** Trains the spawner could not place anywhere on their route. */
   readonly unplaced: string[] = [];
   events: SimEvent[] = [];
@@ -72,6 +78,7 @@ export class Sim {
     this.traffic = new Traffic(world, this.plans, opts.seed ?? world.layout.seed);
     this.people = new People(world, this.traffic, this.plans, opts.seed ?? world.layout.seed);
     this.traffic.walkers = this.people;
+    this.freight = new Freight(world, this.traffic, this.plans, opts.seed ?? world.layout.seed);
     this.state = {
       owner: new Int32Array(this.blocks.blocks.length).fill(-1),
       switchStates: world.graph.switches.map(() => "straight"),
@@ -85,6 +92,7 @@ export class Sim {
         else this.unplaced.push(`${plan.svc.id}-${k + 1}`);
       }
     });
+    this.freight.attach(this.trains);
   }
 
   get time(): number {
@@ -99,6 +107,7 @@ export class Sim {
     });
     this.traffic.step(this.trains, (t) => this.planIndex.get(t.plan)!, DT);
     this.people.step(DT, this.traffic, this.trains);
+    this.freight.step(DT, this.trains);
     if (this.ticks % 30 === 0 && !this.deadlock) this.checkDeadlock();
   }
 
@@ -146,7 +155,7 @@ export class Sim {
 
   /** Current state. Pass the previous snapshot as `out` to update it in place. */
   snapshot(out?: SimSnapshot): SimSnapshot {
-    const snap: SimSnapshot = out ?? { time: 0, trains: [], switches: [], blocks: [], vehicles: [], gates: [], people: [] };
+    const snap: SimSnapshot = out ?? { time: 0, trains: [], switches: [], blocks: [], vehicles: [], gates: [], signals: [], people: [], freight: this.freight.snapshot() };
     snap.time = this.time;
     snap.switches = this.state.switchStates;
     const owner = this.state.owner;
@@ -157,7 +166,8 @@ export class Sim {
       const path = this.world.tracks.get(loc.track)!.path;
       const ts: TrainSnapshot = snap.trains[i] ?? {
         id: t.id, service: t.plan.svc.id, train: t.plan.svc.train, phase: t.phase, speed: 0, track: "", s: 0,
-        direction: 1, heading: 0, length: t.plan.length, atStation: null, nextStop: null, cars: t.plan.cars.map(() => ({ x: 0, y: 0, z: 0, heading: 0, pitch: 0 })), reserved: [],
+        direction: 1, heading: 0, length: t.plan.length, atStation: null, nextStop: null, offBoard: false, offAt: null,
+        cars: t.plan.cars.map(() => ({ x: 0, y: 0, z: 0, heading: 0, pitch: 0, visible: true })), reserved: [],
       };
       ts.phase = t.phase;
       ts.speed = t.speed;
@@ -167,24 +177,29 @@ export class Sim {
       ts.heading = headingAt(path, loc.s) + (ts.direction < 0 ? Math.PI : 0);
       ts.atStation = t.atStation;
       ts.nextStop = nextStopOf(t);
+      ts.offBoard = t.off >= 0;
+      ts.offAt = t.offAt >= 0 ? this.world.offLayout.places[t.offAt].id : null;
       ts.reserved.length = 0;
       for (let b = 0; b < owner.length; b++) if (owner[b] === i) ts.reserved.push(b);
-      forEachCar(t, (r) => this.at(t.plan, r), (c, x, y, z, heading, pitch) => {
+      forEachCar(t, (r) => this.at(t.plan, r), (c, x, y, z, heading, pitch, mid) => {
         const car = ts.cars[c];
         car.x = x; car.y = y; car.z = z; car.heading = heading; car.pitch = pitch;
+        car.visible = onBoard(t, mid);
       });
       snap.trains[i] = ts;
     });
     this.traffic.snapshotCars(snap.vehicles);
     this.traffic.snapshotGates(snap.gates);
+    this.traffic.snapshotSignals(snap.signals);
     this.people.snapshot(snap.people);
+    this.freight.snapshot(snap.freight);
     return snap;
   }
 }
 
 export type ServiceStats = { service: string; stops: number; avgSpeed: number; maxWait: number };
 export type SimReport = {
-  report: Report; events: SimEvent[]; perService: ServiceStats[]; traffic?: TrafficStats; people?: PeopleStats; deadlock?: Issue;
+  report: Report; events: SimEvent[]; perService: ServiceStats[]; traffic?: TrafficStats; people?: PeopleStats; freight?: FreightStats; deadlock?: Issue;
 };
 
 /** Validate, then run the sim headlessly for `seconds` of simulated time. */
@@ -209,6 +224,9 @@ export function simulate(json: unknown, seconds: number): SimReport {
     issues.push(warning("CAPACITY", `train ${id} could not be placed on its route at start (every spot was blocked); reduce count or lengthen the route`, `services[${svc}].count`));
   }
   const traffic = sim.traffic.stats();
+  if (sim.traffic.fleetUnplaced) {
+    issues.push(warning("CAPACITY", `${sim.traffic.fleetUnplaced} delivery vehicles could not be placed on the roads at start; lower freight.vehicles counts or add roads`, "freight.vehicles"));
+  }
   if (traffic.unplaced) {
     issues.push(warning("CAPACITY", `${traffic.unplaced} of ${traffic.cars + traffic.unplaced} vehicles could not be placed on the roads at start; lower traffic.cars or add roads`, "traffic.cars"));
   }
@@ -217,6 +235,7 @@ export function simulate(json: unknown, seconds: number): SimReport {
   return {
     report: full, events: sim.events, perService, ...(world.roads.roads.size ? { traffic } : {}),
     ...(sim.people.bodies.length ? { people: sim.people.stats() } : {}),
+    ...(world.freight.sites.length ? { freight: sim.freight.stats() } : {}),
     ...(sim.deadlock ? { deadlock: sim.deadlock } : {}),
   };
 }

@@ -21,7 +21,7 @@
       "id": "coast",
       "kind": "line",
       "minRadius": 300,
-      "points": [{ "at": [120, 450], "z": 3.5 }, [700, 430], [1000, 440], { "at": [1480, 500], "z": 4.5 }]
+      "points": [{ "at": [120, 450], "z": 3.5 }, [700, 430], [1000, 440], { "at": [1480, 500], "z": 4.5 }, [1600, 512]]
     },
     {
       "id": "passing",
@@ -30,11 +30,28 @@
       "from": { "track": "coast", "at": 500, "heading": "backward" },
       "points": [{ "at": [565, 440.7], "z": 3.7 }, { "at": [365, 447.6], "z": 3.7 }],
       "to": { "track": "coast", "at": 190, "heading": "backward" }
+    },
+    {
+      "id": "yard-siding",
+      "kind": "line",
+      "minRadius": 120,
+      "points": [[1023.3, 451], [1122.6, 463.4]],
+      "to": { "track": "coast", "at": 1075, "heading": "forward" }
     }
   ],
   "stations": [
     { "id": "westhafen", "name": "Westhafen", "track": "coast", "at": 90, "length": 120, "side": "right" },
-    { "id": "ostkap", "name": "Ostkap", "track": "coast", "at": 1270, "length": 120, "side": "left" }
+    { "id": "ostkap", "name": "Ostkap", "track": "coast", "at": 1270, "length": 120, "side": "left" },
+    {
+      "id": "harbour-yard",
+      "name": "Harbour Goods Yard",
+      "kind": "freight",
+      "track": "yard-siding",
+      "at": 46,
+      "length": 80,
+      "side": "left",
+      "road": "yard-lane"
+    }
   ],
   "services": [
     {
@@ -42,7 +59,7 @@
       "train": "regional-3",
       "route": ["coast"],
       "mode": "shuttle",
-      "stops": ["westhafen", "ostkap"]
+      "stops": ["westhafen", "ostkap", "neuhafen"]
     },
     {
       "id": "west-east",
@@ -50,7 +67,17 @@
       "color": "#3d7d8c",
       "route": ["coast", "passing", "coast"],
       "mode": "shuttle",
-      "stops": ["ostkap", "westhafen"]
+      "stops": ["ostkap", "westhafen", "neuhafen"]
+    },
+    {
+      "id": "harbour-goods",
+      "train": "freight-4",
+      "color": "#6b5b45",
+      "route": ["yard-siding", "coast"],
+      "mode": "shuttle",
+      "stops": ["harbour-yard", "neuhafen"],
+      "dwell": 30,
+      "count": 1
     }
   ],
   "style": { "season": "autumn", "timeOfDay": 16.5, "dayLengthSeconds": 600 },
@@ -81,6 +108,7 @@
     },
     {
       "id": "inland-road",
+      "lanes": 2,
       "from": { "road": "upper-street", "at": "end" },
       "speed": 16,
       "points": [
@@ -96,7 +124,7 @@
     {
       "id": "ostkap-street",
       "from": { "road": "inland-road", "at": "end" },
-      "points": [[1470, 530]],
+      "points": [[1470, 530], [1600, 536]],
       "sidewalks": "both"
     },
     {
@@ -113,6 +141,14 @@
       "points": [[1256, 485], { "at": [1252, 438], "radius": 15 }, { "at": [1300, 428], "radius": 20 }, [1428, 420]],
       "sidewalks": "both",
       "sidewalkWidth": 1.5
+    },
+    {
+      "id": "yard-lane",
+      "name": "Yard Lane",
+      "width": 6,
+      "speed": 9,
+      "from": { "road": "inland-road", "at": 712 },
+      "points": [[1036.5, 516.7], { "at": [1036.5, 466.7], "radius": 12 }, [1145.6, 480.4]]
     }
   ],
   "paths": [
@@ -134,8 +170,11 @@
       "surface": "paved",
       "from": { "road": "lighthouse-lane", "at": "end" },
       "points": [[1452, 411], [1474, 405]]
-    }
+    },
+    { "id": "farm-crossing", "from": { "path": "farm-track", "at": "start" }, "points": [[553, 560]] },
+    { "id": "beach-crossing", "from": { "path": "beach-path", "at": "start" }, "points": [[675, 595]] }
   ],
+  "trafficLights": [{ "at": [1036, 583] }, { "at": [1260, 523] }],
   "parking": [
     {
       "id": "westhafen-car-park",
@@ -150,6 +189,34 @@
       "at": [1300, 447],
       "spaces": 16,
       "rotation": 180
+    }
+  ],
+  "busStops": [
+    { "id": "quay", "name": "Harbour Front", "road": "harbour-front", "at": 150 },
+    { "id": "upper-street-stop", "name": "Upper Street", "road": "upper-street", "at": 175 },
+    { "id": "inland-farm", "name": "Inland Farm", "road": "inland-road", "at": 252 },
+    { "id": "beach-stop", "name": "Beach Path", "road": "inland-road", "at": 372 },
+    { "id": "ostkap-centre", "name": "Ostkap", "road": "ostkap-street", "at": 50 },
+    { "id": "lighthouse", "road": "lighthouse-lane", "at": 190 }
+  ],
+  "busLines": [
+    {
+      "id": "coast-line",
+      "name": "1",
+      "stops": ["quay", "upper-street-stop", "inland-farm", "beach-stop", "ostkap-centre", "lighthouse", "neuhafen"],
+      "count": 5,
+      "color": "#4f6f9a"
+    }
+  ],
+  "offLayout": [
+    {
+      "id": "neuhafen",
+      "via": [{ "track": "coast", "distance": 3500 }, { "road": "ostkap-street", "distance": 3000 }],
+      "jobs": 30,
+      "titles": ["Dock worker", "Clerk", "Shop assistant"],
+      "visits": 1.5,
+      "supplies": { "goods": 14, "mail": 40, "drinks": 6, "food": 8 },
+      "demands": { "fish": 10 }
     }
   ],
   "people": { "cars": 0.3 },
@@ -182,7 +249,7 @@
   "scenery": [
     { "object": "house", "at": [120.1, 412.9], "rotation": 267 },
     { "object": "terrace", "at": [136, 412.9], "rotation": 269 },
-    { "object": "shop", "at": [152, 414.1], "rotation": 271, "name": "Harbour Fish", "building": { "kind": "Fishmonger", "titles": ["Fishmonger", "Shop assistant"] } },
+    { "object": "shop", "at": [152, 414.1], "rotation": 271, "name": "Harbour Fish", "building": { "kind": "Fishmonger", "titles": ["Fishmonger", "Shop assistant"], "supplies": { "fish": 12 }, "demands": { "mail": 0.5 } } },
     { "object": "house", "at": [167.9, 412.9], "rotation": 273 },
     { "object": "house", "at": [184.1, 412.9], "rotation": 268 },
     { "object": "terrace", "at": [200, 412.9], "rotation": 270 },
@@ -190,7 +257,7 @@
     { "object": "pub", "at": [232.2, 414.9], "rotation": 267, "name": "The Anchor" },
     { "object": "house", "at": [248, 412.9], "rotation": 269 },
     { "object": "terrace", "at": [264, 412.9], "rotation": 271 },
-    { "object": "shop", "at": [279.8, 414.1], "rotation": 273, "name": "Westhafen Chandlery", "building": { "kind": "Chandler", "titles": ["Chandler"], "jobs": 1 } },
+    { "object": "shop", "at": [279.8, 414.1], "rotation": 273, "name": "Westhafen Chandlery", "building": { "kind": "Chandler", "titles": ["Chandler"], "jobs": 1, "demands": { "goods": 3, "mail": 0.5 } } },
     { "object": "house", "at": [296.1, 412.9], "rotation": 268 },
     { "object": "house", "at": [312, 412.9], "rotation": 270 },
     { "object": "house", "at": [119.4, 484.5], "rotation": 265 },
@@ -207,7 +274,7 @@
     { "object": "house", "at": [148, 515.1], "rotation": 91 },
     { "object": "house", "at": [163.1, 515.1], "rotation": 93 },
     { "object": "house", "at": [177.9, 515.1], "rotation": 88 },
-    { "object": "shop", "at": [193, 513.9], "rotation": 90, "name": "Westhafen Bakery", "building": { "kind": "Bakery", "titles": ["Baker", "Shop assistant"] } },
+    { "object": "shop", "at": [193, 513.9], "rotation": 90, "name": "Westhafen Bakery", "building": { "kind": "Bakery", "titles": ["Baker", "Shop assistant"], "demands": { "food": 4, "mail": 0.5 } } },
     { "object": "house", "at": [242.9, 515.1], "rotation": 87 },
     { "object": "house", "at": [258, 515.1], "rotation": 89 },
     { "object": "house", "at": [273, 515.1], "rotation": 91 },
@@ -288,7 +355,7 @@
     { "object": "lamp-post", "at": [1368, 513.1], "rotation": 97 },
     { "object": "lamp-post", "at": [1401.8, 517.3], "rotation": 97 },
     { "object": "lamp-post", "at": [1435.5, 521.5], "rotation": 97 },
-    { "object": "barn", "at": [560, 628], "rotation": 270, "name": "Inland Farm" },
+    { "object": "barn", "at": [560, 620], "rotation": 270, "name": "Inland Farm" },
     { "object": "house", "at": [538, 606], "rotation": 0 },
     { "object": "house", "at": [585, 600], "rotation": 180 },
     { "object": "fence", "at": [540, 640], "rotation": 0 },

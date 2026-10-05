@@ -62,6 +62,8 @@ function layouts(): Plugin {
 }
 
 export default defineConfig({
+  // Relative asset paths, so the build works from any folder: GitHub Pages serves it under /diorama-rail/.
+  base: "./",
   plugins: [layouts()],
   build: { chunkSizeWarningLimit: 1200 },
   test: { testTimeout: 60000 },

@@ -87,3 +87,73 @@ export function withTown(): Fixture {
   L.people = { cars: 0.4 };
   return L;
 }
+
+/**
+ * The town plus a bus line: stops on both sides of the cross road among the houses, of
+ * the main road by the shops and up by the church, served there and back by two buses.
+ */
+export function withBuses(): Fixture {
+  const L = withTown();
+  L.busStops = [
+    { id: "houses", name: "The Houses", road: "cross", at: 200 },
+    { id: "shops", road: "north-south", at: 270 },
+    { id: "church-stop", name: "St. Peter's", road: "north-south", at: 640 },
+  ];
+  L.busLines = [{ id: "town-bus", name: "7", stops: ["houses", "shops", "church-stop"], count: 2 }];
+  return L;
+}
+
+/**
+ * The bus town with ways off the board: the main road runs on to the top edge, a
+ * branch line off the loop to the east edge, and a footpath to the south edge, all
+ * leading to The City — where a shuttle train and the bus line call, and some
+ * residents work.
+ */
+export function withExits(): Fixture {
+  const L = withBuses();
+  L.roads![0].points = [[680, 60], [680, 800]];
+  L.tracks.push({ id: "east-line", kind: "line", minRadius: 60, from: { track: "main", at: 644 }, points: [[900, 480], [1000, 480]] });
+  L.services.push({ id: "x", train: "regional-3", route: ["main", "east-line"], mode: "shuttle", stops: ["a", "city"], count: 2 });
+  L.paths!.push({ id: "hike", from: { path: "track-walk", at: "end" }, points: [[500, 40], [500, 0]] });
+  L.offLayout = [{
+    id: "city", name: "The City", jobs: 12, titles: ["Clerk"], visits: 2,
+    via: [{ road: "north-south", distance: 2000 }, { track: "east-line", distance: 3000 }, { path: "hike", distance: 900 }],
+  }];
+  L.busLines![0].stops = ["houses", "shops", "church-stop", "city"];
+  return L;
+}
+
+/**
+ * The town with freight: a goods spur off the loop's west side leading off the board
+ * to the port, a goods yard on it with a road across the line to its dock, a farm by
+ * the main road, a freight shuttle between the yard and the port, and two vans and a
+ * lorry. The port sends goods and mail and wants the farm's food.
+ */
+export function withFreight(): Fixture {
+  const L = withTown();
+  L.tracks.push({ id: "goods-spur", kind: "line", minRadius: 60, from: { track: "main", at: 1763 }, points: [[0, 240]] });
+  L.stations.push({ id: "depot", name: "Depot", kind: "freight", track: "goods-spur", at: 159, length: 80, side: "right", road: "depot-road" });
+  L.roads!.push({ id: "depot-road", from: { road: "cross", at: "start" }, points: [[160, 400], [120, 262], [15, 262]] });
+  L.services.push({ id: "goods", train: "freight-4", route: ["goods-spur"], mode: "shuttle", stops: ["depot", "port"] });
+  L.offLayout = [{ id: "port", name: "The Port", via: [{ track: "goods-spur", distance: 1500 }], visits: 0, supplies: { goods: 30, mail: 40, drinks: 6 }, demands: { food: 10 } }];
+  L.scenery!.push({ object: "barn", at: [655, 250], rotation: 0, name: "Hill Farm" });
+  L.freight = { vehicles: [{ name: "Van", object: "van", count: 2, capacity: 6 }, { object: "truck", count: 1, capacity: 12 }] };
+  return L;
+}
+
+/**
+ * Base plus a wide road: an avenue of two lanes each way across the board (over the
+ * loop at two level crossings, off the board at both ends), a road crossing it at a
+ * junction with traffic lights, and a side street meeting it at a T-junction.
+ */
+export function withLanes(): Fixture {
+  const L = base();
+  L.roads = [
+    { id: "avenue", lanes: 2, points: [[0, 400], [1000, 400]] },
+    { id: "north-road", points: [[500, 240], [500, 560]] },
+    { id: "side-street", from: { road: "avenue", at: 650 }, points: [[650, 560]] },
+  ];
+  L.trafficLights = [{ at: [500, 400] }];
+  L.traffic = { cars: 24 };
+  return L;
+}

@@ -10,7 +10,20 @@ import { Sim, DT } from "../src/sim/sim";
 import { locate } from "../src/model/routes";
 import { KERB } from "../src/model/walks";
 import { profileZ } from "../src/model/heights";
+import { kerbOffset, sidewalkWidth } from "../src/model/roads";
+import { groundZ } from "../src/model/terrain";
 import { base, withWalks, withTown, example, type Fixture } from "./fixtures";
+
+/** The points where a walkway's direction changes by more than a degree. */
+function turns(w: World["walks"]["ways"][number]): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  for (let i = 1; i + 1 < w.x.length; i++) {
+    const a = Math.atan2(w.y[i] - w.y[i - 1], w.x[i] - w.x[i - 1]);
+    const b = Math.atan2(w.y[i + 1] - w.y[i], w.x[i + 1] - w.x[i]);
+    if (Math.abs(Math.atan2(Math.sin(b - a), Math.cos(b - a))) > Math.PI / 180) out.push([w.x[i], w.y[i]]);
+  }
+  return out;
+}
 
 describe("walk network", () => {
   const { world, report } = buildWorld(withWalks());
@@ -23,6 +36,22 @@ describe("walk network", () => {
     expect(kinds("corner").length).toBe(4 + 1);                 // the crossroads, and the T's far side (the lane has none)
     // Unmarked crossings over every leg of the crossroads, and over the cross road either side of the T.
     expect(net.crossings.filter((c) => c.kind === "crossing").length).toBe(4 + 2);
+  });
+
+  it("turns sidewalks square round the corners, along the kerbs", () => {
+    // At the crossroads of 6 m roads with 2 m sidewalks each corner turns once, 4 m out from both centre lines.
+    const n = world!.roads.nodes.find((x) => x.legs.length === 4)!;
+    const box = kinds("corner").filter((w) => Math.hypot(w.x[0] - n.at[0], w.y[0] - n.at[1]) < 15);
+    expect(box.length).toBe(4);
+    for (const w of box) {
+      const t = turns(w);
+      expect(t.length).toBe(1);
+      expect(Math.abs(t[0][0] - n.at[0])).toBeCloseTo(4, 1);
+      expect(Math.abs(t[0][1] - n.at[1])).toBeCloseTo(4, 1);
+    }
+    // Along the T's straight side the corner runs straight on.
+    const tee = kinds("corner").filter((w) => !box.includes(w));
+    expect(tee.map((w) => turns(w).length)).toEqual([0]);
   });
 
   it("raises sidewalks above the road and keeps them beside it", () => {
@@ -80,6 +109,34 @@ describe("walk network", () => {
   });
 });
 
+describe("sidewalks round a street corner", () => {
+  // Lindenau's Station Street turns north into West Lane: a sidewalk inside the corner and one round the outside.
+  const { world } = buildWorld(example("valley-loop"));
+  const net = world!.roads;
+  const n = net.nodes.find((x) => Math.hypot(x.at[0] - 560, x.at[1] - 252) < 2)!;
+  const corners = world!.walks.ways.filter((w) => w.kind === "corner" && Math.hypot(w.x[0] - 560, w.y[0] - 252) < 25);
+
+  it("keeps to the kerb inside and outside the corner", () => {
+    expect(n.legs.map((l) => l.road).sort()).toEqual(["station-street", "west-lane"]);
+    const off = (road: string, side: 1 | -1) => kerbOffset(net.roads.get(road)!.spec, side) + sidewalkWidth(net.roads.get(road)!.spec, side) / 2;
+    // West Lane runs north from the node, Station Street east: inside is north-east, outside south-west.
+    const inside: [number, number] = [560 + off("west-lane", -1), 252 + off("station-street", 1)];
+    const outside: [number, number] = [560 - off("west-lane", 1), 252 - off("station-street", -1)];
+    expect(corners.length).toBe(2);
+    const at = corners.map((w) => turns(w)).sort((a, b) => b[0][0] - a[0][0]);
+    expect(at.map((t) => t.length)).toEqual([1, 1]);
+    expect(at[0][0][0]).toBeCloseTo(inside[0], 1);
+    expect(at[0][0][1]).toBeCloseTo(inside[1], 1);
+    expect(at[1][0][0]).toBeCloseTo(outside[0], 1);
+    expect(at[1][0][1]).toBeCloseTo(outside[1], 1);
+  });
+
+  it("keeps the ground under the outside corner's sidewalk", () => {
+    const w = corners.find((x) => Math.min(...x.x) < 555)!;
+    w.x.forEach((x, i) => expect(groundZ(world!.terrain, x, w.y[i])).toBeLessThan(w.z[i]));
+  });
+});
+
 describe("walkway validation", () => {
   const cases: Array<[code: string, severity: "error" | "warning", path: string, make: () => Fixture]> = [
     ["SCENERY_ON_PATH", "error", "scenery[0].at", () => { const L = withWalks(); L.scenery = [{ object: "house", at: [450, 472] }]; return L; }],
@@ -113,7 +170,7 @@ describe("walkway validation", () => {
       L.paths = [{ id: "p", points: [[300, 300], { at: [350, 300], z: 0 }, { at: [360, 300], z: 6 }, [450, 300]] }];
       return L;
     }],
-    ["OUT_OF_BOUNDS", "error", "paths[0].points", () => { const L = base(); L.paths = [{ id: "p", points: [[1, 300], [100, 300]] }]; return L; }],
+    ["OUT_OF_BOUNDS", "error", "paths[0].points", () => { const L = base(); L.paths = [{ id: "p", points: [[2, 300], [100, 300]] }]; return L; }],
     ["SCHEMA", "error", "paths[2].from.road", () => { const L = withWalks(); L.paths![2].from = { path: "park", road: "cross", at: 10 }; return L; }],
   ];
   it.each(cases)("%s (%s) at %s", (code, severity, path, make) => {

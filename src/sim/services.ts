@@ -14,6 +14,7 @@ import { mod } from "../util/vec";
 
 const LATERAL_ACCEL = 1.0;     // m/s² allowed in curves: v = sqrt(a·r)
 export const CURVE_STEP = 5;   // m between curve speed-limit samples
+const OFF_SPEED = 0.8;         // share of its top speed a train averages off the board
 
 export type Entry = {
   block: number;
@@ -22,6 +23,9 @@ export type Entry = {
   legs: Array<{ track: string; dir: 1 | -1 }>;     // track pieces inside this block, with s-direction for +r travel
   switches: Array<{ sw: number; state: SwitchState }>;
 };
+
+/** A run off the board in time: calls at off-layout places (s of travel from the edge), total travel, where it comes back on. */
+export type OffTrain = { calls: Array<{ place: number; id: string; at: number }>; total: number; reenter: 0 | 1; speed: number };
 
 export type Plan = {
   svc: ServiceSpec;
@@ -32,6 +36,7 @@ export type Plan = {
   entries: Entry[];
   curve: Float32Array;        // speed limit (m/s) every CURVE_STEP metres of r
   opposed: [Uint8Array, Uint8Array];   // per entry, for travel +r and −r
+  offRuns: [OffTrain | null, OffTrain | null];   // off the board beyond r = 0 and r = length
 };
 
 export function buildPlans(world: World, blocks: Blocks): Plan[] {
@@ -46,9 +51,15 @@ export function buildPlans(world: World, blocks: Blocks): Plan[] {
       const radius = radiusAt(world.tracks.get(at.track)!.path, at.s);
       curve[i] = Math.min(type.maxSpeed, Math.sqrt(LATERAL_ACCEL * radius));
     }
+    // Off the board the trains keep up a steady speed.
+    const speed = type.maxSpeed * OFF_SPEED;
+    const offRuns = route.off.map((o) => o && {
+      calls: o.calls.map((c) => ({ place: c.place, id: world.offLayout.places[c.place].id, at: c.at / speed })),
+      total: o.length / speed, reenter: o.reenter, speed,
+    }) as Plan["offRuns"];
     return {
       svc, type, cars, length: cars.reduce((a, b) => a + b, 0), route, entries, curve,
-      opposed: [new Uint8Array(entries.length), new Uint8Array(entries.length)] as [Uint8Array, Uint8Array],
+      opposed: [new Uint8Array(entries.length), new Uint8Array(entries.length)] as [Uint8Array, Uint8Array], offRuns,
     };
   });
   markOpposed(plans);

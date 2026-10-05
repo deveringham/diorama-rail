@@ -16,6 +16,12 @@ const SMOOTH_WINDOW = 120;              // m, moving average of terrain for the 
 const BRIDGE_CLEARANCE = 5;             // track this far above ground becomes a bridge
 const TUNNEL_COVER = 7;                 // ground this far above track becomes a tunnel
 const MIN_SPAN = 20;                    // shorter structure runs merge into neighbours
+/**
+ * m into a tunnel from each portal where the ground is still cut down to the track,
+ * so the hillside cannot slope across the mouth: the terrain grid needs a cell's
+ * diagonal to climb back up, and the portal's box hides that climb.
+ */
+export const MOUTH = 8;
 
 export type Profile = { step: number; z: Float64Array; length: number; closed: boolean };
 export type StructureKind = "ground" | "bridge" | "tunnel";
@@ -188,4 +194,28 @@ export function classify(t: Profiled, p: Profile, ground: (x: number, y: number)
 export function structureAt(spans: Span[], s: number): StructureKind {
   for (const sp of spans) if (s >= sp.s0 && s <= sp.s1) return sp.kind;
   return "ground";
+}
+
+/**
+ * Each portal: where a tunnel meets open ground, and which way along s leads into the
+ * hill. A loop's tunnel may run through s = 0; an open path that starts in a tunnel
+ * has a portal at its start.
+ */
+export function tunnelMouths(spans: Span[], closed: boolean): Array<{ s: number; into: 1 | -1 }> {
+  const out: Array<{ s: number; into: 1 | -1 }> = [];
+  spans.forEach((sp, k) => {
+    if (sp.kind !== "tunnel") return;
+    const prev = spans[k - 1] ?? (closed ? spans[spans.length - 1] : undefined);
+    const next = spans[k + 1] ?? (closed ? spans[0] : undefined);
+    if (!prev || prev.kind !== "tunnel") out.push({ s: sp.s0, into: 1 });
+    if (next && next.kind !== "tunnel") out.push({ s: sp.s1, into: -1 });
+  });
+  return out;
+}
+
+/** Whether the ground is shaped to a track or road at s: on plain ground, and just inside each tunnel mouth. */
+export function opensGround(spans: Span[], closed: boolean, s: number): boolean {
+  const kind = structureAt(spans, s);
+  if (kind !== "tunnel") return kind === "ground";
+  return tunnelMouths(spans, closed).some((m) => (s - m.s) * m.into >= 0 && (s - m.s) * m.into <= MOUTH);
 }

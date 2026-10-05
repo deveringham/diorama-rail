@@ -4,14 +4,26 @@ A model railway to watch in the browser: low-poly terrain, track, stations,
 roads, footpaths, buildings and trees on a diorama block, with trains running on
 their own and a town that lives around them. Every resident has a name, a home,
 often a job and perhaps a car, and runs errands — to work, home, the shops, a
-stroll — walking, driving from parking bay to parking bay, or taking the train,
-whichever is quickest. Click anyone (or any building, car or train) to see who
-they are and what they are doing. A layout is one JSON file; everything visible is derived
+stroll — walking, driving from parking bay to parking bay, or taking the train
+or the bus, whichever is quickest. The board is a piece of a bigger world: lines
+that run off its edge lead to towns beyond, where trains and buses call and
+people go to work, out of sight, and come back. Goods move too: farms, shops,
+homes and the towns beyond send and need food, mail and goods, carried by
+delivery vans and lorries and by freight trains through goods yards. Click anyone
+(or any building, vehicle, train, bus stop or goods yard) to see who they are and
+what they are doing. A layout is one JSON file; everything visible is derived
 from it plus a seed — including its scenery objects, which are themselves small
 JSON models built from primitives. Layouts and objects can be validated, simulated and screenshotted
 from the command line, so an LLM (or you) can write and repair them in a loop.
 
 ![](docs/valley-loop.png)
+
+**Try it in your browser — nothing to install:**
+**[deveringham.github.io/diorama-rail](https://deveringham.github.io/diorama-rail/)**
+(works on a phone or tablet too). Pick a layout from the list in the top-left
+corner; drag to look around, scroll or pinch to zoom, and click or tap anyone or
+anything to see what they are doing. The buttons beside the list pause the
+trains, speed them up, ride along with one, and show the controls.
 
 ## Quick start
 
@@ -33,8 +45,13 @@ seed), `t=SECONDS` (pre-run the simulation), `view=overview|top|follow`, `shot=1
 
 ### Controls
 
-The HUD in the bottom-left corner shows the layout, simulated time, fps, draw
-calls and triangles, and this list of controls with the current state of each.
+The buttons in the top-left corner switch layout, pause and resume, set the
+speed (1×, 2×, 4×), follow a train (again for the next, "Stop following" to look
+around freely) and show the HUD. The HUD in the bottom-left corner shows the
+layout, simulated time, fps, draw calls and triangles, and this list of controls
+with the current state of each (shown by default on a wide screen; on a phone,
+behind the `?` button). On a touch screen: one finger orbits, a pinch zooms, two
+fingers pan, a tap inspects.
 
 | Key | Action |
 |---|---|
@@ -43,19 +60,28 @@ calls and triangles, and this list of controls with the current state of each.
 | `1` `2` `3` | time scale 1×, 2×, 4× |
 | `F` | follow the next train; `Esc` stops following |
 | `S` | shadows on/off |
-| `H` | hide / show the HUD (shown by default; hidden in screenshots) |
+| `H` | hide / show the HUD (shown by default on a wide screen; hidden in screenshots) |
 | `R` | auto-rotate on/off |
-| click | inspect a person, building, car or train (names in the panel are links); `Esc` closes |
+| click | inspect a person, building, car, bus, delivery van, train, bus stop or goods yard (names in the panel are links); `Esc` closes |
 
 In the browser console, `dr` holds the API plus `world`, `sim`, `scene`,
 `renderer`, `camera` and `inspector`, e.g. `dr.query(dr.world).describe()` or
 `dr.describePerson(dr.sim, 12)`.
 
+## Publishing the site
+
+`.github/workflows/pages.yml` builds the app and publishes it on GitHub Pages
+every time `main` changes (or on demand: Actions → "Publish to GitHub Pages" →
+Run workflow). It needs switching on once: in the repository's Settings → Pages,
+set Source to "GitHub Actions". The build uses relative paths (`base: "./"` in
+`vite.config.ts`), so `dist/` works from any folder of any static host, and every
+file in `layouts/` is published and offered in the layout list (names starting with `_` are left out of the list).
+
 ## Command line
 
 ```sh
 npm run check -- layouts/valley-loop.json [--json]          # validate; exit 1 on errors
-npm run simulate -- layouts/valley-loop.json --minutes 30   # per-service stops, speed, waits; traffic; people; exit 1 on deadlock
+npm run simulate -- layouts/valley-loop.json --minutes 30   # per-service stops, speed, waits; traffic; buses; people; freight; exit 1 on deadlock
 npm run screenshot -- layouts/valley-loop.json --out shot.png --t 120 --view top --size 1600x1000
 npm run screenshot -- layouts/valley-loop.json --object windmill --out mill.png     # one object alone
 npm run screenshot -- layouts/valley-loop.json --object all --season winter         # every object
@@ -72,9 +98,9 @@ scenery objects (built-in and the layout's own) on a small plinth, labelled.
 The same preview is live in the browser at `?layout=valley-loop&object=*`.
 
 Writing layouts: read [docs/LAYOUT_GUIDE.md](docs/LAYOUT_GUIDE.md) — coordinates,
-roads, parking and traffic, sidewalks and paths, buildings and people, placing
-scenery, designing objects, rules of thumb, every validation code with a fix,
-and the authoring loop.
+roads, parking and traffic, sidewalks and paths, buildings and people, buses,
+lines off the board, freight and deliveries, placing scenery, designing objects,
+rules of thumb, every validation code with a fix, and the authoring loop.
 
 ## How it fits together
 
@@ -83,12 +109,15 @@ layout.json ─► model/  parse (zod) → refs → track geometry (fillets, jun
                  │     bridges/tunnels → roads (junctions, crossroads, level crossings, heights)
                  │     (car parks as aisle roads) → paths and sidewalks (the walk network: zebras,
                  │     foot crossings, station ends) → terrain shaping → conflicts, stations,
-                 │     routes → scenery → town (buildings, doors, parking bays, residents)
-                 ├───► sim/    blocks, per-service plans, trains, level crossings, road traffic and
-                 │             parked cars, journey planner, people and their errands, fixed 1/30 s
-                 │             step, deadlock check; describe.ts for the inspect panel
-                 └───► scene/  three.js meshes built once; trains, vehicles, barriers, people,
-                               smoke, light updated per frame
+                 │     exits and off-layout places → routes → bus stops → scenery → town (buildings, doors,
+                 │     parking bays, residents)
+                 │     → bus lines (routes over the lanes) → freight (yards, docks, the fleet)
+                 ├───► sim/    blocks, per-service plans, trains, level crossings, road traffic,
+                 │             parked cars, buses and delivery vans, journey planner, people and their
+                 │             errands, freight (orders, consignments, jobs), fixed 1/30 s step,
+                 │             deadlock check; describe.ts for the inspect panel
+                 └───► scene/  three.js meshes built once; trains (and their loads), vehicles, barriers,
+                               people, crates, smoke, light updated per frame
 cli/ check | simulate | schema | screenshot        api.ts: the stable public API (also window.dr)
 ```
 
@@ -135,7 +164,7 @@ its centre, `lamp`-coloured parts for headlights) and list it in the layout's
    with `error(code, message, path, at?)` or `warning(...)`.
 2. `src/model/build.ts`: call it where its inputs exist, e.g.
    `issues.push(...checkSomething(layout, tracks));`.
-3. Add the code to `docs/LAYOUT_GUIDE.md` §9 and a failing fixture to
+3. Add the code to `docs/LAYOUT_GUIDE.md` §12 and a failing fixture to
    `test/validate.test.ts`.
 
 ## Notes on v0.1
@@ -176,13 +205,29 @@ filleted waypoints, heights that follow the smoothed ground within `maxGrade`
 (a waypoint `z` pins one point), bridges, tunnels and terrain shaping, T-junctions
 and corners via `from`/`to`, crossroads wherever two roads cross at about the
 same height, and level crossings wherever a road meets a track within 3 m of its
-height. The sim (`src/sim/traffic.ts`) drives vehicles on two right-hand lanes:
+height. A road has one lane each way or more (`lanes`), and junctions may have
+traffic lights (`trafficLights`). The sim (`src/sim/traffic.ts`) drives vehicles
+on the right:
 
 - Cars follow the car ahead (a time gap plus a minimum distance), slow for
-  curves and turns, and choose turns at random. They pass a junction one at a
-  time, and only when there is room beyond it, so they never block one; nor do
-  they stop on a level crossing. Dead ends near the board edge lead off the
-  board; elsewhere cars turn round.
+  curves and turns, and choose turns at random. At a junction a car goes only
+  when there is room beyond it, so cars never block one, and when nobody is
+  driving a way across it that crosses or touches its own — judged by the sweep
+  of a bus's body through each turn — first come, first served: cars side by
+  side, or coming straight toward each other, go together. Nor do they stop on a
+  level crossing. Roads that end on the board's edge lead off it (cars drive off
+  and come back); at other dead ends cars turn round.
+- On a road of several lanes each way, cars turn right from the lane by the
+  kerb, left from the one by the centre line and go straight on from any; they
+  move across into the lane their next turn needs when there is a gap (the car
+  behind lets in one that waits, and one kept waiting at a junction in the wrong
+  lane for long takes another way). Buses, delivery vehicles and cars going into
+  a bay keep to the lane by the kerb; others pass them.
+- Traffic lights give opposite roads a green together and the others in turn:
+  a green lasts while cars keep coming and someone waits on red (6 s to `green`,
+  default 20 s), then amber and red all round until the junction is clear; with
+  nobody waiting elsewhere it stays green. Cars go on green, and on amber only
+  when too close to stop.
 - A level crossing starts flashing when a train could arrive within about 11 s
   (a pessimistic estimate: the line's speed limits, accelerating from its
   current speed, after any remaining dwell) or is too close to brake comfortably,
@@ -191,10 +236,11 @@ height. The sim (`src/sim/traffic.ts`) drives vehicles on two right-hand lanes:
   examples never need.
 - Crossings close together on one road (a road over double track) work as one:
   they flash, close and open together, with barriers only outside the group.
-- Limitations: no traffic lights, overtaking, parking or right of way between
-  junction approaches beyond first come, first served (a car kept waiting
-  because its way out is full takes another); one vehicle at a time in a
-  junction.
+- Limitations: no right of way between junction approaches beyond first come,
+  first served (a car kept waiting because its way out is full takes another);
+  no overtaking on roads of one lane each way, and no pedestrian phase at
+  traffic lights (people wait for a gap); vehicles are rigid boxes, so at the
+  tightest corners a long bus may brush a car waiting at the line.
 
 ### Sidewalks, paths and people
 
@@ -235,8 +281,8 @@ households, jobs at the workplaces, and cars parked near home.
 `src/sim/people.ts` gives them errands. Someone with nothing to do thinks of a
 task (work, home, a visit, a stroll), and `src/sim/planner.ts` finds the quickest
 journey in one search over walkways (split where doors, bays, stations and
-strolling spots join them), road lanes and train services (with the expected
-wait), with a layer for "car still parked / driving / car parked again" so a car
+strolling spots join them), road lanes, train services and bus lines (with the
+expected wait), with a layer for "car still parked / driving / car parked again" so a car
 is picked up once and only where it stands. Then they follow it:
 
 - On foot, with the kerb and level-crossing behaviour above.
@@ -249,6 +295,9 @@ is picked up once and only where it stands. Then they follow it:
   end of a path, or from the nearest walkway; both platforms of a two-sided
   station), wait, board the first train of a suitable service heading their way,
   and get off at their stop. Each train keeps its passenger list.
+- By bus: people walk to the stop, wait on the sidewalk by its sign, get on the
+  first bus of a line that calls at their destination stop (if it has room), and
+  get off there. Each bus keeps its passenger list.
 
 At the destination they go inside for the task's duration (or linger at the
 spot), then think of the next thing. `src/sim/describe.ts` turns all of this into
@@ -256,6 +305,89 @@ the panel shown when you click something. Durations are compressed for a diorama
 (work lasts minutes, not hours). Through traffic (`traffic.cars`) still drives
 about at random and is not driven by residents. Cars glide into parallel bays
 rather than reversing in, and people do not avoid each other on walkways.
+
+### Buses
+
+![](docs/buses.png)
+
+`busStops` stand beside roads (`side`: left, right or both), and `busLines` call
+at them in order, there and back or round a loop (`src/model/buses.ts`). Each
+line's route is found over the same lanes the traffic drives: buses drive on the
+right, so they call at the side of a stop on their right, and the side chosen at
+each stop is the one that makes the quickest round (preferring sides people can
+walk to, and on a shuttle's way back the side it did not use on the way out).
+Stops that would leave a waiting bus blocking a junction or a crossing, and lines
+no road connects, are errors; each stop gets a painted box, a sign and, where
+there is room, a shelter, and parked cars keep clear of it.
+
+In the sim the buses are vehicles in the traffic (`src/sim/traffic.ts`) that go
+round their line's itinerary and stop in their lane at each stop — the traffic
+behind waits — for the line's dwell, longer while people get on and off, and a
+bus that has caught up with the one ahead waits a little longer so they stay
+apart. The planner treats a line like a train service: an edge from each side of
+a stop to every later one, costed with half the headway as the expected wait.
+Buses stop in the lane (there are no lay-bys), and turn round at dead ends or off
+the board's edge.
+
+### Off the board
+
+![](docs/offboard.png)
+
+A track, road or footpath line whose first or last waypoint is on the board's
+edge leaves the board there (`src/model/exits.ts`); `offLayout` places lie beyond
+such exits at given distances, with jobs for the residents and an appeal for
+visits. Nothing out there is drawn, but everything is still simulated:
+
+- **Trains** (`src/sim/trains.ts`): a shuttle whose route ends where its track
+  leaves the board runs off the edge instead of turning at its last platform; a
+  loop whose first and last tracks cross the edge runs through, off at the end
+  and back on at the start. Once the tail is past the edge the train hands back
+  its blocks and is off the board: it travels on at a steady speed, calls at the
+  service's off-layout stops (people get off and on), and comes back on at the
+  edge as soon as the first stretch is free, at a speed it can stop from. Level
+  crossings near the edge close for a train due back. Cars vanish (and reappear)
+  one by one at the edge.
+- **Buses** take roads off the board to the line's off-layout stops, call there
+  out of sight and come back on; **residents' cars** drive off to an off-layout
+  place and stay parked there until driven back; through traffic drives off and
+  back.
+- **People** may be given a job off the board, or go there on a visit; the
+  planner joins each off-layout place to the paths and sidewalks (walked out of
+  sight), roads (driven), services and bus lines that reach it, so they leave by
+  whatever is quickest, stay there out of sight, and come back by whatever suits
+  them later. The inspect panel and `describe()` say where everything is, on the
+  board or off it.
+
+### Freight and deliveries
+
+![](docs/freight.png)
+
+Buildings and off-layout places send out and need goods (`supplies` and
+`demands`, loads per hour by goods id: mail, food, goods, drinks, …; the built-in
+farm, shops, inns, offices, homes, post office, warehouse and factory come with
+some). A station with `"kind": "freight"` is a **goods yard**: a loading dock
+beside the track with a goods shed on it and a road along its back, where lorries
+load and unload (`src/model/freight.ts`). Each building with freight gets a
+*dock* too: the place in a lane at the kerb nearest its door where a delivery
+vehicle stops.
+
+In the sim (`src/sim/freight.ts`) sources make stock and consumers order when
+their need builds up. Each order goes to a source with goods ready, chosen by how
+quickly the goods can come — straight by road, or by road to a yard, by freight
+train, and by road from the other end (straight to or from an off-layout place a
+freight train calls at) — and travels as consignments, leg by leg. The delivery
+fleet (`freight.vehicles`, or a few vans and lorries by default) waits off the
+board beyond a road leaving it (or, where none does, drives about like through
+traffic) until given a job: collect everything waiting at one place
+that fits, then drop off in turn, stopping in the lane at each dock while the
+traffic behind waits (`src/sim/traffic.ts`), or driving off the board for an
+off-layout place. Freight trains unload at each yard or off-layout stop what is
+for there and load what waits for a stop ahead, waiting while the goods are moved.
+
+Crates on the docks (and outside buildings with goods ready to go) and heaps in
+the wagons show the goods in their colours; the inspect panel describes a van's
+job and load, a freight train's goods, a yard's dock, and what a building sends,
+needs and has on its way. `simulate` prints a freight line.
 
 ### Interpretations and limitations
 - **Fixed routes.** A service follows one path through the graph. Two shuttles
@@ -269,6 +401,15 @@ rather than reversing in, and people do not avoid each other on walkways.
   one go, which prevents head-on deadlocks on shared single track.
 - Because routes are fixed, car positions are computed by walking back along the
   route path rather than via a ring buffer of the head's history.
+- **Freight is scheduled, not dispatched.** Freight trains run their services
+  like passenger trains and carry whatever waits for a stop ahead; they are not
+  sent anywhere on demand. Delivery vehicles stop in the lane (there are no
+  loading bays; the traffic behind waits, with no overtaking) and turn round at
+  dead ends or off the board's edge; between jobs they wait off the board, or
+  wander like through traffic where no road leaves it. On a small, busy network
+  they add to the queues at junctions. A goods yard on a single-track main line
+  holds up other trains while a freight train stands there, so give yards a
+  siding or branch.
 - Shuttle ends: the farthest stop on the route's end track (train centred on the
   platform), else the buffer stop; a loop end track without stops turns round
   half a lap from the junction.

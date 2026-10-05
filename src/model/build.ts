@@ -4,7 +4,7 @@
 
 import { LayoutSchema, type Layout } from "./schema";
 import { type TrackGeom, type Junction, type Graph, trackOrder, buildTrack, junctionsOf, buildGraph } from "./trackGraph";
-import { type Profile, type Span, buildProfile, classify, profileZ, structureAt } from "./heights";
+import { type Profile, type Span, buildProfile, classify, profileZ, structureAt, opensGround } from "./heights";
 import { type Terrain, buildTerrain, baseZ, shapeCorridor } from "./terrain";
 import { type RoutePath, buildRoute } from "./routes";
 import { type StationGeom, type Placement, type ObjectInfo, buildStations, placeScenery, objectCatalog, stationEntries } from "./scenery";
@@ -12,6 +12,9 @@ import { type RoadNet, buildRoads, emptyRoadNet, roadGeometry } from "./roads";
 import { type WalkNet, buildWalks, emptyWalkNet } from "./walks";
 import { planLots, lotPoints, lotIssue } from "./parking";
 import { type Town, buildTown } from "./town";
+import { type BusNet, buildBusStops, buildBusLines, emptyBusNet } from "./buses";
+import { type OffLayout, findExits, buildOffLayout } from "./exits";
+import { type FreightNet, buildFreight, emptyFreightNet } from "./freight";
 import {
   type Issue, type Report, type TrackPoint, error, makeReport, zodIssues, checkReferences, checkJunctionPosition,
   checkBounds, checkConflicts, checkStations, checkServices,
@@ -23,6 +26,8 @@ import { SpatialHash } from "../util/spatial";
 const POINT_STEP = 2;      // m between dense track points (conflicts, shaping, queries)
 const ROAD_BED = 0.3;      // m the ground sits below a road surface (the slab's thickness hides the rest)
 const PATH_BED = 0.1;      // m the ground sits below a path's surface
+const MOUTH_FLAT = 5.5;    // m either side of a track flattened inside a tunnel mouth (the portal is 4.8)
+const CORNER_FLAT = 6;     // m outside a junction's kerb flattened: its sidewalk or verge, and a grid cell beyond
 
 export type World = {
   layout: Layout;
@@ -42,6 +47,9 @@ export type World = {
   roads: RoadNet;
   walks: WalkNet;                     // footpaths, sidewalks and where people cross
   town: Town;                         // buildings, parking bays, station access and the residents
+  buses: BusNet;                      // bus stops and the lines calling at them
+  offLayout: OffLayout;               // where lines leave the board, and the places beyond
+  freight: FreightNet;                // goods yards, what is sent and needed where, docks and the delivery fleet
   stats: Record<string, number>;
 };
 
@@ -125,11 +133,49 @@ export function buildWorld(json: unknown): { world: World | null; report: Report
     : null;
   if (walked) issues.push(...walked.issues);
   const walks = walked?.net ?? emptyWalkNet();
+  // Where tracks, roads and paths leave the board, and the places beyond.
+  const found = findExits(layout, { tracks: [...tracks.values()], roads: [...roads.roads.values()], paths: [...walks.paths.values()] });
+  issues.push(...found.issues);
+  const offPlaces = buildOffLayout(layout, found.exits);
+  issues.push(...offPlaces.issues);
+  const offLayout: OffLayout = { exits: found.exits, places: offPlaces.places };
+  for (const n of walks.nodes) {
+    // A path's or sidewalk's end where its path or road leaves the board.
+    if (n.ways.length !== 1) continue;
+    const owner = walks.ways[n.ways[0].way].owner;
+    const e = found.exits.find((x) => x.kind !== "track" && x.line === owner && Math.hypot(x.at[0] - n.at[0], x.at[1] - n.at[1]) < 15);
+    if (e) n.exit = e.id;
+  }
+  const busCtx = { layout, roads, walks, objects, lots: new Set(planned.lots.map((l) => l.id)), off: offLayout };
+  const bused = built.net ? buildBusStops(busCtx) : null;
+  if (bused) issues.push(...bused.issues);
+  const buses = bused?.net ?? emptyBusNet();
   // Shaping in passes: track beds first, then roads, then paths, each keeping what came before flat.
-  const bed = shapeCorridor(terrain, points.map((p) => ({ x: p.x, y: p.y, z: p.z, ground: structureAt(spans.get(p.track)!, p.s) === "ground" })));
-  const roadBed = shapeCorridor(terrain, roads.points.map((p) => ({ x: p.x, y: p.y, z: p.z, ground: p.ground, flat: p.reach + 1, depth: ROAD_BED })), bed);
+  // Inside a tunnel mouth the cut is a little wider than the portal.
+  const bed = shapeCorridor(terrain, points.map((p) => {
+    const sp = spans.get(p.track)!;
+    const mouth = structureAt(sp, p.s) === "tunnel";
+    return { x: p.x, y: p.y, z: p.z, ground: opensGround(sp, tracks.get(p.track)!.path.closed, p.s), flat: mouth ? MOUTH_FLAT : undefined };
+  }));
+  const roadShape = roads.points.map((p) => ({ x: p.x, y: p.y, z: p.z, ground: p.ground, flat: p.reach + (p.mouth ? 2.5 : 1), depth: ROAD_BED }));
+  // Along junctions' kerbs too: the outside of a corner lies beyond both roads' ends.
+  for (const j of roads.junctions) {
+    const leg = roads.nodes[j.node].legs[0];
+    if (structureAt(roads.spans.get(leg.road)!, leg.s) !== "ground") continue;
+    for (const k of j.kerbs) {
+      for (let i = 0; i + 1 < k.points.length; i++) {
+        const [a, b] = [k.points[i], k.points[i + 1]];
+        const n = Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]));
+        for (let q = 0; q <= n; q++) {
+          const f = n ? q / n : 0;
+          roadShape.push({ x: a[0] + (b[0] - a[0]) * f, y: a[1] + (b[1] - a[1]) * f, z: a[2] + (b[2] - a[2]) * f, ground: true, flat: CORNER_FLAT, depth: ROAD_BED });
+        }
+      }
+    }
+  }
+  const roadBed = shapeCorridor(terrain, roadShape, bed);
   for (let v = 0; v < bed.length; v++) roadBed[v] |= bed[v];
-  shapeCorridor(terrain, walks.points.filter((p) => p.kind === "path").map((p) => ({ x: p.x, y: p.y, z: p.z, ground: p.ground, flat: p.width / 2 + 0.6, depth: PATH_BED })), roadBed);
+  shapeCorridor(terrain, walks.points.filter((p) => p.kind === "path").map((p) => ({ x: p.x, y: p.y, z: p.z, ground: p.ground, flat: p.width / 2 + (p.mouth ? 2 : 0.6), depth: PATH_BED })), roadBed);
   issues.push(...checkConflicts(tracks, junctions, points));
   issues.push(...checkStations(layout, tracks, spans));
 
@@ -137,7 +183,7 @@ export function buildWorld(json: unknown): { world: World | null; report: Report
   const routes = new Map<string, RoutePath>();
   layout.services.forEach((svc, i) => {
     if (!isTrainType(svc.train)) return;
-    const res = buildRoute(svc, i, graph, tracks, stationById, trainLength(TRAIN_CATALOG[svc.train]));
+    const res = buildRoute(svc, i, graph, tracks, stationById, trainLength(TRAIN_CATALOG[svc.train]), offLayout);
     issues.push(...res.issues.map((r) => error(r.code, r.message, r.jsonPath)));
     if (res.route) routes.set(svc.id, res.route);
   });
@@ -149,12 +195,20 @@ export function buildWorld(json: unknown): { world: World | null; report: Report
   if (hasErrors(issues)) return { world: null, report: makeReport(issues) };
   const town = buildTown({
     layout, tracks, profiles, spans, trackHash: pointHash, roads, walks, lots: planned.lots, stations, stationEntries: entries, objects,
-    scenery: placed.placements,
+    scenery: placed.placements, buses, off: offLayout,
   });
   issues.push(...town.issues);
+  // Bus lines, calling at the sides of stops people can walk to where they can.
+  issues.push(...buildBusLines(busCtx, buses, (side) => town.town.stops[side]?.access != null));
+  if (hasErrors(issues)) return { world: null, report: makeReport(issues) };
+  // Freight: goods yards, who sends and needs what, where lorries stop, and the fleet.
+  const freighted = built.net
+    ? buildFreight({ layout, tracks, profiles, roads, walks, buses, town: town.town, off: offLayout, objects, lots: busCtx.lots })
+    : { net: emptyFreightNet(), issues: [] };
+  issues.push(...freighted.issues);
   const world: World = {
     layout, tracks, order, junctions, graph, profiles, spans, terrain, points, pointHash, stations, routes, objects,
-    scenery: placed.placements, roads, walks, town: town.town, stats: {},
+    scenery: placed.placements, roads, walks, town: town.town, buses, offLayout, freight: freighted.net, stats: {},
   };
   world.stats = computeStats(world);
   return { world, report: makeReport(issues, world.stats) };
@@ -183,21 +237,28 @@ function computeStats(w: World): Record<string, number> {
   const ownCars = w.town.people.filter((p) => p.car).length;
   const through = throughTraffic(w);
   const meanTris = (ids: string[]) => ids.reduce((a, id) => a + (w.objects.get(id)?.mesh.triangles ?? 0), 0) / Math.max(1, ids.length);
-  const vehicleTris = through * meanTris(w.layout.traffic.vehicles) + ownCars * meanTris(w.layout.people.vehicles);
+  const vehicleTris = through * meanTris(w.layout.traffic.vehicles) + ownCars * meanTris(w.layout.people.vehicles)
+    + w.buses.lines.reduce((a, l) => a + l.count * meanTris([l.vehicle]), 0) + w.freight.fleet.reduce((a, f) => a + f.count * meanTris([f.object]), 0);
   // Triangle budget: terrain grid + skirt, scenery objects, track (sleepers, rails, ballast), roads
   // (surface, verges, markings), trains, vehicles, platforms.
   const triangles = 2 * w.terrain.nx * w.terrain.ny + 4 * (w.terrain.nx + w.terrain.ny) + objectTris
     + Math.round(trackLength / 0.65) * 10 + Math.round(trackLength / 2) * 22 + Math.round(roadLength / 2) * 6 + Math.round(roadLength / 6) * 2
     + cars * 60 + Math.round(vehicleTris) + w.stations.length * 300 + (w.roads.crossings.length + w.walks.footCrossings.length) * 400
-    + Math.round((pathLength + sidewalkLength) / 1) * 6 + people * 24 + w.town.bays.length * 4;
+    + Math.round((pathLength + sidewalkLength) / 1) * 6 + people * 24 + w.town.bays.length * 4 + w.buses.sides.length * 60
+    + w.roads.signals.reduce((a, s) => a + s.heads.length, 0) * 80;
   const r1 = (x: number) => Math.round(x);
   return {
     trackLength: r1(trackLength), tracks: w.tracks.size, junctions: w.junctions.length,
     bridgeLength: r1(bridgeLength), tunnelLength: r1(tunnelLength), stations: w.stations.length,
     services: w.layout.services.length, trains, roadLength: r1(roadLength), roads: w.roads.roads.size,
-    levelCrossings: w.roads.crossings.length, pathLength: r1(pathLength), sidewalkLength: r1(sidewalkLength),
+    levelCrossings: w.roads.crossings.length, trafficLights: w.roads.signals.length,
+    pathLength: r1(pathLength), sidewalkLength: r1(sidewalkLength),
     zebras: w.walks.crossings.filter((c) => c.kind === "zebra").length, footCrossings: w.walks.footCrossings.length,
     buildings: w.town.buildings.length, people, cars: ownCars, parkingBays: w.town.bays.length, carParks: w.town.lots.length, throughTraffic: through,
+    busStops: w.buses.stops.length, busLines: w.buses.lines.length, buses: w.buses.lines.reduce((a, l) => a + l.count, 0),
+    exits: w.offLayout.exits.length, offLayoutPlaces: w.offLayout.places.length,
+    freightYards: w.freight.yards.length, freightSites: w.freight.sites.filter((s) => s.kind !== "yard").length,
+    deliveryVehicles: w.freight.fleet.reduce((a, f) => a + f.count, 0),
     objects: w.scenery.length, trees, triangles,
   };
 }

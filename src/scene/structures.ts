@@ -12,7 +12,7 @@ import { GeoBuilder, flatMaterial } from "./geo";
 import { type Frame, frameAt, side } from "./trackMesh";
 import { roadFrame, pathFrame } from "./roadMesh";
 import { roadReach } from "../model/roads";
-import type { Span } from "../model/heights";
+import { type Span, tunnelMouths, MOUTH } from "../model/heights";
 
 const STEP = 2;
 const DECK_HALF = 2.8;
@@ -21,6 +21,13 @@ const DECK_THICK = 1.1;
 const PIER_SPACING = 25;
 const CANOPY_HEIGHT = 4.2;        // above platform top
 const TRACK_CLEAR = 2.4;          // half the width of a tunnel mouth
+// A portal's box: the first stretch of tunnel built out of the hill, hiding where the
+// ground climbs back over the track beyond the cut-away mouth (heights.MOUTH).
+const BOX = MOUTH + 6;            // m long
+const BOX_TOP = 7.2;              // its roof above the track
+const BOX_BOTTOM = -1.2;
+const MOUTH_TOP = 6.0;            // the opening's height
+const MOUTH_DEPTH = 2;            // m in to the dark wall closing the opening
 
 /** A bridge deck's half-width, top (relative to the path's z) and pier width. */
 type Deck = { half: number; top: number; pier: number };
@@ -52,13 +59,18 @@ export function structureMeshes(world: World): THREE.Object3D[] {
 
 /** Bridges over every bridge span and a portal wherever ground meets tunnel, facing out of the hill. */
 function spanStructures(world: World, g: GeoBuilder, spans: Span[], closed: boolean, frame: (s: number) => Frame, deck: Deck, clear: number): void {
-  spans.forEach((sp, k) => {
-    if (sp.kind === "bridge") bridge(world, g, frame, sp.s0, sp.s1, deck);
-    const prev = spans[k - 1];
-    if (sp.kind === "tunnel" && prev?.kind !== "tunnel" && (k > 0 || !closed)) portal(g, frame(sp.s0), 0, clear);
-    const next = spans[k + 1];
-    if (sp.kind === "tunnel" && next && next.kind !== "tunnel") portal(g, frame(sp.s1), Math.PI, clear);
-  });
+  for (const sp of spans) if (sp.kind === "bridge") bridge(world, g, frame, sp.s0, sp.s1, deck);
+  const L = spans.length ? spans[spans.length - 1].s1 : 0;
+  for (const m of tunnelMouths(spans, closed)) {
+    // Frames from the mouth into the hill, turned so that forward is inward.
+    const end = closed ? m.s + m.into * BOX : Math.min(Math.max(m.s + m.into * BOX, 0), L);
+    const n = Math.max(1, Math.round(Math.abs(end - m.s) / STEP));
+    const fr = Array.from({ length: n + 1 }, (_, i) => {
+      const f = frame(m.s + ((end - m.s) * i) / n);
+      return m.into > 0 ? f : { ...f, h: f.h + Math.PI };
+    });
+    portal(g, fr, Math.abs(end - m.s), clear);
+  }
 }
 
 function bridge(world: World, g: GeoBuilder, frame: (s: number) => Frame, s0: number, s1: number, deck: Deck): void {
@@ -96,34 +108,52 @@ function bridge(world: World, g: GeoBuilder, frame: (s: number) => Frame, s0: nu
 }
 
 /**
- * Stone portal; `into` turns f.h to point into the tunnel; `clear` is half the
- * width of the mouth, a dark recessed wall.
+ * Stone portal at fr[0], facing out of the hill, and its box running in along the
+ * frames (forward is into the hill) over `len` metres. `clear` is half the opening's
+ * width; the opening is closed MOUTH_DEPTH in by a dark wall, with dark sides and roof.
  */
-function portal(g: GeoBuilder, f: Frame, into: number, clear: number): void {
-  const h = f.h + into;
+function portal(g: GeoBuilder, fr: Frame[], len: number, clear: number): void {
+  const f = fr[0];
+  const W = clear + 2;                       // the box's half-width; the face stands a little proud of it
   const at = (lat: number, fwd: number): [number, number] => {
     const [x, y] = side(f, lat, 0);
-    return [x + Math.cos(h) * fwd, y + Math.sin(h) * fwd];
+    return [x + Math.cos(f.h) * fwd, y + Math.sin(f.h) * fwd];
   };
-  const z0 = f.z - 1.2;
+  const p = (q: Frame, l: number, z: number) => side(q, l, z);
+  const inside = Math.max(1, Math.round((MOUTH_DEPTH / Math.max(len, 1e-6)) * (fr.length - 1)));
+  for (let i = 0; i + 1 < fr.length; i++) {
+    const [a, b] = [fr[i], fr[i + 1]];
+    g.quad(p(b, W, BOX_BOTTOM), p(a, W, BOX_BOTTOM), p(a, W, BOX_TOP), p(b, W, BOX_TOP), PALETTE.portal, 0.9);
+    g.quad(p(a, -W, BOX_BOTTOM), p(b, -W, BOX_BOTTOM), p(b, -W, BOX_TOP), p(a, -W, BOX_TOP), PALETTE.portal, 0.9);
+    g.quad(p(a, -W, BOX_TOP), p(b, -W, BOX_TOP), p(b, W, BOX_TOP), p(a, W, BOX_TOP), PALETTE.portal);
+    if (i >= inside) continue;
+    // The dark inside of the opening: walls and roof.
+    g.quad(p(a, clear, BOX_BOTTOM), p(b, clear, BOX_BOTTOM), p(b, clear, MOUTH_TOP), p(a, clear, MOUTH_TOP), PALETTE.portalDark);
+    g.quad(p(b, -clear, BOX_BOTTOM), p(a, -clear, BOX_BOTTOM), p(a, -clear, MOUTH_TOP), p(b, -clear, MOUTH_TOP), PALETTE.portalDark);
+    g.quad(p(a, clear, MOUTH_TOP), p(b, clear, MOUTH_TOP), p(b, -clear, MOUTH_TOP), p(a, -clear, MOUTH_TOP), PALETTE.portalDark);
+  }
+  const back = fr[Math.min(inside, fr.length - 1)];
+  g.quad(p(back, clear, BOX_BOTTOM), p(back, -clear, BOX_BOTTOM), p(back, -clear, MOUTH_TOP), p(back, clear, MOUTH_TOP), PALETTE.portalDark);
+  const e = fr[fr.length - 1];
+  g.quad(p(e, -W, BOX_BOTTOM), p(e, W, BOX_BOTTOM), p(e, W, BOX_TOP), p(e, -W, BOX_TOP), PALETTE.portal, 0.8);
+  // The face: pillars, a lintel and wing walls holding back the hillside.
+  const z0 = f.z + BOX_BOTTOM;
   for (const lat of [clear + 1.2, -clear - 1.2]) {
     const [x, y] = at(lat, 0);
-    g.box(x, y, z0, 2.4, 2.4, 8.4, h, PALETTE.portal);
+    g.box(x, y, z0, 2.4, 2.4, MOUTH_TOP + 1.2 - BOX_BOTTOM, f.h, PALETTE.portal);
   }
   const [lx, ly] = at(0, 0);
-  g.box(lx, ly, f.z + 6.0, 2.4, 2 * clear + 4.8, 1.6, h, PALETTE.portal);
-  const [bx, by] = at(0, 2.5);
-  g.box(bx, by, z0, 0.4, 2 * clear, 7.2, h, PALETTE.portalDark);
-  // Wing walls holding back the hillside.
+  g.box(lx, ly, f.z + MOUTH_TOP, 2.4, 2 * clear + 4.8, 1.6, f.h, PALETTE.portal);
   for (const lat of [clear + 4.1, -clear - 4.1]) {
     const [x, y] = at(lat, -0.6);
-    g.box(x, y, z0, 1.6, 4.2, 7.0, h, PALETTE.portal);
+    g.box(x, y, z0, 1.6, 4.2, 7.0, f.h, PALETTE.portal);
   }
 }
 
 function station(world: World, g: GeoBuilder, st: World["stations"][number]): void {
   const n = Math.max(2, Math.round((st.s1 - st.s0) / STEP));
   const fr = Array.from({ length: n + 1 }, (_, i) => frameAt(world, st.track, st.s0 + ((st.s1 - st.s0) * i) / n));
+  if (st.kind === "freight") { dock(g, st, fr); return; }
   for (const sd of st.sides) {
     const inner = sd * (PLATFORM_OFFSET - PLATFORM_WIDTH / 2);
     const outer = sd * (PLATFORM_OFFSET + PLATFORM_WIDTH / 2);
@@ -148,6 +178,30 @@ function station(world: World, g: GeoBuilder, st: World["stations"][number]): vo
       const f = frameAt(world, st.track, c0 + ((c1 - c0) * (i + 0.5)) / m);
       const [x, y, z] = side(f, sd * PLATFORM_OFFSET, PLATFORM_TOP + CANOPY_HEIGHT);
       g.box(x, y, z, (c1 - c0) / m + 0.05, PLATFORM_WIDTH + 0.4, 0.3, f.h, PALETTE.canopy);
+    }
+  }
+}
+
+/** A goods yard's loading dock: a wide concrete slab at platform height, with a kerb on the track side. */
+function dock(g: GeoBuilder, st: World["stations"][number], fr: Frame[]): void {
+  for (const sd of st.sides) {
+    const inner = sd * (st.offset - st.width / 2);
+    const outer = sd * (st.offset + st.width / 2);
+    const edge = sd * (st.offset - st.width / 2 + 0.5);
+    const n = fr.length - 1;
+    for (let i = 0; i < n; i++) {
+      const [a, b] = sd > 0 ? [fr[i], fr[i + 1]] : [fr[i + 1], fr[i]];
+      const p = (f: Frame, l: number, z: number) => side(f, l, z);
+      g.quad(p(a, edge, PLATFORM_TOP), p(b, edge, PLATFORM_TOP), p(b, outer, PLATFORM_TOP), p(a, outer, PLATFORM_TOP), PALETTE.dock);
+      g.quad(p(a, inner, PLATFORM_TOP), p(b, inner, PLATFORM_TOP), p(b, edge, PLATFORM_TOP), p(a, edge, PLATFORM_TOP), PALETTE.dockEdge);
+      g.quad(p(a, inner, -0.6), p(b, inner, -0.6), p(b, inner, PLATFORM_TOP), p(a, inner, PLATFORM_TOP), PALETTE.dock, 0.8);
+      g.quad(p(b, outer, -1.5), p(a, outer, -1.5), p(a, outer, PLATFORM_TOP), p(b, outer, PLATFORM_TOP), PALETTE.dock, 0.75);
+    }
+    // Its ends: walls down to the ground.
+    for (const [f, k] of [[fr[0], -1], [fr[n], 1]] as const) {
+      const p = (l: number, z: number) => side(f, l, z);
+      const [x0, x1] = sd * k < 0 ? [outer, inner] : [inner, outer];
+      g.quad(p(x0, -1.5), p(x1, -1.5), p(x1, PLATFORM_TOP), p(x0, PLATFORM_TOP), PALETTE.dock, 0.85);
     }
   }
 }

@@ -16,6 +16,8 @@ const MAX_COPIES = 400;            // grid copies per part
 const GROUND = 1e-6;               // faces facing down at or below this height are never seen
 
 const Hex = z.string().regex(/^#[0-9a-fA-F]{6}$/);
+const GoodsId = z.string().regex(/^[a-z][a-z0-9-]*$/, "goods ids must match /^[a-z][a-z0-9-]*$/ (lowercase, digits, dashes)");
+const GoodsRates = z.record(GoodsId, z.number().min(0).max(500));
 const Named = z.enum(COLOR_NAMES as [string, ...string[]]);
 const colorError = { error: `colour must be "#rrggbb" or one of: ${COLOR_NAMES.join(", ")}` };
 /** A colour as "#rrggbb" or a palette name (see OBJECT_COLORS). */
@@ -66,6 +68,8 @@ export const BuildingSchema = z.strictObject({
   kind: z.string().min(1).optional().describe('What sort of place it is, shown with its address, e.g. "Church" or "Bakery"'),
   door: z.tuple([z.number(), z.number()]).optional()
     .describe("Entrance [x, y] in the object frame; default the middle of the front (+x) face"),
+  supplies: GoodsRates.optional().describe('Goods it sends out, in loads per hour, e.g. { "food": 8 } for a farm; lorries and vans collect them'),
+  demands: GoodsRates.optional().describe('Goods it needs delivered, in loads per hour, e.g. { "food": 3, "mail": 1 } for a shop'),
 });
 
 export const ObjectSchema = z.strictObject({

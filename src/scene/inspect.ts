@@ -1,20 +1,26 @@
-// Click to inspect: picks the person, vehicle, train or building under the
-// pointer (people and vehicles by screen distance, since they are small; buildings
-// by ray), shows a live panel describing it (names in it can be clicked in turn),
-// and floats a marker over it — over the building someone is inside, the car they
-// drive or the train they ride.
+// Click to inspect: picks the person, vehicle, train, bus stop, goods yard or building
+// under the pointer (people, vehicles, stops and yards by screen distance, since they are small;
+// buildings by ray), shows a live panel describing it (names in it can be clicked in
+// turn), and floats a marker over it — over the building someone is inside, the car
+// they drive or the train or bus they ride.
 
 import * as THREE from "three";
 import type { World } from "../model/build";
 import type { Sim, SimSnapshot } from "../sim/sim";
-import { type Info, type Ref, describePerson, describeBuilding, describeVehicle, describeTrain } from "../sim/describe";
+import { type Info, type Ref, describePerson, describeBuilding, describeVehicle, describeTrain, describeBusStop, describeYard } from "../sim/describe";
+import { DOCK_OFFSET, PLATFORM_TOP } from "../model/scenery";
+import { pointAt, headingAt } from "../model/geometry";
+import { profileZ } from "../model/heights";
 import { toThree } from "./geo";
 
-export type Selection = { kind: "person" | "building" | "vehicle" | "train"; id: number };
+export type Selection = { kind: "person" | "building" | "vehicle" | "train" | "stop" | "yard"; id: number };
+const KINDS = ["person", "building", "vehicle", "train", "stop", "yard"] as const;
 
 const PERSON_PX = 12;           // px from a person's middle that still picks them
 const VEHICLE_PX = 16;
 const TRAIN_PX = 26;
+const STOP_PX = 14;
+const YARD_PX = 22;
 const MARKER_COLOR = 0xff8a1f;
 const MAX_ITEMS = 40;
 
@@ -23,6 +29,9 @@ const CSS = `
   padding: 10px 12px; border-radius: 8px; background: rgba(24, 26, 30, 0.82); color: #eef0f2;
   font: 12px/1.45 system-ui, sans-serif; display: none; }
 .dr-info.on { display: block; }
+@media (max-width: 640px) {
+  .dr-info { top: auto; bottom: 12px; left: 12px; right: 12px; width: auto; max-height: 45vh; }
+}
 .dr-info h3 { margin: 0 18px 1px 0; font-size: 14px; }
 .dr-info .sub { color: #9fb6c9; margin-bottom: 6px; }
 .dr-info table { border-collapse: collapse; width: 100%; }
@@ -46,6 +55,7 @@ export class Inspector {
   private ray = new THREE.Raycaster();
   private buildingOf = new Map<number, number>();     // placement -> building
   private world: World | null = null;
+  private yards: Array<[number, number, number]> = [];   // each goods yard's dock, in the middle
   private html = "";
   private time = 0;
 
@@ -63,7 +73,7 @@ export class Inspector {
     this.body.addEventListener("click", (e) => {
       const a = (e.target as HTMLElement).closest("a");
       if (!a) return;
-      for (const kind of ["person", "building", "vehicle", "train"] as const) {
+      for (const kind of KINDS) {
         const id = a.dataset[kind];
         if (id !== undefined) { this.select({ kind, id: Number(id) }); return; }
       }
@@ -81,12 +91,20 @@ export class Inspector {
     this.world = world;
     this.buildingOf.clear();
     for (const b of world.town.buildings) this.buildingOf.set(b.placement, b.id);
+    this.yards = world.freight.yards.map((y) => {
+      const t = world.tracks.get(y.track)!;
+      const [x, yy] = pointAt(t.path, y.at);
+      const h = headingAt(t.path, y.at);
+      const l = y.side * DOCK_OFFSET;
+      return [x - Math.sin(h) * l, yy + Math.cos(h) * l, profileZ(world.profiles.get(y.track)!, y.at) + PLATFORM_TOP];
+    });
     if (this.selection && !this.exists(this.selection)) this.select(null);
   }
 
   private exists(s: Selection): boolean {
     const w = this.world!;
-    return s.kind === "person" ? s.id < w.town.people.length : s.kind === "building" ? s.id < w.town.buildings.length : true;
+    return s.kind === "person" ? s.id < w.town.people.length : s.kind === "building" ? s.id < w.town.buildings.length
+      : s.kind === "stop" ? s.id < w.buses.stops.length : s.kind === "yard" ? s.id < w.freight.yards.length : true;
   }
 
   select(sel: Selection | null): void {
@@ -120,9 +138,18 @@ export class Inspector {
     });
     snap.trains.forEach((t, i) => {
       for (const c of t.cars) {
+        if (!c.visible) continue;
         const s = screen(c.x, c.y, c.z + 2);
         if (s.front) consider({ kind: "train", id: i }, s.d, TRAIN_PX);
       }
+    });
+    for (const side of this.world?.buses.sides ?? []) {
+      const s = screen(side.sign[0], side.sign[1], side.sign[2] + 2.4);
+      if (s.front) consider({ kind: "stop", id: side.stop }, s.d, STOP_PX);
+    }
+    this.yards.forEach((p, k) => {
+      const s = screen(p[0], p[1], p[2] + 1);
+      if (s.front) consider({ kind: "yard", id: k }, s.d, YARD_PX);
     });
     if (best) return (best as { sel: Selection }).sel;
     // Buildings: the nearest one the ray hits.
@@ -163,6 +190,8 @@ export class Inspector {
       case "building": return describeBuilding(sim, sel.id);
       case "vehicle": return describeVehicle(sim, sel.id);
       case "train": return describeTrain(sim, sel.id);
+      case "stop": return describeBusStop(sim, sel.id);
+      case "yard": return describeYard(sim, sel.id);
     }
   }
 
@@ -181,8 +210,16 @@ export class Inspector {
         return v ? [v.x, v.y, v.z + 3] : null;
       }
       case "train": {
-        const c = snap.trains[sel.id]?.cars[0];
+        const c = snap.trains[sel.id]?.cars.find((x) => x.visible);
         return c ? [c.x, c.y, c.z + 6] : null;
+      }
+      case "stop": {
+        const side = world.buses.sides[world.buses.stops[sel.id]?.sides[0]];
+        return side ? [side.sign[0], side.sign[1], side.sign[2] + 3.5] : null;
+      }
+      case "yard": {
+        const p = this.yards[sel.id];
+        return p ? [p[0], p[1], p[2] + 8] : null;
       }
       case "person": {
         const p = snap.people[sel.id];
@@ -190,6 +227,7 @@ export class Inspector {
         const b = sim.people.bodies[sel.id];
         if (b.mode === "train" && b.train >= 0) return this.where(sim, snap, { kind: "train", id: b.train });
         if (b.mode === "drive" && b.car >= 0) return this.where(sim, snap, { kind: "vehicle", id: b.car });
+        if (b.mode === "bus" && b.bus >= 0) return this.where(sim, snap, { kind: "vehicle", id: b.bus });
         if (b.at?.kind === "building") return top(b.at.id);
         if (b.mode === "pass" && b.station >= 0) {
           const st = world.town.stations[b.station];
@@ -203,7 +241,7 @@ export class Inspector {
 
   private render(info: Info): void {
     const link = (text: string, ref: Ref) => {
-      for (const kind of ["person", "building", "vehicle", "train"] as const) {
+      for (const kind of KINDS) {
         if (ref[kind] !== undefined) return `<a data-${kind}="${ref[kind]}">${esc(text)}</a>`;
       }
       return esc(text);
