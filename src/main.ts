@@ -11,6 +11,7 @@ import { Sim, DT, type SimSnapshot } from "./sim/sim";
 import { buildScene, type DioramaScene } from "./scene/buildScene";
 import { CameraRig } from "./scene/camera";
 import { Hud } from "./scene/hud";
+import { Toolbar } from "./scene/toolbar";
 import { Inspector } from "./scene/inspect";
 import { LIGHT, type Season } from "./scene/palette";
 import { buildPreview } from "./scene/objectPreview";
@@ -48,8 +49,16 @@ renderer.toneMappingExposure = LIGHT.exposure;
 document.body.append(renderer.domElement);
 
 const rig = new CameraRig(renderer.domElement, innerWidth / innerHeight);
-const hud = new Hud(document.body);
+const hud = new Hud(document.body, innerWidth >= 700);   // on a phone the panel waits for the ? button
 const inspector = new Inspector(document.body);
+// Buttons for what the keys do, for visitors without a keyboard.
+const toolbar = shot || objectParam ? null : new Toolbar(document.body, layoutName, {
+  pause: () => { paused = !paused; },
+  speed: () => { speed = speed === 1 ? 2 : speed === 2 ? 4 : 1; },
+  follow: () => { rig.cycleFollow(snap.trains.length); follow = rig.follow ?? -1; },
+  stopFollow: () => { rig.stopFollow(); follow = -1; },
+  help: () => hud.toggle(),
+});
 if (shot) {
   rig.controls.autoRotate = false;
   hud.hideAll();
@@ -181,6 +190,7 @@ function frame(now: number): void {
     calls: renderer.info.render.calls, triangles: renderer.info.render.triangles,
     follow: tr ? { service: tr.service, nextStop: tr.nextStop } : null,
   }, now);
+  toolbar?.sync({ paused, speed, following: rig.follow !== null, help: hud.visible });
 }
 
 // --- input -------------------------------------------------------------------------

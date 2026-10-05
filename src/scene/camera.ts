@@ -47,7 +47,9 @@ export class CameraRig {
     for (const z of t.shaped) zSum += z;
     toThree(t.width / 2, t.height / 2, zSum / t.shaped.length, this.center);
     const tanV = Math.tan((FOV / 2) * (Math.PI / 180));
-    const tanH = tanV * this.camera.aspect;
+    // A tall, narrow screen (a phone held upright) frames the board as if square: its sides
+    // are cropped rather than the whole board shrinking far away into the haze.
+    const tanH = tanV * Math.max(this.camera.aspect, 1);
     this.fit = Math.max((t.width * 0.58) / tanH, (t.height * Math.sin(ELEVATION) * 0.62 + 40) / tanV, 200);
     this.controls.minDistance = 25;
     this.controls.maxDistance = this.fit * 2.2;

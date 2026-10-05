@@ -29,6 +29,9 @@ const CSS = `
   padding: 10px 12px; border-radius: 8px; background: rgba(24, 26, 30, 0.82); color: #eef0f2;
   font: 12px/1.45 system-ui, sans-serif; display: none; }
 .dr-info.on { display: block; }
+@media (max-width: 640px) {
+  .dr-info { top: auto; bottom: 12px; left: 12px; right: 12px; width: auto; max-height: 45vh; }
+}
 .dr-info h3 { margin: 0 18px 1px 0; font-size: 14px; }
 .dr-info .sub { color: #9fb6c9; margin-bottom: 6px; }
 .dr-info table { border-collapse: collapse; width: 100%; }

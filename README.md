@@ -18,6 +18,13 @@ from the command line, so an LLM (or you) can write and repair them in a loop.
 
 ![](docs/valley-loop.png)
 
+**Try it in your browser — nothing to install:**
+**[deveringham.github.io/diorama-rail](https://deveringham.github.io/diorama-rail/)**
+(works on a phone or tablet too). Pick a layout from the list in the top-left
+corner; drag to look around, scroll or pinch to zoom, and click or tap anyone or
+anything to see what they are doing. The buttons beside the list pause the
+trains, speed them up, ride along with one, and show the controls.
+
 ## Quick start
 
 ```sh
@@ -38,8 +45,13 @@ seed), `t=SECONDS` (pre-run the simulation), `view=overview|top|follow`, `shot=1
 
 ### Controls
 
-The HUD in the bottom-left corner shows the layout, simulated time, fps, draw
-calls and triangles, and this list of controls with the current state of each.
+The buttons in the top-left corner switch layout, pause and resume, set the
+speed (1×, 2×, 4×), follow a train (again for the next, "Stop following" to look
+around freely) and show the HUD. The HUD in the bottom-left corner shows the
+layout, simulated time, fps, draw calls and triangles, and this list of controls
+with the current state of each (shown by default on a wide screen; on a phone,
+behind the `?` button). On a touch screen: one finger orbits, a pinch zooms, two
+fingers pan, a tap inspects.
 
 | Key | Action |
 |---|---|
@@ -48,13 +60,22 @@ calls and triangles, and this list of controls with the current state of each.
 | `1` `2` `3` | time scale 1×, 2×, 4× |
 | `F` | follow the next train; `Esc` stops following |
 | `S` | shadows on/off |
-| `H` | hide / show the HUD (shown by default; hidden in screenshots) |
+| `H` | hide / show the HUD (shown by default on a wide screen; hidden in screenshots) |
 | `R` | auto-rotate on/off |
 | click | inspect a person, building, car, bus, delivery van, train, bus stop or goods yard (names in the panel are links); `Esc` closes |
 
 In the browser console, `dr` holds the API plus `world`, `sim`, `scene`,
 `renderer`, `camera` and `inspector`, e.g. `dr.query(dr.world).describe()` or
 `dr.describePerson(dr.sim, 12)`.
+
+## Publishing the site
+
+`.github/workflows/pages.yml` builds the app and publishes it on GitHub Pages
+every time `main` changes (or on demand: Actions → "Publish to GitHub Pages" →
+Run workflow). It needs switching on once: in the repository's Settings → Pages,
+set Source to "GitHub Actions". The build uses relative paths (`base: "./"` in
+`vite.config.ts`), so `dist/` works from any folder of any static host, and every
+file in `layouts/` is published and offered in the layout list (names starting with `_` are left out of the list).
 
 ## Command line
 
