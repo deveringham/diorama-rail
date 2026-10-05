@@ -140,3 +140,20 @@ export function withFreight(): Fixture {
   L.freight = { vehicles: [{ name: "Van", object: "van", count: 2, capacity: 6 }, { object: "truck", count: 1, capacity: 12 }] };
   return L;
 }
+
+/**
+ * Base plus a wide road: an avenue of two lanes each way across the board (over the
+ * loop at two level crossings, off the board at both ends), a road crossing it at a
+ * junction with traffic lights, and a side street meeting it at a T-junction.
+ */
+export function withLanes(): Fixture {
+  const L = base();
+  L.roads = [
+    { id: "avenue", lanes: 2, points: [[0, 400], [1000, 400]] },
+    { id: "north-road", points: [[500, 240], [500, 560]] },
+    { id: "side-street", from: { road: "avenue", at: 650 }, points: [[650, 560]] },
+  ];
+  L.trafficLights = [{ at: [500, 400] }];
+  L.traffic = { cars: 24 };
+  return L;
+}

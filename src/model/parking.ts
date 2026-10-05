@@ -122,7 +122,7 @@ export function planLots(layout: Layout, roads: Map<string, RoadGeom>): { lots: 
     }
     lots.push({ id: spec.id, index, name: spec.name ?? displayName(spec), spec, centre: spec.at, heading, length, width, entrance, perSide, parent: best.road.id });
     specs.push({
-      id: spec.id, kind: "line", points: [front, back], width: LOT_AISLE, minRadius: AISLE_RADIUS, maxGrade: 0.12, speed: 5,
+      id: spec.id, kind: "line", points: [front, back], lanes: 1, width: LOT_AISLE, minRadius: AISLE_RADIUS, maxGrade: 0.12, speed: 5,
       sidewalks: "none", sidewalkWidth: 2, parking: "none", parkingStyle: "parallel", name: spec.name ?? displayName(spec),
       from: { road: best.road.id, at: join.s },
     });

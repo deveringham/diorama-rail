@@ -244,13 +244,15 @@ function computeStats(w: World): Record<string, number> {
   const triangles = 2 * w.terrain.nx * w.terrain.ny + 4 * (w.terrain.nx + w.terrain.ny) + objectTris
     + Math.round(trackLength / 0.65) * 10 + Math.round(trackLength / 2) * 22 + Math.round(roadLength / 2) * 6 + Math.round(roadLength / 6) * 2
     + cars * 60 + Math.round(vehicleTris) + w.stations.length * 300 + (w.roads.crossings.length + w.walks.footCrossings.length) * 400
-    + Math.round((pathLength + sidewalkLength) / 1) * 6 + people * 24 + w.town.bays.length * 4 + w.buses.sides.length * 60;
+    + Math.round((pathLength + sidewalkLength) / 1) * 6 + people * 24 + w.town.bays.length * 4 + w.buses.sides.length * 60
+    + w.roads.signals.reduce((a, s) => a + s.heads.length, 0) * 80;
   const r1 = (x: number) => Math.round(x);
   return {
     trackLength: r1(trackLength), tracks: w.tracks.size, junctions: w.junctions.length,
     bridgeLength: r1(bridgeLength), tunnelLength: r1(tunnelLength), stations: w.stations.length,
     services: w.layout.services.length, trains, roadLength: r1(roadLength), roads: w.roads.roads.size,
-    levelCrossings: w.roads.crossings.length, pathLength: r1(pathLength), sidewalkLength: r1(sidewalkLength),
+    levelCrossings: w.roads.crossings.length, trafficLights: w.roads.signals.length,
+    pathLength: r1(pathLength), sidewalkLength: r1(sidewalkLength),
     zebras: w.walks.crossings.filter((c) => c.kind === "zebra").length, footCrossings: w.walks.footCrossings.length,
     buildings: w.town.buildings.length, people, cars: ownCars, parkingBays: w.town.bays.length, carParks: w.town.lots.length, throughTraffic: through,
     busStops: w.buses.stops.length, busLines: w.buses.lines.length, buses: w.buses.lines.reduce((a, l) => a + l.count, 0),

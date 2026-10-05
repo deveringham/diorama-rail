@@ -58,7 +58,9 @@ const Road = z
     id: Id,
     kind: z.enum(["line", "loop"]).default("line"),
     points: z.array(Waypoint).min(1).describe("Waypoints like a track's; corners are rounded with `minRadius`"),
-    width: z.number().min(3).max(14).default(6).describe("Carriageway width (m); two-way traffic, drive on the right"),
+    lanes: z.int().min(1).max(3).default(1).describe("Traffic lanes in each direction"),
+    width: z.number().min(3).max(24).optional()
+      .describe("Carriageway width (m); two-way traffic, drive on the right; default 6 m for each lane each way (6, 12, 18)"),
     minRadius: z.number().positive().default(10),
     maxGrade: z.number().positive().max(0.25).default(0.08),
     speed: z.number().positive().max(40).default(13).describe("Speed limit (m/s); 13 ≈ 50 km/h"),
@@ -73,7 +75,8 @@ const Road = z
     from: RoadEnd.optional(),
     to: RoadEnd.optional(),
   })
-  .superRefine((r, ctx) => lineChecks(r, "road", ctx));
+  .superRefine((r, ctx) => lineChecks(r, "road", ctx))
+  .transform((r) => ({ ...r, width: r.width ?? 6 * r.lanes }));
 
 /** Point counts and from/to rules shared by roads and paths. */
 function lineChecks(r: { kind: string; points: unknown[]; from?: unknown; to?: unknown }, noun: string, ctx: z.RefinementCtx): void {
@@ -236,6 +239,12 @@ const FleetEntry = z.strictObject({
     .describe("Colour of these vehicles; default one picked per vehicle"),
 });
 
+const TrafficLights = z.strictObject({
+  at: Vec2.describe("Where the road junction is: the nearest junction of three or more roads within 15 m gets the lights"),
+  green: z.number().min(5).max(90).default(20)
+    .describe("Longest green for each direction (s); it ends sooner when nothing more is coming and someone waits on red"),
+});
+
 const BusStop = z.strictObject({
   id: Id,
   name: z.string().min(1).optional().describe('Shown on the stop and in journeys; default from the id ("market-square" → "Market Square")'),
@@ -280,6 +289,8 @@ export const LayoutSchema = z.strictObject({
   roads: z.array(Road).default([]).describe("Road network: crossroads form automatically, level crossings where a road meets a track at grade"),
   paths: z.array(Path).default([])
     .describe("Footpaths: junctions form automatically, zebra crossings where a path crosses a road, foot crossings over tracks"),
+  trafficLights: z.array(TrafficLights).default([])
+    .describe("Traffic lights at road junctions: opposite approaches share a green, each direction in turn"),
   parking: z.array(ParkingLot).default([]).describe("Car parks: rows of bays along an aisle, joined to a road by a driveway"),
   busStops: z.array(BusStop).default([]).describe("Bus stops beside roads, on one side or both"),
   busLines: z.array(BusLine).default([]).describe("Bus lines: buses calling at stops in order along the roads; people ride them like trains"),
@@ -325,6 +336,7 @@ export type PathSpec = Layout["paths"][number];
 export type PathEndSpec = NonNullable<PathSpec["from"]>;
 export type ParkingLotSpec = Layout["parking"][number];
 export type BusStopSpec = Layout["busStops"][number];
+export type TrafficLightsSpec = Layout["trafficLights"][number];
 export type BusLineSpec = Layout["busLines"][number];
 export type OffPlaceSpec = Layout["offLayout"][number];
 export type FleetSpec = NonNullable<Layout["freight"]["vehicles"]>[number];

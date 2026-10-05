@@ -10,7 +10,7 @@ import type { SimSnapshot } from "../sim/sim";
 import { terrainMeshes } from "./terrainMesh";
 import { trackMeshes } from "./trackMesh";
 import { structureMeshes } from "./structures";
-import { roadMeshes, CrossingMeshes } from "./roadMesh";
+import { roadMeshes, CrossingMeshes, SignalMeshes } from "./roadMesh";
 import { VehicleMeshes } from "./vehicleMesh";
 import { walkMeshes } from "./walkMesh";
 import { WalkerMeshes } from "./walkerMesh";
@@ -37,10 +37,11 @@ export function buildScene(world: World, snap: SimSnapshot): DioramaScene {
   const trains = new TrainMeshes(world, snap);
   const vehicles = new VehicleMeshes(world, snap);
   const crossings = new CrossingMeshes(world);
+  const signals = new SignalMeshes(world);
   const freight = new FreightMeshes(world, snap);
   const walkers = new WalkerMeshes(world.layout.seed, snap);
   const life = new Life(scenery.chimneys);
-  scene.add(scenery.group, trains.group, vehicles.group, crossings.group, walkers.group, freight.group, life.group);
+  scene.add(scenery.group, trains.group, vehicles.group, crossings.group, signals.group, walkers.group, freight.group, life.group);
   const lighting = new Lighting(world, scene);
   lighting.setHour(world.layout.style.timeOfDay);
   // Static meshes never move: skip their per-frame matrix updates.
@@ -56,6 +57,7 @@ export function buildScene(world: World, snap: SimSnapshot): DioramaScene {
       trains.update(s);
       vehicles.update(s);
       crossings.update(s.gates);
+      signals.update(s.signals);
       freight.update(s);
       walkers.update(s);
       life.update(dt);
@@ -73,6 +75,7 @@ export function buildScene(world: World, snap: SimSnapshot): DioramaScene {
       trains.dispose();
       vehicles.dispose();
       crossings.dispose();
+      signals.dispose();
       freight.dispose();
       walkers.dispose();
       life.dispose();

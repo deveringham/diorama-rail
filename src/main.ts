@@ -58,7 +58,7 @@ if (shot) {
 let world: World | null = null;
 let sim: Sim | null = null;
 let dscene: DioramaScene | null = null;
-const snap: SimSnapshot = { time: 0, trains: [], switches: [], blocks: [], vehicles: [], gates: [], people: [], freight: { goods: [], yards: [], stock: [], trains: [] } };
+const snap: SimSnapshot = { time: 0, trains: [], switches: [], blocks: [], vehicles: [], gates: [], signals: [], people: [], freight: { goods: [], yards: [], stock: [], trains: [] } };
 let paused = false;
 let speed = 1;
 let shadows = true;

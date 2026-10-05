@@ -76,11 +76,12 @@ stations[]: { id, name, kind "passenger"|"freight", track, at (s of platform cen
               building "station-building" / freight "goods-shed" (object id, or null for none) }   (freight §8)
 services[]: { id, train "regional-3"|"express-6"|"freight-4"|"freight-10"|"tram-2", color? "#rrggbb", route [track ids],
               mode "loop"|"shuttle", stops [station or off-layout ids], dwell 25, count 1 }
-roads[]: { id, kind "line"|"loop", points [[x,y] | {at,z?,radius?}], width 6, minRadius 10, maxGrade 0.08, speed 13,
+roads[]: { id, kind "line"|"loop", points [[x,y] | {at,z?,radius?}], lanes 1, width 6·lanes, minRadius 10, maxGrade 0.08, speed 13,
            sidewalks "none"|"both"|"left"|"right", sidewalkWidth 2, parking "none"|"both"|"left"|"right",
            parkingStyle "parallel"|"perpendicular", name?, from? {road, at (s) | "start" | "end"}, to? {…} }   (§3, §4)
 paths[]: { id, kind "line"|"loop", points [[x,y] | {at,z?,radius?}], width 2, surface "gravel"|"paved", minRadius 3,
            maxGrade 0.12, name?, from? {path | road, at (s) | "start" | "end"} | {station}, to? {…} }   (§4)
+trafficLights[]: { at [x,y] (a junction of 3+ roads within 15 m), green 20 }                    traffic lights (§3)
 parking[]: { id, at [x,y], spaces 20, rotation?, road?, name? }                                  car parks (§3)
 busStops[]: { id, name?, road, at (s of the sign), side "both"|"left"|"right", shelter true }      bus stops (§6)
 busLines[]: { id, name?, stops [bus stop or off-layout ids], mode "shuttle"|"loop", count 1, dwell 12, capacity 40, vehicle "bus", color? }
@@ -122,7 +123,8 @@ Train lengths: `regional-3` 66 m, `express-6` 145 m, `freight-4` 74 m, `freight-
 
 Roads are a second network built the way track is — waypoints with filleted
 corners, heights held to a grade, bridges, tunnels and terrain shaping — and cars,
-vans and lorries drive on them, and buses on their lines (§6). Where a road meets a track at the same
+vans and lorries drive on them, and buses on their lines (§6). A road has one lane
+each way or more, and junctions may have traffic lights. Where a road meets a track at the same
 height there is a **level crossing**, with flashing lights and barriers that come
 down for every train.
 
@@ -142,9 +144,20 @@ down for every train.
 
 - **Geometry** works as for tracks: `points` are waypoints whose corners become
   arcs of `minRadius` (default 10 m) or a waypoint's `radius`; `kind` is `"line"`
-  or `"loop"`. `width` (default 6 m) is the carriageway, two lanes, driving on the
-  right. `speed` is the limit in m/s (default 13 ≈ 50 km/h); cars also slow for
-  curves and turns.
+  or `"loop"`. Traffic drives on the right. `lanes` (1–3, default 1) is the number
+  of lanes **each way**, and `width` the carriageway: by default 6 m for each lane
+  each way (6, 12 or 18 m). Lanes of a road with several each way should be at least
+  2.75 m wide (`ROAD_LANES`). `speed` is the limit in m/s (default 13 ≈ 50 km/h);
+  cars also slow for curves and turns.
+- **Several lanes each way:** a road gets a double centre line and dashed lines
+  between its lanes. Cars turn right from the lane by the kerb, left (or round)
+  from the one by the centre line, and go straight on from any (where nothing goes
+  straight on, the lanes are shared between the turns); turning, they go into the
+  nearest lane of the road they turn into, straight on into the same lane. Between
+  junctions they move across into the lane their next turn needs when there is a
+  gap (the car behind lets in one that waits), and buses, delivery vehicles and cars
+  going into a bay move into the lane by the kerb first; the others pass them. A road
+  of two lanes may run on as one of one lane: the lanes merge at the node.
 - **Junctions:** `from` / `to: { road, at }` starts or ends a road on another
   road: at `s = at` along it (a T-junction) or at its `"start"` / `"end"` (a
   corner). There is no `heading`: the road leaves straight toward its first
@@ -196,8 +209,22 @@ down for every train.
   ids, so the built-in `car`, `van` and `truck` or your own (front toward
   +x, origin at the centre, like any object; parts coloured `lamp` are
   headlights) — and drive about at random (straight on is twice as likely). All
-  keep their distance, take a junction only when it is free and there is room
-  beyond it, and never stop on a level crossing.
+  keep their distance and never stop on a level crossing. At a junction a car goes
+  when there is room beyond it and nobody is driving a way across the junction that
+  crosses or touches its own (judged by the sweep of a bus's body), first come first
+  served: so cars side by side, or coming straight toward each other, go together.
+  Where a turn's sweep would touch a car waiting at another road's line, cars there
+  wait a little further back.
+- **Traffic lights:** `trafficLights` puts lights at the junction of three or more
+  roads nearest each `at` (within 15 m; `SIGNAL_POSITION` otherwise, or for a
+  second set at one junction). Opposite roads share a green, any other road has one
+  of its own, each in turn: a green lasts at least 6 s and at most `green` (default
+  20 s), ending sooner when nobody more is coming and someone waits on red; then 3 s
+  of amber, and red all round until the junction is clear. With nobody waiting
+  elsewhere a green stays on. Cars go on green, and on amber only when too close to
+  stop. Each road gets a stop line and a pole on the drivers' right at it; a road of
+  several lanes also an arm with a second set of lamps over its lanes. People
+  crossing at the junction still wait for a gap in the traffic.
 - **Level crossings** start flashing when a train could arrive within about
   11 s (or is close enough to need to brake), lower their barriers once no car is
   on the crossing, and open when the train's tail has passed. A train only has to
@@ -757,6 +784,8 @@ lights the part warmly at night; `smoke: true` marks a chimney, and the object's
 | `STATION_RANGE` | error | Move `at` so `at ± length/2` lies within the track. |
 | `STATION_CURVE` | warning | Move the platform onto a straight (curves tighter than 300 m). |
 | `STATION_STRUCTURE` | warning | Move the platform off the bridge/tunnel, onto level ground. |
+| `ROAD_LANES` | warning | A road of several lanes each way is too narrow for them: give it 6 m of width for each lane each way, or fewer `lanes`. |
+| `SIGNAL_POSITION` | error | Traffic lights must be within 15 m of a junction of three or more roads (the message names the nearest), one entry per junction. |
 | `ROUTE_DISCONNECTED` | error | Consecutive route tracks must share a junction facing the right way; insert the connecting track. |
 | `ROUTE_NOT_CLOSED` | error | Use `mode: "shuttle"`, add tracks that lead back to the first one, or let the first track come in over the board's edge and the last leave it (a loop through the board). |
 | `STOP_NOT_ON_ROUTE` | error | Add the station's track to the route or drop the stop. An off-layout stop needs a `via` on a track at an end of the route that leaves the board. |
@@ -828,7 +857,8 @@ each file is the scenery list, one placement per line.
   over a short viaduct to the north edge; the tram calls at Bergdorf and runs on
   off the board to Hochdorf.
 - Roads: a country road from the west edge to the east edge, leaving the board
-  at both (three roads joined end to end, so only the town stretch, `market-street`, has sidewalks), over
+  at both (three roads joined end to end: two lanes each way out of town, one lane
+  and sidewalks along `market-street`, with traffic lights at its three crossroads), over
   both sides of the main line at level crossings and through a dip under the
   `hill` viaduct;
   Lindenau's streets as a small grid of crossroads, T-junctions and corners; a
@@ -897,7 +927,9 @@ each file is the scenery list, one placement per line.
   a row of houses facing the sea, joined round the end of the line to streets
   inland up to a church; a `pier` (a path running out over the sea, so it stands
   on piles) and moored `fishing-boat`s placed at `z: 0`.
-- An inland road climbs over the hills past a hamlet to Ostkap's streets; a
+- An inland road of two lanes each way climbs over the hills past a hamlet to
+  Ostkap's streets, with traffic lights where the goods yard's lane and the
+  lighthouse lane leave it; a
   lane leaves it over a level crossing west of Ostkap station and runs along the
   shore to the `lighthouse`. 8 vehicles of through traffic. A `beach-path`
   leaves the inland road and crosses the line at a foot crossing (a waypoint `z`

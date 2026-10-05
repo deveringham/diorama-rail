@@ -184,13 +184,29 @@ filleted waypoints, heights that follow the smoothed ground within `maxGrade`
 (a waypoint `z` pins one point), bridges, tunnels and terrain shaping, T-junctions
 and corners via `from`/`to`, crossroads wherever two roads cross at about the
 same height, and level crossings wherever a road meets a track within 3 m of its
-height. The sim (`src/sim/traffic.ts`) drives vehicles on two right-hand lanes:
+height. A road has one lane each way or more (`lanes`), and junctions may have
+traffic lights (`trafficLights`). The sim (`src/sim/traffic.ts`) drives vehicles
+on the right:
 
 - Cars follow the car ahead (a time gap plus a minimum distance), slow for
-  curves and turns, and choose turns at random. They pass a junction one at a
-  time, and only when there is room beyond it, so they never block one; nor do
-  they stop on a level crossing. Roads that end on the board's edge lead off
-  it (cars drive off and come back); at other dead ends cars turn round.
+  curves and turns, and choose turns at random. At a junction a car goes only
+  when there is room beyond it, so cars never block one, and when nobody is
+  driving a way across it that crosses or touches its own — judged by the sweep
+  of a bus's body through each turn — first come, first served: cars side by
+  side, or coming straight toward each other, go together. Nor do they stop on a
+  level crossing. Roads that end on the board's edge lead off it (cars drive off
+  and come back); at other dead ends cars turn round.
+- On a road of several lanes each way, cars turn right from the lane by the
+  kerb, left from the one by the centre line and go straight on from any; they
+  move across into the lane their next turn needs when there is a gap (the car
+  behind lets in one that waits, and one kept waiting at a junction in the wrong
+  lane for long takes another way). Buses, delivery vehicles and cars going into
+  a bay keep to the lane by the kerb; others pass them.
+- Traffic lights give opposite roads a green together and the others in turn:
+  a green lasts while cars keep coming and someone waits on red (6 s to `green`,
+  default 20 s), then amber and red all round until the junction is clear; with
+  nobody waiting elsewhere it stays green. Cars go on green, and on amber only
+  when too close to stop.
 - A level crossing starts flashing when a train could arrive within about 11 s
   (a pessimistic estimate: the line's speed limits, accelerating from its
   current speed, after any remaining dwell) or is too close to brake comfortably,
@@ -199,10 +215,11 @@ height. The sim (`src/sim/traffic.ts`) drives vehicles on two right-hand lanes:
   examples never need.
 - Crossings close together on one road (a road over double track) work as one:
   they flash, close and open together, with barriers only outside the group.
-- Limitations: no traffic lights, overtaking, parking or right of way between
-  junction approaches beyond first come, first served (a car kept waiting
-  because its way out is full takes another); one vehicle at a time in a
-  junction.
+- Limitations: no right of way between junction approaches beyond first come,
+  first served (a car kept waiting because its way out is full takes another);
+  no overtaking on roads of one lane each way, and no pedestrian phase at
+  traffic lights (people wait for a gap); vehicles are rigid boxes, so at the
+  tightest corners a long bus may brush a car waiting at the line.
 
 ### Sidewalks, paths and people
 

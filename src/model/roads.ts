@@ -12,7 +12,7 @@ import { type Terrain, baseZ } from "./terrain";
 import { type Issue, error, warning } from "./validate";
 import { EDGE_SNAP, offEdge } from "./exits";
 import { SpatialHash } from "../util/spatial";
-import { type V2, mod, wrapAngle } from "../util/vec";
+import { type V2, mod, wrapAngle, clamp } from "../util/vec";
 
 const LEVEL_DZ = 3;              // m: road and track this close in height meet at grade
 const RAIL_CLEAR = 6.5;          // m: height difference for a road to pass over or under a track
@@ -50,6 +50,19 @@ export type JunctionArea = {
   // mitred outward direction at each point (point + out·d lies d metres outside).
   kerbs: Array<{ points: Array<[number, number, number]>; out: V2[]; sidewalk: boolean }>;
 };
+/** One set of lamps at a junction with traffic lights: for the traffic arriving along one leg. */
+export type SignalHead = {
+  leg: number;                   // node.legs index: the traffic arriving along this leg
+  stopS: number;                 // s on the leg's road of the stop line
+  post: [number, number, number]; // the pole, beyond the kerb on the arriving drivers' right
+  facing: number;                // heading the lamps face (toward the arriving drivers)
+  arm: number;                   // m a mast arm reaches out over the lanes from the pole (0: lamps on the pole only)
+};
+/**
+ * Traffic lights at a junction: the legs in groups (opposite legs together, others
+ * alone), each group green in turn, and a set of lamps for each leg.
+ */
+export type SignalGeom = { index: number; node: number; green: number; phases: number[][]; heads: SignalHead[] };
 export type LevelCrossing = {
   id: string;
   kind: "road" | "path";         // a road (cars and its sidewalks) or a footpath crossing the line
@@ -88,6 +101,19 @@ export function parkingWidth(spec: RoadSpec, side: 1 | -1): number {
 
 /** From the road's centre to the kerb on one side: the carriageway plus any parking strip. */
 export const kerbOffset = (spec: RoadSpec, side: 1 | -1) => spec.width / 2 + parkingWidth(spec, side);
+
+/** Width of one traffic lane. */
+export const laneWidth = (spec: Pick<RoadSpec, "width" | "lanes">) => spec.width / (2 * spec.lanes);
+
+/**
+ * Offset along the road's left normal of the centre of lane `track` for traffic going
+ * in direction `dir` (driving on the right): track 0 runs by the kerb, the last next
+ * to the centre line.
+ */
+export const laneLateral = (spec: Pick<RoadSpec, "width" | "lanes">, dir: 1 | -1, track: number) =>
+  -dir * laneWidth(spec) * (spec.lanes - track - 0.5);
+
+export const LANE_MIN = 2.75;    // m: narrower lanes on a road of several lanes each way get a warning
 
 /** Half-width of the paved road on its wider side (carriageway and parking). */
 export const pavedHalf = (spec: RoadSpec) => Math.max(kerbOffset(spec, 1), kerbOffset(spec, -1));
@@ -311,6 +337,7 @@ export type RoadNet = {
   stops: Map<string, Array<{ s: number; node: number }>>;   // nodes along each road, by s
   crossings: LevelCrossing[];
   junctions: JunctionArea[];
+  signals: SignalGeom[];                                   // traffic lights, in the layout's order
   trims: Map<string, Array<[number, number]>>;              // s-ranges inside a junction area, which draws them
   points: RoadPoint[];
   hash: SpatialHash<RoadPoint>;
@@ -318,7 +345,7 @@ export type RoadNet = {
 
 export const emptyRoadNet = (): RoadNet => ({
   roads: new Map(), order: [], profiles: new Map(), spans: new Map(), nodes: [], stops: new Map(), crossings: [],
-  junctions: [], trims: new Map(), points: [], hash: new SpatialHash<RoadPoint>(10),
+  junctions: [], signals: [], trims: new Map(), points: [], hash: new SpatialHash<RoadPoint>(10),
 });
 
 type Ctx = {
@@ -597,7 +624,10 @@ export function buildRoads(ctx: Ctx): { net: RoadNet | null; issues: Issue[] } {
   }
   const hash = new SpatialHash<RoadPoint>(10);
   for (const p of points) hash.insert(p.x, p.y, p);
-  const net: RoadNet = { roads, order, profiles, spans, nodes, stops, crossings, junctions, trims, points, hash };
+  const net: RoadNet = { roads, order, profiles, spans, nodes, stops, crossings, junctions, signals: [], trims, points, hash };
+  const sig = buildSignals(layout, net);
+  net.signals = sig.signals;
+  issues.push(...sig.issues);
   issues.push(...checkRoads(ctx, net));
   return { net, issues };
 }
@@ -650,10 +680,79 @@ function buildRoadPath(spec: RoadSpec, index: number, built: Map<string, RoadGeo
 }
 
 /** Bounds, clearances to tracks and other roads, and where level crossings may go. */
+const SIGNAL_REACH = 15;          // m from a traffic lights entry to the junction it belongs to
+const OPPOSITE = (40 * Math.PI) / 180;   // legs this close to straight across each other share a green
+
+/** Traffic lights: the junction each entry belongs to, its groups of legs and where its lamps stand. */
+function buildSignals(layout: Layout, net: RoadNet): { signals: SignalGeom[]; issues: Issue[] } {
+  const signals: SignalGeom[] = [];
+  const issues: Issue[] = [];
+  layout.trafficLights.forEach((spec, index) => {
+    const where = `trafficLights[${index}].at`;
+    let best: RoadNode | null = null;
+    let bd = Infinity;
+    for (const n of net.nodes) {
+      const d = Math.hypot(n.at[0] - spec.at[0], n.at[1] - spec.at[1]);
+      if (n.legs.length >= 3 && d < bd) { bd = d; best = n; }
+    }
+    if (!best || bd > SIGNAL_REACH) {
+      const near = best ? `; the nearest is ${bd.toFixed(0)} m away at (${best.at[0].toFixed(0)}, ${best.at[1].toFixed(0)})` : "; there is none on the board";
+      issues.push(error("SIGNAL_POSITION", `traffic lights at (${spec.at[0]}, ${spec.at[1]}) are not at a junction of three or more roads${near}; move them within ${SIGNAL_REACH} m of one`, where, spec.at));
+      return;
+    }
+    const n = best;
+    const other = signals.find((x) => x.node === n.id);
+    if (other) {
+      issues.push(error("SIGNAL_POSITION", `traffic lights at (${spec.at[0]}, ${spec.at[1]}) are at the same junction as trafficLights[${other.index}]; give each junction one entry`, where, spec.at));
+      return;
+    }
+    // Opposite legs share a green; any other leg has one of its own.
+    const legs = sortedLegs(net, n);
+    const phases: number[][] = [];
+    const used = new Set<number>();
+    for (const a of legs) {
+      if (used.has(a.i)) continue;
+      used.add(a.i);
+      let pair: (typeof legs)[number] | null = null;
+      for (const b of legs) {
+        if (used.has(b.i)) continue;
+        const off = Math.abs(wrapAngle(a.theta - b.theta - Math.PI));
+        if (off < OPPOSITE && (!pair || off < Math.abs(wrapAngle(a.theta - pair.theta - Math.PI)))) pair = b;
+      }
+      if (pair) used.add(pair.i);
+      phases.push(pair ? [a.i, pair.i] : [a.i]);
+    }
+    // Lamps for each leg: at the stop line, on the arriving drivers' right; over the lanes too on a wide road.
+    const heads: SignalHead[] = n.legs.map((leg, li) => {
+      const road = net.roads.get(leg.road)!;
+      const L = road.path.length;
+      let stop = junctionStop(net, n, li);
+      const next = nextNode(net, road, leg.s, leg.dir);
+      if (next) stop = Math.min(stop, Math.max(0, next.dist / 2 - 0.5));
+      const raw = leg.s + leg.dir * stop;
+      const stopS = road.path.closed ? mod(raw, L) : clamp(raw, 0, L);
+      const [x, y] = pointAt(road.path, stopS);
+      const h = headingAt(road.path, stopS);
+      const lat = leg.dir * (kerbOffset(road.spec, leg.dir) + 0.6);
+      const z = profileZ(net.profiles.get(leg.road)!, stopS);
+      const arm = road.spec.lanes > 1 ? Math.max(0, Math.abs(lat) - road.spec.width / 4) : 0;
+      return { leg: li, stopS, post: [x - Math.sin(h) * lat, y + Math.cos(h) * lat, z], facing: h + (leg.dir < 0 ? Math.PI : 0), arm };
+    });
+    signals.push({ index, node: n.id, green: spec.green, phases, heads });
+  });
+  return { signals, issues };
+}
+
 function checkRoads(ctx: Ctx, net: RoadNet): Issue[] {
   const issues: Issue[] = [];
   const [W, H] = ctx.layout.terrain.size;
   const road = (id: string) => net.roads.get(id)!;
+  for (const r of net.roads.values()) {
+    const lw = laneWidth(r.spec);
+    if (r.spec.lanes > 1 && lw < LANE_MIN - 1e-9) {
+      issues.push(warning("ROAD_LANES", `road '${r.id}' has ${r.spec.lanes} lanes each way in ${r.spec.width} m, only ${lw.toFixed(2)} m a lane; give it a width of ${(6 * r.spec.lanes).toFixed(0)} m (3 m a lane) or fewer lanes`, `roads[${r.index}].width`));
+    }
+  }
   for (const r of net.roads.values()) {
     const out = net.points.find((p) => p.road === r.id && (p.x < BOUNDS_MARGIN || p.y < BOUNDS_MARGIN || p.x > W - BOUNDS_MARGIN || p.y > H - BOUNDS_MARGIN)
       && !offEdge(ctx.layout.terrain.size, r, p.s, BOUNDS_MARGIN));

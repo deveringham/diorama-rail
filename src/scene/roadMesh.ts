@@ -10,7 +10,7 @@ import type { World } from "../model/build";
 import type { GateSnapshot } from "../sim/traffic";
 import { pointAt, headingAt, sampleS } from "../model/geometry";
 import { profileZ, structureAt } from "../model/heights";
-import { CROSSING_ROAD_Z, sidewalkWidth, kerbOffset, pavedHalf, type LevelCrossing, type JunctionArea } from "../model/roads";
+import { CROSSING_ROAD_Z, sidewalkWidth, kerbOffset, pavedHalf, laneWidth, type LevelCrossing, type JunctionArea, type SignalHead } from "../model/roads";
 import { LOT_AISLE, BAY_DEPTH, lotFrame } from "../model/parking";
 import { FRONT_PAST } from "../model/buses";
 import { PALETTE } from "./palette";
@@ -34,6 +34,11 @@ const ARM_UP = (85 * Math.PI) / 180;
 const RAIL_GAUGE = 1.435;
 const RAIL_TOP = 0.28;
 const BAY_LINE = 0.06;           // m half-width of a parking bay's painted line
+const DOUBLE_GAP = 0.18;         // m either side of the centre for a double centre line
+const POLE = 3.6;                // m: a traffic light pole (taller with an arm over the lanes)
+const ARM_Z = 5.6;               // m: the arm's height
+const HOUSING = [0.32, 0.4, 1.0]; // m: a light head's depth, width and height
+const LAMP_STEP = 0.3;           // m between its lamps
 
 export function roadFrame(world: World, road: string, s: number): Frame {
   const r = world.roads.roads.get(road)!;
@@ -89,7 +94,8 @@ export function roadMeshes(world: World): THREE.Object3D[] {
       else if (!bridge) g.quad(side(a, -kr - VERGE, -VERGE_DROP), side(b, -kr - VERGE, -VERGE_DROP), side(b, -kr, 0), side(a, -kr, 0), PALETTE.verge[season]);
     }
 
-    // Dashed centre line, kept out of junctions, crossings, narrow lanes and car parks; snow hides it.
+    // Markings, kept out of junctions, crossings, narrow lanes and car parks; snow hides them. One lane
+    // each way: a dashed centre line; more: a double solid one, and dashes between the lanes.
     if (r.spec.width < 5 || season === "winter" || lots.has(r.id)) continue;
     const quiet: Array<[number, number]> = trims.map(([a, b]) => [a - 2, b + 2]);
     for (const n of net.nodes) {
@@ -102,13 +108,42 @@ export function roadMeshes(world: World): THREE.Object3D[] {
     for (const c of net.crossings) if (c.road === r.id) quiet.push([c.roadS - c.zone - 2, c.roadS + c.zone + 2]);
     for (const c of world.walks.crossings) if (c.road === r.id && c.kind === "zebra") quiet.push([c.roadS - c.half - 1.5, c.roadS + c.half + 1.5]);
     if (!r.path.closed) quiet.push([-Infinity, 2], [L - 2, Infinity]);
-    for (let s = 1; s + DASH <= L; s += 2 * DASH) {
+    const line = (s0: number, s1: number, lat: number) => {
+      const a = roadFrame(world, r.id, s0);
+      const b = roadFrame(world, r.id, s1);
+      marks.quad(side(a, lat - LINE_HALF, MARK_LIFT), side(b, lat - LINE_HALF, MARK_LIFT), side(b, lat + LINE_HALF, MARK_LIFT), side(a, lat + LINE_HALF, MARK_LIFT), PALETTE.roadLine);
+    };
+    const lanes = r.spec.lanes;
+    const lw = laneWidth(r.spec);
+    for (let s = 1; s + DASH <= L; s += DASH) {
       if (inRanges(s, quiet) || inRanges(s + DASH, quiet) || hidden(s)) continue;
-      const a = roadFrame(world, r.id, s);
-      const b = roadFrame(world, r.id, s + DASH);
-      marks.quad(side(a, -LINE_HALF, MARK_LIFT), side(b, -LINE_HALF, MARK_LIFT), side(b, LINE_HALF, MARK_LIFT), side(a, LINE_HALF, MARK_LIFT), PALETTE.roadLine);
+      const dash = Math.round((s - 1) / DASH) % 2 === 0;
+      if (lanes === 1) { if (dash) line(s, s + DASH, 0); continue; }
+      for (const lat of [-DOUBLE_GAP, DOUBLE_GAP]) line(s, s + DASH, lat);
+      if (!dash) continue;
+      for (let m = 1; m < lanes; m++) for (const sd of [1, -1]) line(s, s + DASH, sd * m * lw);
     }
   }
+
+  // Stop lines where traffic lights stand: across the lanes coming in, just before where cars wait.
+  if (season !== "winter") {
+    for (const sig of net.signals) {
+      const n = net.nodes[sig.node];
+      for (const head of sig.heads) {
+        const leg = n.legs[head.leg];
+        const r = net.roads.get(leg.road)!;
+        const L = r.path.length;
+        const at = (d: number) => {
+          const s = head.stopS + leg.dir * d;
+          return roadFrame(world, r.id, r.path.closed ? ((s % L) + L) % L : Math.min(Math.max(s, 0), L));
+        };
+        const [a, b] = leg.dir > 0 ? [at(0.1), at(0.5)] : [at(0.5), at(0.1)];
+        const [l0, l1] = leg.dir > 0 ? [0.25, r.spec.width / 2 - 0.2] : [-(r.spec.width / 2 - 0.2), -0.25];
+        marks.quad(side(a, l0, MARK_LIFT), side(b, l0, MARK_LIFT), side(b, l1, MARK_LIFT), side(a, l1, MARK_LIFT), PALETTE.roadLine);
+      }
+    }
+  }
+  for (const sig of net.signals) for (const head of sig.heads) signalFurniture(world, g, sig.node, head);
 
   for (const j of net.junctions) junction(g, j, season);
 
@@ -158,6 +193,92 @@ export function roadMeshes(world: World): THREE.Object3D[] {
     out.push(markings);
   }
   return out;
+}
+
+/** A traffic light's heads (housing centres): on the pole and, over a wide road, at the end of an arm. */
+export function signalHeads(world: World, node: number, head: SignalHead): Array<{ x: number; y: number; z: number; facing: number }> {
+  const [px, py, pz] = head.post;
+  const out = [{ x: px, y: py, z: pz + 2.4 + HOUSING[2] / 2, facing: head.facing }];
+  if (head.arm > 0) {
+    const [ax, ay] = armDir(world, node, head);
+    out.push({ x: px + ax * head.arm, y: py + ay * head.arm, z: pz + ARM_Z - 0.2 - HOUSING[2] / 2, facing: head.facing });
+  }
+  return out;
+}
+
+/** Across the road from a traffic light pole, toward its middle. */
+function armDir(world: World, node: number, head: SignalHead): [number, number] {
+  const leg = world.roads.nodes[node].legs[head.leg];
+  const f = roadFrame(world, leg.road, head.stopS);
+  const [dx, dy] = [f.x - head.post[0], f.y - head.post[1]];
+  const len = Math.hypot(dx, dy) || 1;
+  return [dx / len, dy / len];
+}
+
+/** A traffic light's pole, its head, and on a wide road an arm reaching out over the lanes with a second head. */
+function signalFurniture(world: World, g: GeoBuilder, node: number, head: SignalHead): void {
+  const [px, py, pz] = head.post;
+  g.box(px, py, pz - 0.3, 0.16, 0.16, (head.arm > 0 ? ARM_Z + 0.2 : POLE) + 0.3, head.facing, PALETTE.signalPole);
+  if (head.arm > 0) {
+    const [ax, ay] = armDir(world, node, head);
+    g.box(px + ax * head.arm / 2, py + ay * head.arm / 2, pz + ARM_Z, head.arm, 0.12, 0.14, Math.atan2(ay, ax), PALETTE.signalPole);
+  }
+  for (const l of signalHeads(world, node, head)) g.box(l.x, l.y, l.z - HOUSING[2] / 2, HOUSING[0], HOUSING[1], HOUSING[2], l.facing, PALETTE.signalHousing);
+}
+
+/** Traffic light lamps, lit every frame from the sim's signal states: red at the top, amber, green. */
+export class SignalMeshes {
+  readonly group = new THREE.Group();
+  private lamps: THREE.InstancedMesh | null = null;
+  private heads: number[] = [];          // per lamp set: the head (in the sim's order) it shows
+  private colors = (["red", "amber", "green"] as const).map((k) => PALETTE.lights[k].map((c) => new THREE.Color(c)));
+
+  constructor(world: World) {
+    const sets: Array<{ x: number; y: number; z: number; facing: number }> = [];
+    let h = 0;
+    for (const sig of world.roads.signals) {
+      for (const head of sig.heads) {
+        for (const l of signalHeads(world, sig.node, head)) { sets.push(l); this.heads.push(h); }
+        h++;
+      }
+    }
+    if (!sets.length) return;
+    const lg = new GeoBuilder();
+    lg.box(0, 0, -0.11, 0.06, 0.22, 0.22, 0, 0xffffff);
+    this.lamps = new THREE.InstancedMesh(lg.build(), new THREE.MeshBasicMaterial({ color: 0xffffff }), sets.length * 3);
+    this.lamps.name = "traffic-lights";
+    const m = new THREE.Matrix4();
+    const q = new THREE.Quaternion();
+    const e = new THREE.Euler(0, 0, 0, "YZX");
+    const p = new THREE.Vector3();
+    const one = new THREE.Vector3(1, 1, 1);
+    sets.forEach((l, i) => {
+      for (let k = 0; k < 3; k++) {
+        q.setFromEuler(e.set(0, l.facing, 0));
+        // On the housing's face, toward the drivers.
+        const out = HOUSING[0] / 2 + 0.02;
+        this.lamps!.setMatrixAt(i * 3 + k, m.compose(toThree(l.x + Math.cos(l.facing) * out, l.y + Math.sin(l.facing) * out, l.z + (1 - k) * LAMP_STEP, p), q, one));
+        this.lamps!.setColorAt(i * 3 + k, this.colors[k][1]);
+      }
+    });
+    this.lamps.computeBoundingSphere();
+    this.group.add(this.lamps);
+  }
+
+  update(signals: number[]): void {
+    if (!this.lamps) return;
+    this.heads.forEach((h, i) => {
+      const on = signals[h] ?? 0;          // 0 red, 1 amber, 2 green: the lamp of that colour is lit
+      for (let k = 0; k < 3; k++) this.lamps!.setColorAt(i * 3 + k, this.colors[k][k === on ? 0 : 1]);
+    });
+    if (this.lamps.instanceColor) this.lamps.instanceColor.needsUpdate = true;
+  }
+
+  dispose(): void {
+    if (!this.lamps) return;
+    this.lamps.geometry.dispose();
+    (this.lamps.material as THREE.Material).dispose();
+  }
 }
 
 /** A junction area's surface, with kerb faces (where a sidewalk runs) or sloping verges round its outer edges. */
@@ -257,7 +378,7 @@ function busStops(world: World, g: GeoBuilder, marks: GeoBuilder): void {
     const front = st.s + st.dir * (FRONT_PAST + 1);
     const back = st.s - st.dir * (st.reach - FRONT_PAST + 1);
     const [s0, s1] = [Math.min(front, back), Math.max(front, back)];
-    const inner = st.side * 0.35;
+    const inner = st.side * Math.max(0.35, road.spec.width / 2 - laneWidth(road.spec) + 0.2);   // the lane by the kerb
     const outer = st.side * (road.spec.width / 2 - 0.2);
     const n = Math.max(2, Math.ceil((s1 - s0) / STEP));
     const frames = Array.from({ length: n + 1 }, (_, i) => roadFrame(world, stop.road, wrap(s0 + ((s1 - s0) * i) / n)));

@@ -193,7 +193,7 @@ describe.each([
 ])("%s traffic", (_, make) => {
   const { world } = buildWorld(make());
   const sim = new Sim(world!);
-  const snap: SimSnapshot = { time: 0, trains: [], switches: [], blocks: [], vehicles: [], gates: [], people: [], freight: { goods: [], yards: [], stock: [], trains: [] } };
+  const snap: SimSnapshot = { time: 0, trains: [], switches: [], blocks: [], vehicles: [], gates: [], signals: [], people: [], freight: { goods: [], yards: [], stock: [], trains: [] } };
   let overlaps = 0;
   let unsafe = 0;
   const closedSeen = new Set<number>();
@@ -233,6 +233,7 @@ describe.each([
   it("does not hold up the trains", () => {
     const L = make();
     L.roads = [];
+    L.trafficLights = [];
     L.paths = [];
     L.parking = [];
     L.busStops = [];

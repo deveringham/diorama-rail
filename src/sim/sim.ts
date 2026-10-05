@@ -14,7 +14,7 @@ import { TIME_SCALE } from "../model/catalog";
 import { type Blocks, buildBlocks } from "./blocks";
 import { type Plan, buildPlans } from "./services";
 import { type Train, type Phase, type World4Trains, spawn, stepTrain, forEachCar, nextStopOf, entryOf, onBoard } from "./trains";
-import { type VehicleSnapshot, type GateSnapshot, type TrafficStats, Traffic } from "./traffic";
+import { type VehicleSnapshot, type GateSnapshot, type SignalSnapshot, type TrafficStats, Traffic } from "./traffic";
 import { type PersonSnapshot, type PeopleStats, People } from "./people";
 import { type FreightSnapshot, type FreightStats, Freight } from "./freight";
 import { rng } from "../util/rng";
@@ -49,6 +49,7 @@ export type SimSnapshot = {
   time: number; trains: TrainSnapshot[]; switches: SwitchState[]; blocks: number[];
   vehicles: VehicleSnapshot[];        // road traffic
   gates: GateSnapshot[];              // level crossings (world.roads.crossings), then foot crossings (world.walks.footCrossings)
+  signals: SignalSnapshot;            // traffic light heads (world.roads.signals, their heads in order): 0 red, 1 amber, 2 green
   people: PersonSnapshot[];           // every resident (hidden while indoors, driving or on a train)
   freight: FreightSnapshot;           // goods waiting at yards, ready at sources, aboard trains
 };
@@ -154,7 +155,7 @@ export class Sim {
 
   /** Current state. Pass the previous snapshot as `out` to update it in place. */
   snapshot(out?: SimSnapshot): SimSnapshot {
-    const snap: SimSnapshot = out ?? { time: 0, trains: [], switches: [], blocks: [], vehicles: [], gates: [], people: [], freight: this.freight.snapshot() };
+    const snap: SimSnapshot = out ?? { time: 0, trains: [], switches: [], blocks: [], vehicles: [], gates: [], signals: [], people: [], freight: this.freight.snapshot() };
     snap.time = this.time;
     snap.switches = this.state.switchStates;
     const owner = this.state.owner;
@@ -189,6 +190,7 @@ export class Sim {
     });
     this.traffic.snapshotCars(snap.vehicles);
     this.traffic.snapshotGates(snap.gates);
+    this.traffic.snapshotSignals(snap.signals);
     this.people.snapshot(snap.people);
     this.freight.snapshot(snap.freight);
     return snap;
