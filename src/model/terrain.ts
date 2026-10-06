@@ -6,7 +6,7 @@ import type { Layout, FeatureSpec } from "./schema";
 import { simplex2, fbm } from "../util/noise";
 import { hashString } from "../util/rng";
 import { clamp, lerp, smoothstep } from "../util/vec";
-import { bboxOf, polylineDistance } from "../util/polygon";
+import { bboxOf, insidePolygon, polylineDistance, segmentDistance } from "../util/polygon";
 
 const FEATURE_FALLOFF = 3;      // exp(-3·(d/r)²): ~5% of a feature's height remains at its radius
 const BED_DEPTH = 0.4;          // ground sits this far below the rail-level track z
@@ -48,18 +48,28 @@ export function buildTerrain(layout: Layout): Terrain {
       base[j * (nx + 1) + i] = baseHeight + noise.amplitude * fbm(n2, (i * cx) / noise.scale, (j * cy) / noise.scale);
     }
   }
-  // Each feature only within its reach, so many small ones stay cheap.
+  // Each feature in turn, only within its reach, so many small ones stay cheap.
   features.forEach((f, k) => {
-    const height = featureHeight(f, layout.seed, k);
-    const pts = f.points ?? [f.at!];
+    const profile = featureProfile(f, layout.seed, k);
+    const pts: Array<readonly number[]> = f.points ?? f.area ?? [f.at!];
     const reach = f.radius * (f.shape === "mesa" ? 1 : REACH) * (1 + 0.7 * f.rough) + cell;
-    const box = bboxOf(pts, reach);
+    const box = bboxOf(pts.map((p) => [p[0], p[1]] as [number, number]), reach);
     const i0 = Math.max(0, Math.floor(box.x0 / cx));
     const i1 = Math.min(nx, Math.ceil(box.x1 / cx));
     const j0 = Math.max(0, Math.floor(box.y0 / cy));
     const j1 = Math.min(ny, Math.ceil(box.y1 / cy));
     for (let j = j0; j <= j1; j++) {
-      for (let i = i0; i <= i1; i++) base[j * (nx + 1) + i] += height(i * cx, j * cy);
+      for (let i = i0; i <= i1; i++) {
+        const v = j * (nx + 1) + i;
+        const { f: w, level } = profile(i * cx, j * cy);
+        if (w <= 0) continue;
+        if (f.height !== undefined) base[v] += f.height * w;
+        else {
+          const z = base[v];
+          if ((f.direction === "down" && z <= level) || (f.direction === "up" && z >= level)) continue;
+          base[v] = lerp(z, level, w);
+        }
+      }
     }
   });
   return { width, height, nx, ny, cx, cy, base, shaped: base.slice(), seaLevel };
@@ -69,35 +79,62 @@ const REACH = 1.8;              // × radius beyond which a bump adds nothing wo
 const CLIFF_RUN = 0.2;          // share of a mesa's slope (from the plateau's edge to its foot) taken by the cliff
 
 /**
- * A feature's height above the ground around it, at any point. Distances are to its
- * centre or (a ridge) its polyline, stretched by noise when it is `rough` so the
- * outline wanders. A mesa falls from its flat top in a sheer cliff, then a talus slope:
+ * A feature's shape at any point: f, from 1 at its top (on the flat top of a mesa,
+ * inside an area) to 0 at its foot, and the level it pulls the ground to there (with
+ * `level`, or levels along its points). Distances are to its centre, its polyline or
+ * (an area) its rim, stretched by noise when it is `rough` so the outline wanders.
+ * A mesa falls from its flat top in a sheer cliff, then a talus slope:
  *
- *        plateau          ← flat top, `plateau` · radius
+ *        plateau          ← flat top: `plateau` · radius, or the area itself
  *      ___________
  *     |           |       ← cliff: `cliff` · height over 20% of the slope
  *    /             \      ← talus, easing out to the foot at `radius`
  */
-export function featureHeight(f: FeatureSpec, seed: number, k: number): (x: number, y: number) => number {
-  const pts = f.points ?? [f.at!];
+export function featureProfile(f: FeatureSpec, seed: number, k: number): (x: number, y: number) => { f: number; level: number } {
   const R = f.radius;
   const n = f.rough > 0 ? simplex2((seed ^ hashString(`feature-${k}`)) >>> 0) : null;
-  const dist = (x: number, y: number) => {
-    const d = pts.length === 1 ? Math.hypot(x - pts[0][0], y - pts[0][1]) : polylineDistance(pts, x, y);
-    // Ragged outline: lobes about a third of the radius across, plus finer notches.
-    if (!n) return d;
-    const w = (fbm(n, x / (R * 0.45), y / (R * 0.45), 3) * 0.75 + n(x / (R * 0.12), y / (R * 0.12)) * 0.25) * 0.35 * f.rough;
-    return d * (1 - w) - w * R * 0.15;
-  };
-  if (f.shape === "bump") return (x, y) => f.height * Math.exp(-FEATURE_FALLOFF * (dist(x, y) / R) ** 2);
-  const top = f.plateau * R;
-  const run = R - top;
+  const wobble = (x: number, y: number) => n
+    ? (fbm(n, x / (R * 0.45), y / (R * 0.45), 3) * 0.75 + n(x / (R * 0.12), y / (R * 0.12)) * 0.25) * 0.35 * f.rough
+    : 0;
+  const line = f.points?.map((p) => [p[0], p[1]] as [number, number]);
+  const levels = f.points && f.points[0].length === 3 ? f.points.map((p) => p[2]!) : null;
+  // Distance from the top's edge, in radii (≤ 0 on the top), and the level there.
+  let where: (x: number, y: number) => { t: number; level: number };
+  if (f.area) {
+    const area = f.area;
+    where = (x, y) => {
+      const d = (insidePolygon(area, x, y) ? -1 : 1) * polylineDistance(area, x, y, true);
+      const w = wobble(x, y);
+      return { t: d / R - w * 0.9, level: f.level ?? 0 };
+    };
+  } else {
+    const top = f.shape === "mesa" ? f.plateau * R : 0;
+    where = (x, y) => {
+      let d: number;
+      let level = f.level ?? 0;
+      if (line) {
+        let best = Infinity;
+        for (let i = 0; i + 1 < line.length; i++) {
+          const sd = segmentDistance(line[i], line[i + 1], x, y);
+          if (sd.d < best) {
+            best = sd.d;
+            if (levels) level = lerp(levels[i], levels[i + 1], sd.t);
+          }
+        }
+        d = best;
+      } else d = Math.hypot(x - f.at![0], y - f.at![1]);
+      const w = wobble(x, y);
+      d = d * (1 - w) - w * R * 0.15;
+      return { t: f.shape === "mesa" ? (d - top) / (R - top) : d / R, level };
+    };
+  }
   return (x, y) => {
-    const t = (dist(x, y) - top) / run;
-    if (t <= 0) return f.height;
-    if (t >= 1) return 0;
-    if (t < CLIFF_RUN) return f.height * (1 - f.cliff * (t / CLIFF_RUN));
-    return f.height * (1 - f.cliff) * (1 - smoothstep(CLIFF_RUN, 1, t));
+    const { t, level } = where(x, y);
+    if (f.shape === "bump") return { f: t <= 0 ? 1 : Math.exp(-FEATURE_FALLOFF * t * t), level };
+    if (t <= 0) return { f: 1, level };
+    if (t >= 1) return { f: 0, level };
+    if (t < CLIFF_RUN) return { f: 1 - f.cliff * (t / CLIFF_RUN), level };
+    return { f: (1 - f.cliff) * (1 - smoothstep(CLIFF_RUN, 1, t)), level };
   };
 }
 

@@ -290,22 +290,36 @@ const Stabled = z.strictObject({
   reverse: z.boolean().default(false).describe("Turn it round: the locomotive at the end toward lower s"),
 });
 
+const FeaturePoint = z.union([Vec2, z.tuple([z.number(), z.number(), z.number()])])
+  .describe("[x, y], or [x, y, level]: the absolute height the feature pulls the ground to there (interpolated along the line)");
+
 const Feature = z
   .strictObject({
     at: Vec2.optional().describe("Centre of a round hill, mesa or basin"),
-    points: z.array(Vec2).min(2).optional()
-      .describe("Instead of `at`: a ridge (or valley, gorge) along this polyline; `radius` is then its half-width"),
-    radius: z.number().positive().describe("How far the feature reaches (its foot); for a ridge, from the line"),
-    height: z.number().describe("Metres added at the top (negative: a basin, valley or gorge)"),
+    points: z.array(FeaturePoint).min(2).optional()
+      .describe("Instead of `at`: a ridge, valley or gorge along this polyline; `radius` is then its half-width"),
+    area: z.array(Vec2).min(3).optional()
+      .describe("Instead of `at`: a plateau (or basin) filling this polygon; `radius` is then the width of the slope beyond its rim"),
+    radius: z.number().positive().describe("How far the feature reaches (its foot): from its centre, its line, or (an area) its rim"),
+    height: z.number().optional().describe("Metres added at the top (negative: a basin, valley or gorge)"),
+    level: z.number().optional()
+      .describe("Instead of `height`: the absolute height the ground is pulled to at the top (a flat valley floor, a terrace, a levelled yard)"),
+    direction: z.enum(["both", "down", "up"]).default("both")
+      .describe("With a level: only lower the ground to it (down: valleys, gorges), only raise it (up), or both"),
     shape: z.enum(["bump", "mesa"]).default("bump")
-      .describe("bump: a smooth Gaussian hill, ~5% of its height left at `radius`; mesa: a table mountain — a flat top, a sheer cliff and a talus slope below"),
-    plateau: z.number().min(0).max(0.95).default(0.5).describe("mesa: share of the radius that is flat on top"),
+      .describe("bump: a smooth Gaussian rise, ~5% left at `radius`; mesa: a table mountain — a flat top, a sheer cliff and a talus slope below"),
+    plateau: z.number().min(0).max(0.95).default(0.5).describe("mesa at a point or along a line: share of the radius that is flat on top"),
     cliff: z.number().min(0).max(1).default(0.6).describe("mesa: share of the height that falls as a sheer cliff (the rest is the talus slope)"),
     rough: z.number().min(0).max(1).default(0)
       .describe("How ragged the outline is, 0 (round, straight) to 1 (deeply lobed, like weathered sandstone)"),
   })
   .superRefine((f, ctx) => {
-    if ((f.at === undefined) === (f.points === undefined)) ctx.addIssue({ code: "custom", path: [f.at ? "points" : "at"], message: "a terrain feature needs exactly one of `at` (round) or `points` (along a line)" });
+    const say = (path: string, message: string) => ctx.addIssue({ code: "custom", path: [path], message });
+    if ([f.at, f.points, f.area].filter((x) => x !== undefined).length !== 1) say(f.at ? "points" : "at", "a terrain feature needs exactly one of `at` (round), `points` (along a line) or `area` (a polygon)");
+    const levels = f.points?.filter((p) => p.length === 3).length ?? 0;
+    if (levels && levels !== f.points!.length) say("points", "give a level ([x, y, z]) on every point of the line, or on none");
+    const ways = [f.height !== undefined, f.level !== undefined, levels > 0].filter(Boolean).length;
+    if (ways !== 1) say(f.height === undefined ? "height" : "level", "a terrain feature needs exactly one of `height` (added), `level` (pulled to) or levels on its points");
   });
 
 export const COVERS = ["meadow", "pasture", "field", "vineyard", "orchard", "garden", "park", "forest", "heath", "marsh", "sand", "gravel", "rock", "spoil", "yard", "town"] as const;

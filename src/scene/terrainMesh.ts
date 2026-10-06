@@ -24,7 +24,8 @@ const TILE = 500;               // m: about how big each ground tile is
 const STRATUM = 2.6;            // m: height of the bands in a layout's own rock colour
 const STEEP_COVER_Z = 0.62;     // vineyards and scree keep their colour up to ~52° before rock shows
 const WATER_OVER = 2.5;         // m the water surface reaches under the banks beyond its edge
-const RAPIDS = 0.04;            // a stream falling faster than this (4%) foams
+const RAPIDS = 0.05;            // a stream falling faster than this (5%) foams
+const RAPIDS_SPAN = 3;          // cross-sections either side over which the fall is measured
 const RIBBON_STEP = 3;          // every n-th point of a river's line makes a cross-section
 
 export function terrainMeshes(world: World): THREE.Object3D[] {
@@ -215,13 +216,17 @@ function inlandWaterMesh(world: World): THREE.Mesh {
     pos.push(p[0], p[2], -p[1]);
     colors.push(...c);
   };
-  const tri = (a: P3, b: P3, c: P3, col: [number, number, number]) => { push(a, col); push(b, col); push(c, col); };
   const pick = (list: readonly number[], x: number, y: number) => list[Math.floor((shadeN(x / 90, y / 90) * 0.5 + 0.5) * (list.length - 0.001))];
+  // Without a colour, each corner takes the body's shade where it lies, so the shades blend across the surface.
+  let palette: readonly number[] = PALETTE.inland.lake;
+  const tri = (a: P3, b: P3, c: P3, col?: [number, number, number]) => {
+    for (const p of [a, b, c]) push(p, col ?? rgb(pick(palette, p[0], p[1])));
+  };
   const t = world.terrain;
   const W = t.width;
   const H = t.height;
   for (const b of world.water.bodies) {
-    const palette = PALETTE.inland[b.kind];
+    palette = PALETTE.inland[b.kind];
     if (b.closed) {
       // The shore pushed out a little, then cut into triangles.
       const ring = b.line.filter((_, k) => k % 2 === 0);
@@ -237,11 +242,10 @@ function inlandWaterMesh(world: World): THREE.Mesh {
       const faces = THREE.ShapeUtils.triangulateShape(out.map(([x, y]) => new THREE.Vector2(x, y)), []);
       for (const [i, j, k] of faces) {
         const [p, q, r] = [out[i], out[j], out[k]];
-        const col = rgb(pick(palette, (p[0] + q[0] + r[0]) / 3, (p[1] + q[1] + r[1]) / 3));
         // three's triangulation winds them clockwise for a clockwise outline; face them up.
         const cross = (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
-        if (cross >= 0) tri([p[0], p[1], z], [q[0], q[1], z], [r[0], r[1], z], col);
-        else tri([p[0], p[1], z], [r[0], r[1], z], [q[0], q[1], z], col);
+        if (cross >= 0) tri([p[0], p[1], z], [q[0], q[1], z], [r[0], r[1], z]);
+        else tri([p[0], p[1], z], [r[0], r[1], z], [q[0], q[1], z]);
       }
       continue;
     }
@@ -261,10 +265,10 @@ function inlandWaterMesh(world: World): THREE.Mesh {
     let prev = section(ks[0]);
     for (let n = 1; n < ks.length; n++) {
       const cur = section(ks[n]);
-      const [k0, k1] = [ks[n - 1], ks[n]];
+      // The fall over a few sections either side, so a single step in the bed doesn't foam.
+      const [k0, k1] = [ks[Math.max(0, n - 1 - RAPIDS_SPAN)], ks[Math.min(ks.length - 1, n + RAPIDS_SPAN)]];
       const fall = (b.surface[k0] - b.surface[k1]) / Math.max(1e-6, b.s[k1] - b.s[k0]);
-      const [x, y] = b.line[k1];
-      const col = rgb(fall > RAPIDS ? PALETTE.inland.foam : pick(palette, x, y));
+      const col = fall > RAPIDS ? rgb(PALETTE.inland.foam) : undefined;
       // prev = [left, right]; the river runs from prev to cur: left, right, then cur's right and left.
       tri(prev[1], cur[1], cur[0], col);
       tri(prev[1], cur[0], prev[0], col);
