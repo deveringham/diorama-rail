@@ -32,7 +32,7 @@ export type HudInfo = {
   hour: number;
   speed: number;             // time scale
   paused: boolean;
-  shadows: boolean;
+  shadows: string;           // off | static | full
   autoRotate: boolean;
   fps: number;
   calls: number;
@@ -50,7 +50,8 @@ const CONTROLS: Array<[keys: string, action: string, state?: (i: HudInfo) => str
   ["1 2 3", "speed 1× 2× 4×", (i) => `${i.speed}×`],
   ["F", "follow next train", (i) => i.follow?.service ?? "off"],
   ["Esc", "stop following, close panel"],
-  ["S", "shadows", (i) => (i.shadows ? "on" : "off")],
+  ["S", "shadows", (i) => i.shadows],
+  ["G", "graphics settings"],
   ["R", "auto-rotate", (i) => (i.autoRotate ? "on" : "off")],
   ["H", "hide this panel"],
 ];
@@ -110,7 +111,7 @@ export class Hud {
     const lines = [
       info.name,
       `sim ${m}:${String(Math.floor(info.time % 60)).padStart(2, "0")}  ${clock(info.hour)}`,
-      `${info.fps.toFixed(0)} fps  ${info.calls} calls  ${(info.triangles / 1000).toFixed(0)}k tris`,
+      `${info.fps.toFixed(info.fps < 10 ? 1 : 0)} fps  ${info.calls} calls  ${(info.triangles / 1000).toFixed(0)}k tris`,
     ];
     if (info.follow) lines.push(`following ${info.follow.service} → ${info.follow.nextStop ?? "—"}`);
     this.stats.textContent = lines.join("\n");

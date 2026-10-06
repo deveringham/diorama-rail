@@ -8,6 +8,7 @@ import { pointAt, headingAt, sampleS } from "../model/geometry";
 import { profileZ } from "../model/heights";
 import { PALETTE } from "./palette";
 import { GeoBuilder, flatMaterial, toThree, type P3 } from "./geo";
+import { keepPoints } from "./simplify";
 
 const STEP = 2;                  // m between cross-sections
 const BALLAST_TOP = 1.6;         // half-widths (m)
@@ -44,9 +45,16 @@ export function trackMeshes(world: World): THREE.Object3D[] {
   const spacing = total / SLEEPER_SPACING > MAX_SLEEPERS ? SLEEPER_SPACING * 2 : SLEEPER_SPACING;
 
   for (const t of world.tracks.values()) {
-    const ss = sampleS(t.path, STEP);
-    if (t.path.closed) ss.push(t.path.length);
-    const frames = ss.map((s) => frameAt(world, t.id, s));
+    const all = sampleS(t.path, STEP);
+    if (t.path.closed) all.push(t.path.length);
+    const fine = all.map((s) => frameAt(world, t.id, s));
+    // Only the cross-sections a straight stretch can't stand in for, keeping those either side
+    // of where the track disappears into (or comes out of) a tunnel's hidden interior.
+    const deep = all.map((s) => hidden(world, t.id, s));
+    const keep = keepPoints(fine.map((f) => f.x), fine.map((f) => f.y), fine.map((f) => f.z),
+      (i) => deep[i] !== deep[i - 1] || deep[i] !== deep[i + 1]);
+    const ss = keep.map((i) => all[i]);
+    const frames = keep.map((i) => fine[i]);
     for (let i = 0; i + 1 < frames.length; i++) {
       if (hidden(world, t.id, ss[i]) && hidden(world, t.id, ss[i + 1])) continue;
       const a = frames[i];

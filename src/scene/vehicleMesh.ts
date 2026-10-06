@@ -1,5 +1,5 @@
 // Road vehicles: the traffic's objects drawn as InstancedMeshes, like scenery
-// (fixed, tinted and glowing parts per object) but moved every frame from the
+// (a body and glowing parts per object) but moved every frame from the
 // sim snapshot. Vehicles off the board are scaled to nothing.
 
 import * as THREE from "three";
@@ -7,13 +7,14 @@ import type { World } from "../model/build";
 import type { SimSnapshot } from "../sim/sim";
 import { tintColors } from "../model/objects";
 import { PALETTE } from "./palette";
-import { flatMaterial, toThree } from "./geo";
-import { geometry } from "./sceneryMesh";
+import { toThree } from "./geo";
+import { geometry, bodyGeometry, bodyMaterial } from "./sceneryMesh";
 import { hashString } from "../util/rng";
 
 export class VehicleMeshes {
   readonly group = new THREE.Group();
   readonly glowMaterial = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, emissive: PALETTE.windowLit, emissiveIntensity: 0 });
+  private bodyMaterial = bodyMaterial();
   /** For every vehicle: the meshes drawing it and its instance index in each. */
   private slots: Array<{ meshes: THREE.InstancedMesh[]; index: number }> = [];
   private m = new THREE.Matrix4();
@@ -35,15 +36,15 @@ export class VehicleMeshes {
       const info = world.objects.get(id)!;
       const tints = tintColors(info.def, season);
       const meshes: THREE.InstancedMesh[] = [];
-      for (const [list, kind] of [[info.mesh.fixed, "fixed"], [info.mesh.tint, "tint"], [info.mesh.glow, "glow"]] as const) {
-        const geo = geometry(list);
+      const parts = [[bodyGeometry(info.mesh.fixed, info.mesh.tint), "body"], [geometry(info.mesh.glow), "glow"]] as const;
+      for (const [geo, kind] of parts) {
         if (!geo) continue;
-        const inst = new THREE.InstancedMesh(geo, kind === "glow" ? this.glowMaterial : flatMaterial(), owners.length);
+        const inst = new THREE.InstancedMesh(geo, kind === "glow" ? this.glowMaterial : this.bodyMaterial, owners.length);
         inst.name = `vehicle ${id}:${kind}`;
         inst.castShadow = kind !== "glow";
         inst.receiveShadow = true;
         inst.frustumCulled = false;     // instances move; skip stale bounding spheres
-        if (kind === "tint") {
+        if (kind === "body" && info.mesh.tint.color.length) {
           // Buses in their line's colour; anything else a colour picked per vehicle.
           owners.forEach((v, i) => inst.setColorAt(i, color.set(snapshot.vehicles[v].color ?? tints[hashString(`${world.layout.seed}-${v}`) % tints.length])));
         }
@@ -76,8 +77,8 @@ export class VehicleMeshes {
     for (const child of this.group.children) {
       const mesh = child as THREE.InstancedMesh;
       mesh.geometry.dispose();
-      if (mesh.material !== this.glowMaterial) (mesh.material as THREE.Material).dispose();
     }
     this.glowMaterial.dispose();
+    this.bodyMaterial.dispose();
   }
 }

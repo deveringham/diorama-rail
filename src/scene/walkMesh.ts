@@ -13,6 +13,7 @@ import { PALETTE } from "./palette";
 import { GeoBuilder, flatMaterial, type P3 } from "./geo";
 import { side } from "./trackMesh";
 import { roadFrame, crossingApproaches, furniture } from "./roadMesh";
+import { keepPoints } from "./simplify";
 
 const PATH_LIFT = 0.04;          // path surface above its profile height
 const SKIRT = 0.35;              // m strips' edges reach down, so they meet the ground (or the road) cleanly
@@ -25,14 +26,17 @@ const FOOT_Z = 0.2;
 
 /** A walkway drawn as a strip with sloping-down edges; `lift` raises its top. */
 function strip(g: GeoBuilder, w: Walkway, lift: number, top: number, edge: number): void {
-  const n = w.x.length;
+  // Only the samples a straight stretch can't stand in for.
+  const keep = keepPoints(w.x, w.y, w.z);
+  const X = keep.map((i) => w.x[i]), Y = keep.map((i) => w.y[i]), Z = keep.map((i) => w.z[i]);
+  const n = X.length;
   const half = w.width / 2;
   const left: P3[] = [];
   const right: P3[] = [];
   // Each segment's left normal (a repeated point borrows its neighbour's), mitred where segments meet.
   const seg: Array<V2 | null> = [];
   for (let i = 0; i + 1 < n; i++) {
-    const [dx, dy] = [w.x[i + 1] - w.x[i], w.y[i + 1] - w.y[i]];
+    const [dx, dy] = [X[i + 1] - X[i], Y[i + 1] - Y[i]];
     const len = Math.hypot(dx, dy);
     seg.push(len > 1e-6 ? [-dy / len, dx / len] : null);
   }
@@ -42,9 +46,9 @@ function strip(g: GeoBuilder, w: Walkway, lift: number, top: number, edge: numbe
     const a = seg[Math.max(0, i - 1)] ?? [0, 1];
     const b = seg[Math.min(seg.length - 1, i)] ?? a;
     const [nx, ny] = miter(a, b);
-    const z = w.z[i] + lift;
-    left.push([w.x[i] + nx * half, w.y[i] + ny * half, z]);
-    right.push([w.x[i] - nx * half, w.y[i] - ny * half, z]);
+    const z = Z[i] + lift;
+    left.push([X[i] + nx * half, Y[i] + ny * half, z]);
+    right.push([X[i] - nx * half, Y[i] - ny * half, z]);
   }
   const down = (p: P3): P3 => [p[0], p[1], p[2] - SKIRT];
   for (let i = 0; i + 1 < n; i++) {

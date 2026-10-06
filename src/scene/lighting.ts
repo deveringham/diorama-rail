@@ -47,6 +47,19 @@ export class Lighting {
     this.sun.castShadow = on;
   }
 
+  /** Shadow map size (px per side); the map is made afresh at the next shadow pass. */
+  setShadowSize(size: number): void {
+    if (this.sun.shadow.mapSize.x === size) return;
+    this.sun.shadow.mapSize.set(size, size);
+    this.dropShadowMap();
+  }
+
+  /** Lets the next shadow pass make a new shadow map (for a new size, or a new renderer). */
+  dropShadowMap(): void {
+    this.sun.shadow.map?.dispose();
+    this.sun.shadow.map = null;
+  }
+
   private mix(out: THREE.Color, c0: number, c1: number, f: number): void {
     out.lerpColors(this.a.setHex(c0), this.b.setHex(c1), f);
   }

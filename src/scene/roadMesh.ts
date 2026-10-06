@@ -16,6 +16,7 @@ import { FRONT_PAST } from "../model/buses";
 import { PALETTE } from "./palette";
 import { GeoBuilder, flatMaterial, toThree, type P3 } from "./geo";
 import { type Frame, side } from "./trackMesh";
+import { keepPoints } from "./simplify";
 
 const STEP = 2;                  // m between cross-sections
 const VERGE = 1.0;               // m the verge reaches beyond the carriageway
@@ -71,13 +72,22 @@ export function roadMeshes(world: World): THREE.Object3D[] {
     const spans = net.spans.get(r.id)!;
     const trims = net.trims.get(r.id)!;
     const hidden = (s: number) => spans.some((sp) => sp.kind === "tunnel" && s > sp.s0 + TUNNEL_VISIBLE && s < sp.s1 - TUNNEL_VISIBLE);
-    // Cross-sections every STEP metres plus exactly at every trim and span boundary.
-    const cuts = new Set(sampleS(r.path, STEP));
+    // Cross-sections every STEP metres plus exactly at every trim and span boundary (and where a
+    // tunnel's hidden stretch begins and ends); then only those a straight stretch can't stand in for.
+    const fixed = new Set<number>();
+    for (const [a, b] of trims) { fixed.add(a); fixed.add(b); }
+    for (const sp of spans) {
+      fixed.add(sp.s0);
+      fixed.add(sp.s1);
+      if (sp.kind === "tunnel") { fixed.add(sp.s0 + TUNNEL_VISIBLE); fixed.add(sp.s1 - TUNNEL_VISIBLE); }
+    }
+    const cuts = new Set([...sampleS(r.path, STEP), ...fixed]);
     if (r.path.closed) cuts.add(L);
-    for (const [a, b] of trims) { cuts.add(a); cuts.add(b); }
-    for (const sp of spans) { cuts.add(sp.s0); cuts.add(sp.s1); }
-    const ss = [...cuts].filter((s) => s >= 0 && s <= L).sort((a, b) => a - b);
-    const frames = ss.map((s) => roadFrame(world, r.id, s));
+    const all = [...cuts].filter((s) => s >= 0 && s <= L).sort((a, b) => a - b);
+    const fine = all.map((s) => roadFrame(world, r.id, s));
+    const keep = keepPoints(fine.map((f) => f.x), fine.map((f) => f.y), fine.map((f) => f.z), (i) => fixed.has(all[i]));
+    const ss = keep.map((i) => all[i]);
+    const frames = keep.map((i) => fine[i]);
     for (let i = 0; i + 1 < ss.length; i++) {
       const mid = (ss[i] + ss[i + 1]) / 2;
       if (ss[i + 1] - ss[i] < 1e-3 || inRanges(mid, trims) || hidden(mid)) continue;
