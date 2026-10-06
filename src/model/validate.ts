@@ -3,16 +3,16 @@
 // that look across tracks, stations and services. All produce stable codes.
 
 import type { ZodError } from "zod";
-import type { Layout, TrackSpec } from "./schema";
+import type { Layout, TrackSpec, StabledSpec } from "./schema";
 import type { TrackGeom, Junction } from "./trackGraph";
 import type { Span } from "./heights";
 import type { RoutePath } from "./routes";
-import { radiusAt, pointAt } from "./geometry";
-import { isTrainType, TRAIN_CATALOG, trainLength } from "./catalog";
+import { radiusAt, pointAt, headingAt } from "./geometry";
+import { isTrainType, TRAIN_CATALOG, trainLength, carLengths, type TrainType, type TrainTypeId } from "./catalog";
 import { OBJECT_LIBRARY } from "./objectLibrary";
 import { offEdge } from "./exits";
 import { SpatialHash } from "../util/spatial";
-import { mod, round } from "../util/vec";
+import { mod, round, wrapAngle } from "../util/vec";
 
 export type Issue = {
   code: string;
@@ -38,6 +38,7 @@ const JUNCTION_IGNORE = 60;
 const TURNOUT_MIN_RADIUS = 150;
 const PLATFORM_MIN_RADIUS = 300;
 const CAPACITY_HEADWAY = 150;
+const MIN_DIAMOND_ANGLE = 12;   // degrees: tracks crossing at least this squarely form a diamond crossing
 
 /** JSON path string from a zod path array: ["tracks", 1, "points"] -> "tracks[1].points". */
 export function jsonPath(parts: ReadonlyArray<PropertyKey>): string {
@@ -95,6 +96,10 @@ export function checkReferences(layout: Layout): Issue[] {
     if (!isTrainType(s.train)) unknown("train type", s.train, `services[${i}].train`, new Set(Object.keys(TRAIN_CATALOG)));
     s.route.forEach((r, k) => { if (!trackIds.has(r)) unknown("track", r, `services[${i}].route[${k}]`, trackIds); });
     s.stops.forEach((r, k) => { if (!stationIds.has(r) && !offIds.has(r)) unknown("station", r, `services[${i}].stops[${k}]`, new Set([...stationIds, ...offIds])); });
+  });
+  layout.stabled.forEach((s, i) => {
+    if (!trackIds.has(s.track)) unknown("track", s.track, `stabled[${i}].track`, trackIds);
+    if (!isTrainType(s.train)) unknown("train type", s.train, `stabled[${i}].train`, new Set(Object.keys(TRAIN_CATALOG)));
   });
   const objectIds = new Set([...Object.keys(OBJECT_LIBRARY), ...Object.keys(layout.objects)]);
   const known = () => new Set([...objectIds].sort());
@@ -192,15 +197,22 @@ export function checkBounds(layout: Layout, tracks: Map<string, TrackGeom>, poin
   return issues;
 }
 
-/** Tracks closer than 4.5 m in plan at similar height, away from their shared junctions. */
-export function checkConflicts(tracks: Map<string, TrackGeom>, junctions: Junction[], points: TrackPoint[]): Issue[] {
+/** Two tracks crossing at grade: a diamond crossing, where trains on either go over the other's rails. */
+export type Diamond = { a: string; sa: number; b: string; sb: number; at: [number, number]; angle: number };
+
+/**
+ * Tracks closer than 4.5 m in plan at similar height, away from their shared junctions,
+ * are a conflict — unless they cross each other at a real angle (MIN_DIAMOND_ANGLE or
+ * more), which makes a diamond crossing.
+ */
+export function checkConflicts(tracks: Map<string, TrackGeom>, junctions: Junction[], points: TrackPoint[]): { issues: Issue[]; diamonds: Diamond[] } {
   const hash = new SpatialHash<number>(CONFLICT_DISTANCE * 2);
   points.forEach((p, i) => hash.insert(p.x, p.y, i));
   const nearJunction = (a: TrackPoint, b: TrackPoint) =>
     junctions.some((j) => ((j.parentTrack === a.track && j.branchTrack === b.track) || (j.parentTrack === b.track && j.branchTrack === a.track))
       && (Math.hypot(a.x - j.at[0], a.y - j.at[1]) < JUNCTION_IGNORE || Math.hypot(b.x - j.at[0], b.y - j.at[1]) < JUNCTION_IGNORE));
 
-  type Cluster = { a: string; b: string; sA: number[]; min: number; at: [number, number] };
+  type Cluster = { a: string; b: string; sA: number[]; min: number; at: [number, number]; pa: TrackPoint; pb: TrackPoint };
   const clusters: Cluster[] = [];
   points.forEach((p, i) => {
     hash.near(p.x, p.y, CONFLICT_DISTANCE, (j) => {
@@ -217,13 +229,52 @@ export function checkConflicts(tracks: Map<string, TrackGeom>, junctions: Juncti
       const c = clusters.find((k) => k.a === a.track && k.b === b.track && k.sA.some((s) => Math.abs(s - a.s) < 25));
       if (c) {
         c.sA.push(a.s);
-        if (d < c.min) { c.min = d; c.at = [a.x, a.y]; }
-      } else clusters.push({ a: a.track, b: b.track, sA: [a.s], min: d, at: [a.x, a.y] });
+        if (d < c.min) Object.assign(c, { min: d, at: [a.x, a.y], pa: a, pb: b });
+      } else clusters.push({ a: a.track, b: b.track, sA: [a.s], min: d, at: [a.x, a.y], pa: a, pb: b });
     });
   });
-  return clusters.map((c) => error("TRACK_CONFLICT",
-    `tracks '${c.a}' and '${c.b}' come within ${c.min.toFixed(1)} m of each other near (${c.at[0].toFixed(0)}, ${c.at[1].toFixed(0)}) at similar height; keep parallel tracks at least 5 m apart or separate them by 6 m in height`,
+  const issues: Issue[] = [];
+  const diamonds: Diamond[] = [];
+  for (const c of clusters) {
+    const d = crossingOf(tracks.get(c.a)!, c.pa.s, tracks.get(c.b)!, c.pb.s);
+    if (d && d.angle >= MIN_DIAMOND_ANGLE) {
+      diamonds.push({ a: c.a, sa: d.sa, b: c.b, sb: d.sb, at: d.at, angle: d.angle });
+      continue;
+    }
+    issues.push(error("TRACK_CONFLICT", d
+      ? `tracks '${c.a}' and '${c.b}' cross at only ${d.angle.toFixed(0)}° near (${c.at[0].toFixed(0)}, ${c.at[1].toFixed(0)}); a diamond crossing needs ${MIN_DIAMOND_ANGLE}° or more: cross more squarely, or separate them by 6 m in height`
+      : `tracks '${c.a}' and '${c.b}' come within ${c.min.toFixed(1)} m of each other near (${c.at[0].toFixed(0)}, ${c.at[1].toFixed(0)}) at similar height; keep parallel tracks at least 5 m apart or separate them by 6 m in height`,
     `tracks[${tracks.get(c.a)!.index}]`, c.at));
+  }
+  return { issues, diamonds };
+}
+
+/**
+ * Where two tracks near (sa, sb) actually cross: the intersection of their tangents,
+ * refined a few times, if it lies close by; with the angle between them (0–90°).
+ */
+function crossingOf(A: TrackGeom, sa: number, B: TrackGeom, sb: number): { sa: number; sb: number; at: [number, number]; angle: number } | null {
+  const clampS = (t: TrackGeom, s: number) => (t.path.closed ? mod(s, t.path.length) : Math.min(Math.max(s, 0), t.path.length));
+  for (let k = 0; k < 4; k++) {
+    const [ax, ay] = pointAt(A.path, sa);
+    const [bx, by] = pointAt(B.path, sb);
+    const ha = headingAt(A.path, sa);
+    const hb = headingAt(B.path, sb);
+    const [dax, day, dbx, dby] = [Math.cos(ha), Math.sin(ha), Math.cos(hb), Math.sin(hb)];
+    const den = dax * dby - day * dbx;
+    if (Math.abs(den) < 1e-6) return null;                   // parallel
+    const u = ((bx - ax) * dby - (by - ay) * dbx) / den;
+    const v = ((bx - ax) * day - (by - ay) * dax) / den;
+    if (Math.abs(u) > 40 || Math.abs(v) > 40) return null;    // they only come close, without crossing here
+    sa = clampS(A, sa + u);
+    sb = clampS(B, sb + v);
+  }
+  const [ax, ay] = pointAt(A.path, sa);
+  const [bx, by] = pointAt(B.path, sb);
+  if (Math.hypot(ax - bx, ay - by) > 0.5) return null;
+  const turn = Math.abs(wrapAngle(headingAt(A.path, sa) - headingAt(B.path, sb)));
+  const angle = (Math.min(turn, Math.PI - turn) * 180) / Math.PI;
+  return { sa, sb, at: [ax, ay], angle };
 }
 
 export function checkStations(layout: Layout, tracks: Map<string, TrackGeom>, spans: Map<string, Span[]>): Issue[] {
@@ -282,6 +333,53 @@ export function checkServices(layout: Layout, routes: Map<string, RoutePath>): I
     if (svc.count > fit) {
       issues.push(warning("CAPACITY", `service '${svc.id}' has ${svc.count} trains but its ${route.length.toFixed(0)} m route holds about ${Math.max(1, Math.floor(fit))}; reduce count or lengthen the route`, `services[${i}].count`));
     }
+  });
+  return issues;
+}
+
+/**
+ * The vehicles of a stabled consist, front (toward higher s, or lower if reversed) to
+ * back: `car` 0 is a locomotive (for trains that have one). Without its locomotive,
+ * `cars` counts the coaches or wagons alone.
+ */
+export function stabledVehicles(st: StabledSpec): Array<{ car: number; length: number }> {
+  const t: TrainType = TRAIN_CATALOG[st.train as TrainTypeId];
+  const hasLoco = t.shape === "loco-hauled" || t.shape === "double-deck" || t.shape === "freight";
+  if (hasLoco && !st.loco) return Array.from({ length: st.cars ?? Math.max(1, t.cars - 1) }, () => ({ car: 1, length: t.carLength }));
+  const lengths = carLengths(t);
+  return Array.from({ length: st.cars ?? t.cars }, (_, i) => ({ car: i === 0 ? 0 : 1, length: i === 0 ? lengths[0] : t.carLength }));
+}
+
+/** Stabled trains must stand on their track, clear of every service's route and of each other. */
+export function checkStabled(layout: Layout, tracks: Map<string, TrackGeom>, routes: Map<string, RoutePath>): Issue[] {
+  const issues: Issue[] = [];
+  const spans: Array<{ track: string; s0: number; s1: number; i: number }> = [];
+  layout.stabled.forEach((st, i) => {
+    const t = tracks.get(st.track);
+    if (!t || !isTrainType(st.train)) return;
+    const len = stabledVehicles(st).reduce((a, v) => a + v.length, 0);
+    const s0 = st.at - len / 2;
+    const s1 = st.at + len / 2;
+    const L = t.path.length;
+    if (!t.path.closed && (s0 < 0 || s1 > L)) {
+      issues.push(error("STABLED_RANGE", `the ${len.toFixed(0)} m train stabled on '${st.track}' at s=${st.at} runs off its ${L.toFixed(0)} m; move it to s between ${(len / 2).toFixed(0)} and ${(L - len / 2).toFixed(0)}, or give it fewer cars`, `stabled[${i}].at`));
+      return;
+    }
+    for (const [id, r] of routes) {
+      const hit = r.pieces.some((p) => {
+        if (p.track !== st.track) return false;
+        const a = Math.min(p.s0, p.s0 + p.dir * p.length);
+        const b = Math.max(p.s0, p.s0 + p.dir * p.length);
+        return t.path.closed ? true : a < s1 && s0 < b;
+      });
+      if (hit) {
+        issues.push(error("STABLED_ON_ROUTE", `service '${id}' runs over the train stabled on '${st.track}' at s=${st.at.toFixed(0)}; stable it on a siding no service uses (or a stretch of track the service does not reach)`, `stabled[${i}]`, pointAt(t.path, st.at)));
+        break;
+      }
+    }
+    const other = spans.find((x) => x.track === st.track && x.s0 < s1 && s0 < x.s1);
+    if (other) issues.push(warning("STABLED_OVERLAP", `trains stabled on '${st.track}' at s=${st.at} and stabled[${other.i}] overlap; move one along the track`, `stabled[${i}].at`, pointAt(t.path, st.at)));
+    spans.push({ track: st.track, s0, s1, i });
   });
   return issues;
 }

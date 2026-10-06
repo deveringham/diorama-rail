@@ -1,11 +1,12 @@
-// Terrain heightmap (§5.6): bumps + fbm noise on a regular grid, then corridor
+// Terrain heightmap (§5.6): bumps, ridges and mesas + fbm noise on a regular grid, then corridor
 // shaping that pulls the ground to the track on `ground` spans, forming
 // embankments and cuttings. Provides bilinear ground height queries.
 
-import type { Layout } from "./schema";
+import type { Layout, FeatureSpec } from "./schema";
 import { simplex2, fbm } from "../util/noise";
 import { hashString } from "../util/rng";
-import { clamp, lerp } from "../util/vec";
+import { clamp, lerp, smoothstep } from "../util/vec";
+import { bboxOf, polylineDistance } from "../util/polygon";
 
 const FEATURE_FALLOFF = 3;      // exp(-3·(d/r)²): ~5% of a feature's height remains at its radius
 const BED_DEPTH = 0.4;          // ground sits this far below the rail-level track z
@@ -23,6 +24,8 @@ export type Terrain = {
   base: Float32Array;           // unmodified heights, (nx+1)·(ny+1), row-major by y
   shaped: Float32Array;         // after corridor shaping
   seaLevel: number | null;
+  /** Per vertex: 0 dry land, 1 a river's or stream's shore, 2 a lake's or pond's shore, 3 under water (water.ts). */
+  wet?: Uint8Array;
 };
 
 /**
@@ -42,17 +45,60 @@ export function buildTerrain(layout: Layout): Terrain {
   const base = new Float32Array((nx + 1) * (ny + 1));
   for (let j = 0; j <= ny; j++) {
     for (let i = 0; i <= nx; i++) {
-      const x = i * cx;
-      const y = j * cy;
-      let z = baseHeight + noise.amplitude * fbm(n2, x / noise.scale, y / noise.scale);
-      for (const f of features) {
-        const d2 = ((x - f.at[0]) ** 2 + (y - f.at[1]) ** 2) / (f.radius * f.radius);
-        z += f.height * Math.exp(-FEATURE_FALLOFF * d2);
-      }
-      base[j * (nx + 1) + i] = z;
+      base[j * (nx + 1) + i] = baseHeight + noise.amplitude * fbm(n2, (i * cx) / noise.scale, (j * cy) / noise.scale);
     }
   }
+  // Each feature only within its reach, so many small ones stay cheap.
+  features.forEach((f, k) => {
+    const height = featureHeight(f, layout.seed, k);
+    const pts = f.points ?? [f.at!];
+    const reach = f.radius * (f.shape === "mesa" ? 1 : REACH) * (1 + 0.7 * f.rough) + cell;
+    const box = bboxOf(pts, reach);
+    const i0 = Math.max(0, Math.floor(box.x0 / cx));
+    const i1 = Math.min(nx, Math.ceil(box.x1 / cx));
+    const j0 = Math.max(0, Math.floor(box.y0 / cy));
+    const j1 = Math.min(ny, Math.ceil(box.y1 / cy));
+    for (let j = j0; j <= j1; j++) {
+      for (let i = i0; i <= i1; i++) base[j * (nx + 1) + i] += height(i * cx, j * cy);
+    }
+  });
   return { width, height, nx, ny, cx, cy, base, shaped: base.slice(), seaLevel };
+}
+
+const REACH = 1.8;              // × radius beyond which a bump adds nothing worth computing (exp(−3·1.8²) ≈ 0.006%)
+const CLIFF_RUN = 0.2;          // share of a mesa's slope (from the plateau's edge to its foot) taken by the cliff
+
+/**
+ * A feature's height above the ground around it, at any point. Distances are to its
+ * centre or (a ridge) its polyline, stretched by noise when it is `rough` so the
+ * outline wanders. A mesa falls from its flat top in a sheer cliff, then a talus slope:
+ *
+ *        plateau          ← flat top, `plateau` · radius
+ *      ___________
+ *     |           |       ← cliff: `cliff` · height over 20% of the slope
+ *    /             \      ← talus, easing out to the foot at `radius`
+ */
+export function featureHeight(f: FeatureSpec, seed: number, k: number): (x: number, y: number) => number {
+  const pts = f.points ?? [f.at!];
+  const R = f.radius;
+  const n = f.rough > 0 ? simplex2((seed ^ hashString(`feature-${k}`)) >>> 0) : null;
+  const dist = (x: number, y: number) => {
+    const d = pts.length === 1 ? Math.hypot(x - pts[0][0], y - pts[0][1]) : polylineDistance(pts, x, y);
+    // Ragged outline: lobes about a third of the radius across, plus finer notches.
+    if (!n) return d;
+    const w = (fbm(n, x / (R * 0.45), y / (R * 0.45), 3) * 0.75 + n(x / (R * 0.12), y / (R * 0.12)) * 0.25) * 0.35 * f.rough;
+    return d * (1 - w) - w * R * 0.15;
+  };
+  if (f.shape === "bump") return (x, y) => f.height * Math.exp(-FEATURE_FALLOFF * (dist(x, y) / R) ** 2);
+  const top = f.plateau * R;
+  const run = R - top;
+  return (x, y) => {
+    const t = (dist(x, y) - top) / run;
+    if (t <= 0) return f.height;
+    if (t >= 1) return 0;
+    if (t < CLIFF_RUN) return f.height * (1 - f.cliff * (t / CLIFF_RUN));
+    return f.height * (1 - f.cliff) * (1 - smoothstep(CLIFF_RUN, 1, t));
+  };
 }
 
 /** Bilinear height from one of the terrain grids. */

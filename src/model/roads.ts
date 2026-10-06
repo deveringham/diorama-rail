@@ -9,6 +9,7 @@ import type { TrackGeom, Junction } from "./trackGraph";
 import { type Path, makePath, filletPolyline, pointAt, headingAt, sampleS } from "./geometry";
 import { type Profile, type Span, type Pin, buildProfile, classify, profileZ, structureAt, opensGround } from "./heights";
 import { type Terrain, baseZ } from "./terrain";
+import { type WaterNet, crossingFloor, crossingSurface } from "./water";
 import { type Issue, error, warning } from "./validate";
 import { EDGE_SNAP, offEdge } from "./exits";
 import { SpatialHash } from "../util/spatial";
@@ -355,6 +356,7 @@ type Ctx = {
   trackSpans: Map<string, Span[]>;
   junctions: Junction[];
   terrain: Terrain;
+  water?: WaterNet;
 };
 
 // ---------------------------------------------------------------------------
@@ -528,10 +530,10 @@ export function buildRoads(ctx: Ctx): { net: RoadNet | null; issues: Issue[] } {
       if (Number.isNaN(mine) || rank.get(other)! > rank.get(id)!) continue;
       flat(mine, pavedHalf(roads.get(other)!.spec), profileZ(profiles.get(other)!, otherS));
     }
-    const { profile, issues: grade } = buildProfile(r, dry, pins, { window: ROAD_SMOOTH, noun: "road", follow: true });
+    const { profile, issues: grade } = buildProfile(r, dry, pins, { window: ROAD_SMOOTH, noun: "road", follow: true, floor: crossingFloor(ctx.water) });
     for (const g of grade) issues.push(error("GRADE_EXCEEDED", g.message, `roads[${r.index}]`, pointAt(r.path, g.s0)));
     profiles.set(id, profile);
-    spans.set(id, classify(r, profile, base));
+    spans.set(id, classify(r, profile, base, crossingSurface(ctx.water)));
   }
   for (const x of separated) {
     const z = profileZ(profiles.get(x.road)!, x.s);

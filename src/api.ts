@@ -73,11 +73,24 @@ export function query(world: World) {
     groundZ(x: number, y: number): number {
       return shapedZ(world.terrain, x, y);
     },
+    /** The water at (x, y): which body, its surface height and how far inside its edge; null on dry land. */
+    waterAt(x: number, y: number): { id: string; kind: string; surface: number; edge: number } | null {
+      const h = world.water.at(x, y);
+      return h && { id: world.water.bodies[h.body].id, kind: world.water.bodies[h.body].kind, surface: h.surface, edge: h.edge };
+    },
     /** Compact plain-text summary for LLMs and humans. */
     describe(): string {
       const L = world.layout;
       const out: string[] = [];
       out.push(`Layout "${L.name}" seed ${L.seed}; terrain ${L.terrain.size[0]}×${L.terrain.size[1]} m; sea level ${L.terrain.seaLevel ?? "none"}; ${L.style.season}, ${L.style.timeOfDay}h${L.style.dayLengthSeconds ? `, day ${L.style.dayLengthSeconds}s` : ""}`);
+      if (world.water.bodies.length) {
+        out.push("Water:");
+        for (const b of world.water.bodies) {
+          const zs = [...b.surface];
+          const size = b.closed ? `shore ${f0(b.s[b.s.length - 1])} m` : `${f0(b.s[b.s.length - 1])} m long, ${f0(2 * Math.min(...b.half))}–${f0(2 * Math.max(...b.half))} m wide`;
+          out.push(`  ${b.id} ${b.kind} "${b.name}" ${size}; surface ${Math.min(...zs).toFixed(1)}..${Math.max(...zs).toFixed(1)}, depth ${b.depth}, bridges keep ${b.clearance} m above`);
+        }
+      }
       out.push("Tracks:");
       for (const id of world.order) {
         const t = world.tracks.get(id)!;
@@ -92,9 +105,20 @@ export function query(world: World) {
         out.push("Junctions:");
         for (const j of world.junctions) out.push(`  ${j.id}: ${j.branchTrack} ${j.branchEnd} ↔ ${j.parentTrack} s=${f0(j.parentS)} (${j.heading}) at (${f0(j.at[0])}, ${f0(j.at[1])})`);
       }
+      if (world.diamonds.length) {
+        out.push("Diamond crossings:");
+        for (const d of world.diamonds) out.push(`  ${d.a} s=${f0(d.sa)} × ${d.b} s=${f0(d.sb)} at (${f0(d.at[0])}, ${f0(d.at[1])}), ${f0(d.angle)}°`);
+      }
+      if (L.stabled.length) {
+        out.push("Stabled trains:");
+        for (const st of L.stabled) out.push(`  ${st.train}${st.cars ? `×${st.cars}` : ""}${st.loco ? "" : " (no locomotive)"} on ${st.track} at s=${f0(st.at)}${st.load ? `, loaded with ${st.load}` : ""}`);
+      }
       if (world.stations.length) {
         out.push("Stations:");
-        for (const s of world.stations) out.push(`  ${s.id} "${s.name}" on ${s.track} s=${f0(s.s0)}–${f0(s.s1)} sides ${s.sides.map((d) => (d > 0 ? "left" : "right")).join("+")}`);
+        for (const s of world.stations) {
+          const group = L.stations.find((x) => x.id === s.id)?.group;
+          out.push(`  ${s.id} "${s.name}" on ${s.track} s=${f0(s.s0)}–${f0(s.s1)} sides ${s.sides.map((d) => (d > 0 ? "left" : "right")).join("+")}${group ? ` (group ${group})` : ""}`);
+        }
       }
       if (L.services.length) {
         out.push("Services:");
@@ -158,7 +182,7 @@ export function query(world: World) {
         }
         const homes = town.buildings.filter((b) => b.residents > 0);
         out.push(`  homes: ${homes.length} buildings for ${homes.reduce((a, b) => a + b.residents, 0)} people; ${town.people.length} live here, ${town.people.filter((p) => p.job).length} with jobs, ${town.people.filter((p) => p.car).length} with cars (${town.bays.length} parking bays)`);
-        for (const st of town.stations) out.push(`  station ${st.station} entered ${st.entrances.map((e) => `${e.via === "path" ? "by path" : e.via === "building" ? "through its building" : "from the nearest walkway"} (${e.side > 0 ? "left" : "right"} platform)`).join(", ") || "nowhere: no walkway reaches it"}`);
+        for (const st of town.stations) out.push(`  station ${st.station} entered ${st.entrances.map((e) => `${e.via === "path" ? "by path" : e.via === "building" ? "through its building" : e.via === "underpass" ? "by the underpass" : "from the nearest walkway"} (${e.side > 0 ? "left" : "right"} platform)`).join(", ") || "nowhere: no walkway reaches it"}`);
         out.push(`  places to stroll to: ${town.spots.length}`);
       }
       const buses = world.buses;

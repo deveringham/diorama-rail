@@ -132,10 +132,12 @@ const Station = z
     building: Id.nullable().optional()
       .describe('Object drawn as the station building behind the platform (default "station-building"), or for a freight yard the shed standing on its dock (default "goods-shed"); null for none'),
     road: Id.optional().describe("freight only: the road along the back of the dock, where lorries stop to load and unload; default the nearest one within 30 m"),
+    group: Id.optional().describe("Platforms of one station on several tracks (both tracks of a double-track line, a junction's many platforms): stations with the same group share their ways in, joined by an underpass, and people change between them there"),
   })
   .superRefine((st, ctx) => {
     if (st.kind === "freight" && st.side === "both") ctx.addIssue({ code: "custom", path: ["side"], message: 'a freight yard has one dock: use side "left" or "right"' });
     if (st.kind !== "freight" && st.road !== undefined) ctx.addIssue({ code: "custom", path: ["road"], message: '`road` is only for freight yards (kind "freight")' });
+    if (st.kind === "freight" && st.group !== undefined) ctx.addIssue({ code: "custom", path: ["group"], message: "`group` joins passenger platforms; a freight yard takes no passengers" });
   })
   .transform((st) => ({ ...st, building: st.building === undefined ? (st.kind === "freight" ? "goods-shed" : "station-building") : st.building }));
 
@@ -166,6 +168,11 @@ const SceneryEntry = z
       .describe("Scatter many objects, picked at random from these ids (repeat an id to make it more common)"),
     at: Vec2.optional().describe("object: where it stands. scatter: circle centre (omit with radius for the whole map)"),
     radius: z.number().positive().optional().describe("scatter: circle radius (m)"),
+    area: z.array(Vec2).min(3).optional().describe("scatter: a polygon to fill instead of a circle"),
+    rows: z.strictObject({
+      angle: z.number().describe("Direction the rows run (degrees counter-clockwise from east); items face along them"),
+      spacing: z.number().min(0.5).describe("m between rows (`spacing` is then the distance between items along a row)"),
+    }).optional().describe("scatter: set items out in straight rows (vines, orchard trees, tents) instead of at random"),
     spacing: z.number().min(1.5).optional().describe("scatter: minimum distance between items (m)"),
     rotation: z.number().optional().describe("object: degrees counter-clockwise from east that the object's front (+x) faces; default 0"),
     face: z.union([z.enum(["track", "road"]), Vec2]).optional()
@@ -184,12 +191,13 @@ const SceneryEntry = z
     if (!!e.object === !!e.scatter) say(e.object ? "scatter" : "object", "each scenery entry needs exactly one of `object` (one item) or `scatter` (many items)");
     if (e.object) {
       if (!e.at) say("at", "an `object` entry needs `at`: [x, y]");
-      for (const k of ["radius", "spacing"] as const) if (e[k] !== undefined) say(k, `\`${k}\` only applies to scatter entries`);
+      for (const k of ["radius", "spacing", "area", "rows"] as const) if (e[k] !== undefined) say(k, `\`${k}\` only applies to scatter entries`);
       if (Array.isArray(e.scale)) say("scale", "an `object` entry takes one scale number; [min, max] is for scatter");
     }
     if (e.scatter) {
       if (e.spacing === undefined) say("spacing", "a `scatter` entry needs `spacing` (m between items)");
       if ((e.at === undefined) !== (e.radius === undefined)) say(e.at ? "radius" : "at", "give both `at` and `radius` for a circle, or neither for the whole map");
+      if (e.area && e.at) say("area", "give either `area` (a polygon) or `at` and `radius` (a circle), not both");
       for (const k of ["rotation", "face", "z", "color", "smoke", "name", "building"] as const) if (e[k] !== undefined) say(k, `\`${k}\` only applies to single \`object\` entries`);
       if (typeof e.scale === "number") say("scale", "a `scatter` entry takes a scale range [min, max]");
     }
@@ -269,6 +277,80 @@ const BusLine = z.strictObject({
     .describe("Colour of the line's buses; default one per line"),
 });
 
+const Hex = z.string().regex(/^#[0-9a-fA-F]{6}$/, "colour must be a hex string like #c8553d");
+
+const Stabled = z.strictObject({
+  track: Id.describe("Track the consist stands on (a siding no service runs over)"),
+  at: z.number().describe("s along the track of the middle of the consist (m)"),
+  train: z.string().describe(`Train type: ${Object.keys(TRAIN_CATALOG).join(", ")}`),
+  cars: z.int().min(1).max(40).optional().describe("Vehicles in the consist, locomotive included; default the train type's"),
+  loco: z.boolean().default(true).describe("false: no locomotive — a rake of coaches or wagons waiting to be collected"),
+  color: Hex.optional().describe("Colour of its coaches or wagons; default the train type's"),
+  load: Id.optional().describe("Goods heaped in its wagons (shown in open, hopper, flat and container wagons), e.g. \"coal\""),
+  reverse: z.boolean().default(false).describe("Turn it round: the locomotive at the end toward lower s"),
+});
+
+const Feature = z
+  .strictObject({
+    at: Vec2.optional().describe("Centre of a round hill, mesa or basin"),
+    points: z.array(Vec2).min(2).optional()
+      .describe("Instead of `at`: a ridge (or valley, gorge) along this polyline; `radius` is then its half-width"),
+    radius: z.number().positive().describe("How far the feature reaches (its foot); for a ridge, from the line"),
+    height: z.number().describe("Metres added at the top (negative: a basin, valley or gorge)"),
+    shape: z.enum(["bump", "mesa"]).default("bump")
+      .describe("bump: a smooth Gaussian hill, ~5% of its height left at `radius`; mesa: a table mountain — a flat top, a sheer cliff and a talus slope below"),
+    plateau: z.number().min(0).max(0.95).default(0.5).describe("mesa: share of the radius that is flat on top"),
+    cliff: z.number().min(0).max(1).default(0.6).describe("mesa: share of the height that falls as a sheer cliff (the rest is the talus slope)"),
+    rough: z.number().min(0).max(1).default(0)
+      .describe("How ragged the outline is, 0 (round, straight) to 1 (deeply lobed, like weathered sandstone)"),
+  })
+  .superRefine((f, ctx) => {
+    if ((f.at === undefined) === (f.points === undefined)) ctx.addIssue({ code: "custom", path: [f.at ? "points" : "at"], message: "a terrain feature needs exactly one of `at` (round) or `points` (along a line)" });
+  });
+
+export const COVERS = ["meadow", "pasture", "field", "vineyard", "orchard", "garden", "park", "forest", "heath", "marsh", "sand", "gravel", "rock", "spoil", "yard", "town"] as const;
+
+const GroundArea = z.strictObject({
+  cover: z.enum(COVERS).describe("What covers the ground there; each has its own seasonal colours"),
+  points: z.array(Vec2).min(3).describe("The area's outline (a closed polygon)"),
+  color: Hex.optional().describe("Overrides the cover's colour"),
+  rows: z.number().optional().describe("Draw the cover in stripes running this way (degrees counter-clockwise from east): furrows, crop strips, vine rows"),
+  rowWidth: z.number().min(2).max(60).default(10).describe("Width of each stripe (m)"),
+});
+
+const WaterPoint = z.union(
+  [
+    Vec2,
+    z.strictObject({
+      at: Vec2,
+      z: z.number().optional().describe("Water surface height here (m); between such points it is interpolated"),
+      width: z.number().positive().optional().describe("River or stream: width here (m); interpolated between points"),
+    }),
+  ],
+  { error: "water point must be [x, y] or { at: [x, y], z?, width? }" },
+);
+
+const Water = z
+  .strictObject({
+    id: Id,
+    kind: z.enum(["river", "stream", "lake", "pond"])
+      .describe("river / stream: a line flowing from its first point to its last; lake / pond: a closed outline"),
+    name: z.string().min(1).optional().describe('Shown when inspecting; default from the id ("kirnitzsch" → "Kirnitzsch")'),
+    points: z.array(WaterPoint).min(2).describe("River: its course (smoothed into curves); lake: its shore, as a polygon (smoothed)"),
+    width: z.number().min(1).max(500).optional().describe("River / stream width (m); default 40 for a river, 5 for a stream"),
+    level: z.number().optional().describe("Lake / pond surface height (m); default just below the lowest ground on its shore"),
+    depth: z.number().min(0.3).max(40).optional().describe("Depth at the middle (m); default river 3, stream 0.8, lake 5, pond 1.5"),
+    bank: z.number().min(0).max(100).optional().describe("m of sloping bank beyond the water's edge; default river 14, stream 5, lake 10, pond 5"),
+    clearance: z.number().min(0.5).max(30).optional()
+      .describe("How high bridges must keep above the water (m); default river 5, stream 1.2, lake 2, pond 1"),
+  })
+  .superRefine((w, ctx) => {
+    const lake = w.kind === "lake" || w.kind === "pond";
+    if (lake && w.points.length < 3) ctx.addIssue({ code: "custom", path: ["points"], message: `a ${w.kind}'s shore needs at least 3 points` });
+    if (lake && w.width !== undefined) ctx.addIssue({ code: "custom", path: ["width"], message: `\`width\` is for rivers and streams; a ${w.kind} takes its shape from its points` });
+    if (!lake && w.level !== undefined) ctx.addIssue({ code: "custom", path: ["level"], message: `\`level\` is for lakes and ponds; give a ${w.kind} heights with { at, z } points` });
+  });
+
 export const LayoutSchema = z.strictObject({
   version: z.literal(1),
   name: z.string(),
@@ -278,14 +360,21 @@ export const LayoutSchema = z.strictObject({
     cell: z.number().min(1).max(50).default(4),
     baseHeight: z.number().default(0),
     seaLevel: z.number().nullable().default(null),
-    features: z.array(z.strictObject({ at: Vec2, radius: z.number().positive(), height: z.number() })).default([])
-      .describe("Smooth bumps (height > 0) or basins (height < 0), ~5% of height left at `radius`"),
+    features: z.array(Feature).default([])
+      .describe("Hills, ridges, table mountains (height > 0) and basins, valleys, gorges (height < 0), added together"),
     noise: z.strictObject({ amplitude: z.number().min(0), scale: z.number().positive() })
       .default({ amplitude: 2, scale: 120 }),
+    rock: Hex.optional().describe('Colour of bare rock on steep ground (default grey "#9c968a"); e.g. "#b9a582" for sandstone'),
+    areas: z.array(GroundArea).default([])
+      .describe("Ground cover painted on the terrain inside polygons: fields, meadows, vineyards, forest floor, sand, spoil heaps…; later areas lie on top"),
   }),
+  water: z.array(Water).default([])
+    .describe("Rivers and streams (lines with a width, flowing from the first point to the last) and lakes and ponds (closed outlines with a level); carved into the terrain, crossed by bridges"),
   tracks: z.array(Track).min(1),
   stations: z.array(Station).default([]),
   services: z.array(Service).default([]),
+  stabled: z.array(Stabled).default([])
+    .describe("Trains standing still on sidings — in yards, depots and stations — for show; no service may run over them"),
   roads: z.array(Road).default([]).describe("Road network: crossroads form automatically, level crossings where a road meets a track at grade"),
   paths: z.array(Path).default([])
     .describe("Footpaths: junctions form automatically, zebra crossings where a path crosses a road, foot crossings over tracks"),
@@ -339,6 +428,12 @@ export type BusStopSpec = Layout["busStops"][number];
 export type TrafficLightsSpec = Layout["trafficLights"][number];
 export type BusLineSpec = Layout["busLines"][number];
 export type OffPlaceSpec = Layout["offLayout"][number];
+export type StabledSpec = Layout["stabled"][number];
+export type FeatureSpec = Layout["terrain"]["features"][number];
+export type GroundAreaSpec = Layout["terrain"]["areas"][number];
+export type CoverKind = GroundAreaSpec["cover"];
+export type WaterSpec = Layout["water"][number];
+export type WaterPointSpec = WaterSpec["points"][number];
 export type FleetSpec = NonNullable<Layout["freight"]["vehicles"]>[number];
 
 /** Normalises a waypoint to { at, z?, radius? }. */

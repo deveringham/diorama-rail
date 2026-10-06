@@ -5,9 +5,15 @@
 
 import * as THREE from "three";
 import type { World } from "../model/build";
+import { groundZ } from "../model/terrain";
 import { PALETTE } from "./palette";
 import { GeoBuilder, flatMaterial, rgb, type P3 } from "./geo";
 import { simplex2 } from "../util/noise";
+import { PolygonIndex, polygonArea } from "../util/polygon";
+import type { V2 } from "../util/vec";
+
+/** A hex colour scaled toward black. */
+const shade = (hex: number, k: number) => (Math.round(((hex >> 16) & 255) * k) << 16) | (Math.round(((hex >> 8) & 255) * k) << 8) | Math.round((hex & 255) * k);
 
 const SKIRT_DEPTH = 0.025;      // block thickness below the lowest point, × the longer side
 const TABLE_MARGIN = 0.08;      // table extends this fraction beyond the block
@@ -15,6 +21,11 @@ const ROCK_NORMAL_Z = 0.8;      // faces steeper than ~37° show rock
 const SNOW_LINE = 26;           // m; winter snow above this even on rock
 const WATER_CELL = 25;
 const TILE = 500;               // m: about how big each ground tile is
+const STRATUM = 2.6;            // m: height of the bands in a layout's own rock colour
+const STEEP_COVER_Z = 0.62;     // vineyards and scree keep their colour up to ~52° before rock shows
+const WATER_OVER = 2.5;         // m the water surface reaches under the banks beyond its edge
+const RAPIDS = 0.04;            // a stream falling faster than this (4%) foams
+const RIBBON_STEP = 3;          // every n-th point of a river's line makes a cross-section
 
 export function terrainMeshes(world: World): THREE.Object3D[] {
   const t = world.terrain;
@@ -32,20 +43,56 @@ export function terrainMeshes(world: World): THREE.Object3D[] {
   let minZ = Infinity;
   for (const z of t.shaped) minZ = Math.min(minZ, z);
 
-  const faceColor = (a: P3, b: P3, c: P3): number => {
+  // Bare rock in the layout's colour (sandstone, granite…) or the default grey.
+  const rockHex = world.layout.terrain.rock ? parseInt(world.layout.terrain.rock.slice(1), 16) : null;
+  const rock = rockHex === null ? PALETTE.terrain.rock : [rockHex, shade(rockHex, 0.9), shade(rockHex, 0.8)];
+  // Ground cover: the topmost area containing a face's centre.
+  const areas = new PolygonIndex<{ colors: readonly number[]; rows: [number, number] | null; width: number; kind: string }>();
+  for (const a of world.layout.terrain.areas) {
+    const own = a.color ? parseInt(a.color.slice(1), 16) : null;
+    const colors = own !== null ? [own, shade(own, 0.92)] : PALETTE.cover[a.cover][season];
+    const rows: [number, number] | null = a.rows === undefined ? null : [-Math.sin((a.rows * Math.PI) / 180), Math.cos((a.rows * Math.PI) / 180)];
+    areas.add(a.points, { colors, rows, width: a.rowWidth, kind: a.cover });
+  }
+  const wet = t.wet;
+  const isWet = (i: number, j: number, flag: number) => {
+    const v = j * w + i;
+    return !!wet && wet[v] === flag && Math.abs(t.shaped[v] - t.base[v]) < 0.5;
+  };
+
+  const faceColor = (a: P3, b: P3, c: P3, vs: Array<[number, number]>): number => {
     const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
     const vx = c[0] - a[0], vy = c[1] - a[1], vz2 = c[2] - a[2];
     const nx = uy * vz2 - uz * vy, ny = uz * vx - ux * vz2, nz = ux * vy - uy * vx;
     const up = Math.abs(nz) / Math.hypot(nx, ny, nz);
     const z = (a[2] + b[2] + c[2]) / 3;
     const cx = (a[0] + b[0] + c[0]) / 3, cy = (a[1] + b[1] + c[1]) / 3;
+    const hash = Math.abs(Math.sin(cx * 12.9898 + cy * 78.233) * 43758.5453) % 1;
+    if (wet) {
+      // Under water the bed, at the water's edge the shore: gravel by a river, mud and reeds by a lake.
+      if (vs.every(([i, j]) => isWet(i, j, 3))) return PALETTE.inland.bed;
+      const lakeShore = vs.some(([i, j]) => isWet(i, j, 2));
+      if (lakeShore || vs.some(([i, j]) => isWet(i, j, 1) || isWet(i, j, 3))) {
+        const list = lakeShore ? PALETTE.inland.lakeShore : PALETTE.inland.riverShore;
+        return season === "winter" ? PALETTE.terrain.snow : list[hash < 0.5 ? 0 : 1];
+      }
+    }
     if (season === "winter" && z > SNOW_LINE) return PALETTE.terrain.snow;
-    if (up < ROCK_NORMAL_Z) return PALETTE.terrain.rock[(cx + cy) % 7 < 3.5 ? 0 : 1];
+    const area = areas.size ? areas.find(cx, cy) : undefined;
+    // Vines and fields climb steeper slopes than meadow does before the rock shows.
+    if (up < (area && (area.kind === "vineyard" || area.kind === "rock") ? STEEP_COVER_Z : ROCK_NORMAL_Z)) {
+      // Bedding planes: bands of slightly different rock a few metres high.
+      if (rock.length > 2) return rock[[0, 1, 0, 2][Math.floor(z / STRATUM + hash * 0.5) & 3]];
+      return rock[(cx + cy) % 7 < 3.5 ? 0 : 1];
+    }
+    if (area) {
+      if (area.rows) return area.colors[Math.floor((cx * area.rows[0] + cy * area.rows[1]) / area.width) & 1];
+      return area.colors[hash < 0.5 ? 0 : 1];
+    }
     if (sea !== null && z < sea + 1.2) return PALETTE.terrain.sand;
     // Mostly meadow with per-face jitter; the odd field, darker grass up the hills.
     const n = patch(cx / 160, cy / 160);
     if (n > 0.8) return pal.field;
-    const hash = Math.abs(Math.sin(cx * 12.9898 + cy * 78.233) * 43758.5453) % 1;
     if (z > 18 + 6 * n) return pal.grassDark[hash < 0.5 ? 0 : 1];
     return pal.grass[Math.floor(hash * pal.grass.length)];
   };
@@ -56,12 +103,13 @@ export function terrainMeshes(world: World): THREE.Object3D[] {
       const tile = tiles[row + Math.min(tx - 1, Math.floor((i * tx) / t.nx))];
       const a = P(i, j), b = P(i + 1, j), c = P(i + 1, j + 1), d = P(i, j + 1);
       // Alternate the diagonal so the low-poly facets don't all lean one way.
+      const [va, vb, vc, vd]: Array<[number, number]> = [[i, j], [i + 1, j], [i + 1, j + 1], [i, j + 1]];
       if ((i + j) % 2 === 0) {
-        tile.tri(a, b, c, faceColor(a, b, c));
-        tile.tri(a, c, d, faceColor(a, c, d));
+        tile.tri(a, b, c, faceColor(a, b, c, [va, vb, vc]));
+        tile.tri(a, c, d, faceColor(a, c, d, [va, vc, vd]));
       } else {
-        tile.tri(a, b, d, faceColor(a, b, d));
-        tile.tri(b, c, d, faceColor(b, c, d));
+        tile.tri(a, b, d, faceColor(a, b, d, [va, vb, vd]));
+        tile.tri(b, c, d, faceColor(b, c, d, [vb, vc, vd]));
       }
     }
   }
@@ -105,6 +153,7 @@ export function terrainMeshes(world: World): THREE.Object3D[] {
     out.push(ground);
   }
   if (sea !== null && minZ < sea) out.push(waterMesh(world, sea));
+  if (world.water.bodies.length) out.push(inlandWaterMesh(world));
   return out;
 }
 
@@ -147,6 +196,110 @@ function waterMesh(world: World, sea: number): THREE.Mesh {
   const mat = new THREE.MeshLambertMaterial({ vertexColors: true, transparent: true, opacity: 0.82, flatShading: true });
   const mesh = new THREE.Mesh(g, mat);
   mesh.name = "water";
+  mesh.receiveShadow = true;
+  mesh.renderOrder = 1;
+  return mesh;
+}
+
+/**
+ * Rivers and streams as ribbons following their surface down the valley (foaming where
+ * they fall fast), lakes and ponds as flat sheets over their shores; each reaches a
+ * little under its banks, so the ground draws the waterline. Where a river runs off
+ * the board, a pane of "resin" closes the channel in the block's side.
+ */
+function inlandWaterMesh(world: World): THREE.Mesh {
+  const pos: number[] = [];
+  const colors: number[] = [];
+  const shadeN = simplex2(world.layout.seed + 11);
+  const push = (p: P3, c: [number, number, number]) => {
+    pos.push(p[0], p[2], -p[1]);
+    colors.push(...c);
+  };
+  const tri = (a: P3, b: P3, c: P3, col: [number, number, number]) => { push(a, col); push(b, col); push(c, col); };
+  const pick = (list: readonly number[], x: number, y: number) => list[Math.floor((shadeN(x / 90, y / 90) * 0.5 + 0.5) * (list.length - 0.001))];
+  const t = world.terrain;
+  const W = t.width;
+  const H = t.height;
+  for (const b of world.water.bodies) {
+    const palette = PALETTE.inland[b.kind];
+    if (b.closed) {
+      // The shore pushed out a little, then cut into triangles.
+      const ring = b.line.filter((_, k) => k % 2 === 0);
+      const ccw = polygonArea(ring) > 0 ? 1 : -1;
+      const out: V2[] = ring.map((p, k) => {
+        const a = ring[(k + ring.length - 1) % ring.length];
+        const c = ring[(k + 1) % ring.length];
+        const dx = c[0] - a[0], dy = c[1] - a[1];
+        const L = Math.hypot(dx, dy) || 1;
+        return [p[0] + (dy / L) * WATER_OVER * ccw, p[1] - (dx / L) * WATER_OVER * ccw];
+      });
+      const z = b.surface[0];
+      const faces = THREE.ShapeUtils.triangulateShape(out.map(([x, y]) => new THREE.Vector2(x, y)), []);
+      for (const [i, j, k] of faces) {
+        const [p, q, r] = [out[i], out[j], out[k]];
+        const col = rgb(pick(palette, (p[0] + q[0] + r[0]) / 3, (p[1] + q[1] + r[1]) / 3));
+        // three's triangulation winds them clockwise for a clockwise outline; face them up.
+        const cross = (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
+        if (cross >= 0) tri([p[0], p[1], z], [q[0], q[1], z], [r[0], r[1], z], col);
+        else tri([p[0], p[1], z], [r[0], r[1], z], [q[0], q[1], z], col);
+      }
+      continue;
+    }
+    // A ribbon: cross-sections every few points, each as wide as the river plus the overlap.
+    const ks: number[] = [];
+    for (let k = 0; k < b.line.length; k += RIBBON_STEP) ks.push(k);
+    if (ks[ks.length - 1] !== b.line.length - 1) ks.push(b.line.length - 1);
+    const section = (k: number): [P3, P3] => {
+      const a = b.line[Math.max(0, k - 1)];
+      const c = b.line[Math.min(b.line.length - 1, k + 1)];
+      const dx = c[0] - a[0], dy = c[1] - a[1];
+      const L = Math.hypot(dx, dy) || 1;
+      const h = b.half[k] + WATER_OVER;
+      const [x, y] = b.line[k];
+      return [[x - (dy / L) * h, y + (dx / L) * h, b.surface[k]], [x + (dy / L) * h, y - (dx / L) * h, b.surface[k]]];
+    };
+    let prev = section(ks[0]);
+    for (let n = 1; n < ks.length; n++) {
+      const cur = section(ks[n]);
+      const [k0, k1] = [ks[n - 1], ks[n]];
+      const fall = (b.surface[k0] - b.surface[k1]) / Math.max(1e-6, b.s[k1] - b.s[k0]);
+      const [x, y] = b.line[k1];
+      const col = rgb(fall > RAPIDS ? PALETTE.inland.foam : pick(palette, x, y));
+      // prev = [left, right]; the river runs from prev to cur: left, right, then cur's right and left.
+      tri(prev[1], cur[1], cur[0], col);
+      tri(prev[1], cur[0], prev[0], col);
+      prev = cur;
+    }
+    // Resin panes where the course leaves the board.
+    const side = rgb(PALETTE.waterSide);
+    for (const k of [0, b.line.length - 1]) {
+      const [x, y] = b.line[k];
+      if (!(x < 1 || y < 1 || x > W - 1 || y > H - 1)) continue;
+      const [l, r] = section(k);
+      const clampP = (p: P3): P3 => [Math.min(W, Math.max(0, p[0])), Math.min(H, Math.max(0, p[1])), p[2]];
+      const [L0, R0] = [clampP(l), clampP(r)];
+      const n = 8;
+      for (let i = 0; i < n; i++) {
+        const f0 = i / n, f1 = (i + 1) / n;
+        const p0: V2 = [L0[0] + (R0[0] - L0[0]) * f0, L0[1] + (R0[1] - L0[1]) * f0];
+        const p1: V2 = [L0[0] + (R0[0] - L0[0]) * f1, L0[1] + (R0[1] - L0[1]) * f1];
+        const z0 = Math.min(b.surface[k], groundZ(world.terrain, p0[0], p0[1]));
+        const z1 = Math.min(b.surface[k], groundZ(world.terrain, p1[0], p1[1]));
+        const s = b.surface[k];
+        tri([p0[0], p0[1], z0], [p1[0], p1[1], z1], [p1[0], p1[1], s], side);
+        tri([p0[0], p0[1], z0], [p1[0], p1[1], s], [p0[0], p0[1], s], side);
+        tri([p0[0], p0[1], z0], [p1[0], p1[1], s], [p1[0], p1[1], z1], side);
+        tri([p0[0], p0[1], z0], [p0[0], p0[1], s], [p1[0], p1[1], s], side);
+      }
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+  g.computeVertexNormals();
+  const mat = new THREE.MeshLambertMaterial({ vertexColors: true, transparent: true, opacity: 0.86, flatShading: true });
+  const mesh = new THREE.Mesh(g, mat);
+  mesh.name = "inland-water";
   mesh.receiveShadow = true;
   mesh.renderOrder = 1;
   return mesh;

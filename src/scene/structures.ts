@@ -14,6 +14,7 @@ import { type Frame, frameAt, side } from "./trackMesh";
 import { roadFrame, pathFrame } from "./roadMesh";
 import { roadReach } from "../model/roads";
 import { type Span, tunnelMouths, MOUTH } from "../model/heights";
+import { SpatialHash } from "../util/spatial";
 
 const STEP = 2;
 const DECK_HALF = 2.8;
@@ -21,6 +22,7 @@ const DECK_TOP = -0.7;            // deck top relative to track z (under the bal
 const DECK_THICK = 1.1;
 const PIER_SPACING = 25;
 const CANOPY_HEIGHT = 4.2;        // above platform top
+const ISLAND_MATCH = 1.5;         // m: platforms whose centre lines lie this close are one island
 const TRACK_CLEAR = 2.4;          // half the width of a tunnel mouth
 // A portal's box: the first stretch of tunnel built out of the hill, hiding where the
 // ground climbs back over the track beyond the cut-away mouth (heights.MOUTH).
@@ -50,7 +52,9 @@ export function structureMeshes(world: World): THREE.Object3D[] {
     spanStructures(world, g, world.walks.spans.get(p.id)!, p.path.closed, (s) => pathFrame(world, p.id, s),
       { half: w / 2 + 0.45, top: 0, pier: 1.2 }, w / 2 + 0.6);
   }
-  for (const st of world.stations) station(world, g, st);
+  // An island platform between two tracks belongs to both their stations: drawn once.
+  const drawn = new SpatialHash<[number, number, number]>(8);
+  for (const st of world.stations) station(world, g, st, drawn);
   const mesh = new THREE.Mesh(g.build(), flatMaterial());
   mesh.name = "structures";
   mesh.castShadow = true;
@@ -157,11 +161,21 @@ function portal(g: GeoBuilder, fr: Frame[], len: number, clear: number): void {
   }
 }
 
-function station(world: World, g: GeoBuilder, st: World["stations"][number]): void {
+function station(world: World, g: GeoBuilder, st: World["stations"][number], drawn: SpatialHash<[number, number, number]>): void {
   const fr = simplified((s) => frameAt(world, st.track, s), st.s0, st.s1);
   const n = fr.length - 1;
   if (st.kind === "freight") { dock(g, st, fr); return; }
   for (const sd of st.sides) {
+    // The platform's centre line every few metres: if another station's already lies there, this is its island.
+    const line: Array<[number, number, number]> = [];
+    for (let s = st.s0 + 2; s <= st.s1 - 2; s += 4) line.push(side(frameAt(world, st.track, s), sd * PLATFORM_OFFSET, PLATFORM_TOP));
+    const shared = line.filter(([x, y, z]) => {
+      let hit = false;
+      drawn.near(x, y, ISLAND_MATCH, (q) => { if (!hit && Math.hypot(q[0] - x, q[1] - y) < ISLAND_MATCH && Math.abs(q[2] - z) < 0.6) hit = true; });
+      return hit;
+    }).length;
+    if (line.length && shared >= line.length * 0.6) continue;
+    for (const p of line) drawn.insert(p[0], p[1], p);
     const inner = sd * (PLATFORM_OFFSET - PLATFORM_WIDTH / 2);
     const outer = sd * (PLATFORM_OFFSET + PLATFORM_WIDTH / 2);
     const edge = sd * (PLATFORM_OFFSET - PLATFORM_WIDTH / 2 + 0.4);

@@ -163,7 +163,7 @@ export class Planner {
       const n = node();
       this.stationNode.push(n);
       // Through the station building people go in at its door (and come out on the platform).
-      for (const e of st.entrances) linkPlace(n, { ...e.access, link: e.via === "building" ? e.access.link : [e.entry, ...e.access.link.slice(1)] });
+      for (const e of st.entrances) linkPlace(n, { ...e.access, link: e.via === "building" || e.via === "underpass" ? e.access.link : [e.entry, ...e.access.link.slice(1)] });
     }
     world.buses.sides.forEach((side) => {
       const n = node();

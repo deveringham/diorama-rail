@@ -53,7 +53,7 @@ export function profileZ(p: Profile, s: number): number {
  */
 export function buildProfile(
   t: Profiled, ground: (x: number, y: number) => number, pins: Pin[],
-  opts: { window?: number; noun?: string; follow?: boolean } = {},
+  opts: { window?: number; noun?: string; follow?: boolean; floor?: (x: number, y: number) => number } = {},
 ): { profile: Profile; issues: GradeIssue[] } {
   const { path, spec } = t;
   const L = path.length;
@@ -125,6 +125,27 @@ export function buildProfile(
     const i = k % n;
     if (!hard.has(i)) p.z[i] = clampTo(p.z[i], p.z[(k + 1) % n], g);
   }
+  // 5. A floor (bridges keeping above water): lift what is below it, then ease the climbs
+  // to and from it within the grade, only ever raising.
+  if (opts.floor) {
+    let lifted = false;
+    for (let i = 0; i < n; i++) {
+      if (hard.has(i)) continue;
+      const [x, y] = pointAt(path, profileS(p, i));
+      const f = opts.floor(x, y);
+      if (p.z[i] < f) { p.z[i] = f; lifted = true; }
+    }
+    if (lifted) {
+      for (let k = 1; k < laps; k++) {
+        const i = k % n;
+        if (!hard.has(i)) p.z[i] = Math.max(p.z[i], p.z[(k - 1) % n] - g);
+      }
+      for (let k = laps - 2; k >= 0; k--) {
+        const i = k % n;
+        if (!hard.has(i)) p.z[i] = Math.max(p.z[i], p.z[(k + 1) % n] - g);
+      }
+    }
+  }
   return { profile: p, issues };
 }
 
@@ -154,27 +175,34 @@ function interpolate(fixed: Pin[], s: number, L: number, closed: boolean): numbe
   return b.s > a.s ? a.z + ((b.z - a.z) * (s - a.s)) / (b.s - a.s) : a.z;
 }
 
-/** 5. Classify the track against the unmodified ground into ground/bridge/tunnel spans. */
-export function classify(t: Profiled, p: Profile, ground: (x: number, y: number) => number): Span[] {
+/**
+ * 5. Classify the track against the unmodified ground into ground/bridge/tunnel spans.
+ * Over water (`water` gives its surface there, or null) it is always a bridge — or a
+ * tunnel well below the bed — however short the crossing.
+ */
+export function classify(t: Profiled, p: Profile, ground: (x: number, y: number) => number, water?: (x: number, y: number) => number | null): Span[] {
   const n = p.z.length;
-  const spans: Span[] = [];
+  const spans: Array<Span & { forced: boolean }> = [];
   for (let i = 0; i < n; i++) {
     const s = profileS(p, i);
     const [x, y] = pointAt(t.path, s);
     const gap = p.z[i] - ground(x, y);
-    const kind: StructureKind = gap > BRIDGE_CLEARANCE ? "bridge" : gap < -TUNNEL_COVER ? "tunnel" : "ground";
+    const surface = water ? water(x, y) : null;
+    const forced = surface !== null;
+    const kind: StructureKind = forced ? (gap < -TUNNEL_COVER ? "tunnel" : "bridge")
+      : gap > BRIDGE_CLEARANCE ? "bridge" : gap < -TUNNEL_COVER ? "tunnel" : "ground";
     const s0 = Math.max(0, s - p.step / 2);
     const s1 = Math.min(p.length, s + p.step / 2);
     const last = spans[spans.length - 1];
-    if (last && last.kind === kind) last.s1 = s1;
-    else spans.push({ kind, s0, s1 });
+    if (last && last.kind === kind) { last.s1 = s1; last.forced ||= forced; }
+    else spans.push({ kind, s0, s1, forced });
   }
-  // Merge short runs into their longer neighbour so structures don't flicker.
+  // Merge short runs into their longer neighbour so structures don't flicker (but never a water crossing).
   for (;;) {
     let shortest = -1;
     for (let i = 0; i < spans.length; i++) {
       const len = spans[i].s1 - spans[i].s0;
-      if (spans.length > 1 && len < MIN_SPAN && (shortest < 0 || len < spans[shortest].s1 - spans[shortest].s0)) shortest = i;
+      if (spans.length > 1 && !spans[i].forced && len < MIN_SPAN && (shortest < 0 || len < spans[shortest].s1 - spans[shortest].s0)) shortest = i;
     }
     if (shortest < 0) break;
     const prev = spans[shortest - 1];
@@ -184,11 +212,12 @@ export function classify(t: Profiled, p: Profile, ground: (x: number, y: number)
     for (let i = spans.length - 1; i > 0; i--) {
       if (spans[i].kind === spans[i - 1].kind) {
         spans[i - 1].s1 = spans[i].s1;
+        spans[i - 1].forced ||= spans[i].forced;
         spans.splice(i, 1);
       }
     }
   }
-  return spans;
+  return spans.map(({ kind, s0, s1 }) => ({ kind, s0, s1 }));
 }
 
 export function structureAt(spans: Span[], s: number): StructureKind {

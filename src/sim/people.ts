@@ -625,7 +625,7 @@ export class People implements WalkerView {
       b.station = next.from;
       b.entrance = this.entranceAt(next.from, last?.kind === "link" ? last.pts[last.pts.length - 1] : null);
     }
-    if (platform && this.entranceOf(b).via === "building") {
+    if (platform && (this.entranceOf(b).via === "building" || this.entranceOf(b).via === "underpass")) {
       b.mode = "pass";
       b.timer = PASS;
       b.link = null;
@@ -637,7 +637,7 @@ export class People implements WalkerView {
   /** Across the platform after getting off: on through the building, or straight on. */
   private offPlatform(b: Body, traffic: Traffic): void {
     b.link = null;
-    if (this.entranceOf(b).via === "building") {
+    if (this.entranceOf(b).via === "building" || this.entranceOf(b).via === "underpass") {
       b.mode = "pass";
       b.timer = PASS;
       return;

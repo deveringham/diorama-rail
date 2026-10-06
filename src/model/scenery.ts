@@ -15,9 +15,11 @@ import { pointAt, headingAt } from "./geometry";
 import { type ObjectDef, type ObjectMesh, meshObject, resolveColor, tintColors } from "./objects";
 import { OBJECT_LIBRARY } from "./objectLibrary";
 import { SpatialHash } from "../util/spatial";
+import type { WaterNet } from "./water";
+import { type V2, smoothstep } from "../util/vec";
+import { bboxOf, insidePolygon } from "../util/polygon";
 import { poissonDisc } from "../util/poisson";
 import { rng, range, pick } from "../util/rng";
-import { smoothstep } from "../util/vec";
 import type { Season } from "../scene/palette";
 
 export const PLATFORM_OFFSET = 3.7;     // m from track centre to platform centre line
@@ -154,6 +156,7 @@ type Context = {
   tracks: Map<string, TrackGeom>;
   profiles: Map<string, Profile>;
   terrain: Terrain;
+  water?: WaterNet;
   trackHash: SpatialHash<TrackPoint>;
   roadHash: SpatialHash<RoadPoint>;
   walkHash: SpatialHash<WalkPoint>;
@@ -253,6 +256,10 @@ export function placeScenery(ctx: Context): { placements: Placement[]; issues: I
         `${path}.at`, [x, y]));
       return;
     }
+    const wet = e.z === undefined ? ctx.water?.at(x, y) : null;
+    if (wet) {
+      issues.push(warning("SCENERY_IN_WATER", `${e.object} at (${x}, ${y}) stands in ${ctx.water!.bodies[wet.body].kind} '${ctx.water!.bodies[wet.body].id}'; move it ${Math.ceil(wet.edge + 1)} m onto the bank, or give it a \`z\` (a boat floats at ${wet.surface.toFixed(1)})`, `${path}.at`, [x, y]));
+    }
     const smoke = info.mesh.chimneys.length > 0 && (e.smoke ?? r() < info.def.smoke);
     add(e.object, x, y, z, rotation, scale, tintFor(info, r, e.color), smoke, i);
     const flat = info.mesh.max[2] * scale < FLAT;
@@ -276,23 +283,26 @@ export function placeScenery(ctx: Context): { placements: Placement[]; issues: I
     const [W, H] = layout.terrain.size;
     const [lo, hi] = Array.isArray(e.scale) ? e.scale : [0.8, 1.2];
     const circle = e.at && e.radius ? { c: e.at, radius: e.radius } : null;
-    const pts = circle
-      ? poissonDisc(r, circle.c[0] - circle.radius, circle.c[1] - circle.radius, circle.c[0] + circle.radius, circle.c[1] + circle.radius, e.spacing,
-        (x, y) => Math.hypot(x - circle.c[0], y - circle.c[1]) <= circle.radius)
-      : poissonDisc(r, 0, 0, W, H, e.spacing);
+    const area = e.area;
+    const box = circle ? { x0: circle.c[0] - circle.radius, y0: circle.c[1] - circle.radius, x1: circle.c[0] + circle.radius, y1: circle.c[1] + circle.radius }
+      : area ? bboxOf(area) : { x0: 0, y0: 0, x1: W, y1: H };
+    const inside = (x: number, y: number) => circle ? Math.hypot(x - circle.c[0], y - circle.c[1]) <= circle.radius : area ? insidePolygon(area, x, y) : true;
+    const pts = e.rows ? rowPoints(r, box, e.spacing, e.rows, inside) : poissonDisc(r, box.x0, box.y0, box.x1, box.y1, e.spacing, inside);
+    const along = e.rows ? (e.rows.angle * Math.PI) / 180 : 0;
     for (const [x, y] of pts) {
       if (scattered >= MAX_SCATTERED) break;
       // A ragged edge: thin out the outer third of a circle.
-      if (circle && r() < smoothstep(0.65, 1, Math.hypot(x - circle.c[0], y - circle.c[1]) / circle.radius) * 0.8) continue;
+      if (circle && !e.rows && r() < smoothstep(0.65, 1, Math.hypot(x - circle.c[0], y - circle.c[1]) / circle.radius) * 0.8) continue;
       const id = pick(r, ids);
       const info = objects.get(id)!;
       const scale = range(r, lo, hi);
-      const rotation = r() * 2 * Math.PI;
+      const rotation = e.rows ? along + (r() - 0.5) * 0.08 + (r() < 0.5 ? Math.PI : 0) : r() * 2 * Math.PI;
       const box = boxOf(info, x, y, rotation, scale);
       const reach = boxRadius(box) * 0.5;
       if (x < reach || y < reach || x > W - reach || y > H - reach) continue;
       const z = groundZ(terrain, x, y);
       if (layout.terrain.seaLevel !== null && z < layout.terrain.seaLevel + WATER_MARGIN) continue;
+      if (ctx.water?.at(x, y, WATER_MARGIN + reach)) continue;
       if (slopeAt(terrain, x, y) > (info.def.maxSlope * Math.PI) / 180) continue;
       const hit = nearestTrack(trackHash, box, z);
       if (hit && hit.d < SCATTER_TRACK_GAP + reach * 0.5) continue;
@@ -306,6 +316,31 @@ export function placeScenery(ctx: Context): { placements: Placement[]; issues: I
     }
   });
   return { placements: out, issues };
+}
+
+/**
+ * Items in straight rows `rows.spacing` apart running at `rows.angle`, `spacing` apart
+ * along each, a little jittered; the grid is anchored at the box's corner.
+ */
+function rowPoints(r: () => number, box: { x0: number; y0: number; x1: number; y1: number }, spacing: number,
+  rows: { angle: number; spacing: number }, inside: (x: number, y: number) => boolean): V2[] {
+  const a = (rows.angle * Math.PI) / 180;
+  const u: V2 = [Math.cos(a), Math.sin(a)];
+  const v: V2 = [-u[1], u[0]];
+  const cx = (box.x0 + box.x1) / 2;
+  const cy = (box.y0 + box.y1) / 2;
+  const R = Math.hypot(box.x1 - box.x0, box.y1 - box.y0) / 2;
+  const out: V2[] = [];
+  for (let j = -Math.ceil(R / rows.spacing); j <= Math.ceil(R / rows.spacing); j++) {
+    for (let i = -Math.ceil(R / spacing); i <= Math.ceil(R / spacing); i++) {
+      const s = i * spacing + (r() - 0.5) * spacing * 0.15;
+      const t = j * rows.spacing + (r() - 0.5) * rows.spacing * 0.08;
+      const x = cx + u[0] * s + v[0] * t;
+      const y = cy + u[1] * s + v[1] * t;
+      if (x >= box.x0 && x <= box.x1 && y >= box.y0 && y <= box.y1 && inside(x, y)) out.push([x, y]);
+    }
+  }
+  return out;
 }
 
 /** Rotation for `face`: toward the nearest track, road or a point; undefined to use `rotation`. */

@@ -91,8 +91,8 @@ export type Entrance = {
   entry: P3;                           // where people step on to the platform
   entryS: number;                      // its s along the track
   side: 1 | -1;                        // the platform's side of the track (left/right of increasing s)
-  via: "path" | "building" | "direct";
-  door: P3 | null;                     // the station building's door (via building)
+  via: "path" | "building" | "direct" | "underpass";
+  door: P3 | null;                     // the station building's door (via building), or where the underpass begins (via underpass)
   access: Attach;                      // from the entry (or door) to the walkways
 };
 
@@ -252,6 +252,7 @@ export function buildTown(ctx: Ctx): { town: Town; issues: Issue[] } {
     }
     stations.push({ station: st.id, name: st.name, track: st.track, building: building?.id ?? -1, entrances });
   }
+  shareGroups(ctx, stations);
 
   // --- bus stops: the walkway beside each, and room for its shelter -----------------------
   const stops: StopAccess[] = ctx.buses.sides.map((side) => ({
@@ -293,6 +294,40 @@ export function buildTown(ctx: Ctx): { town: Town; issues: Issue[] } {
 }
 
 const titleCase = (id: string) => id.split("-").map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w)).join(" ");
+
+/**
+ * Stations in one group are platforms of one station: each gets the others' ways in as
+ * its own, through the underpass (people go down where the other platform's way in
+ * meets the walkways, or at its building's door, and come up on this platform).
+ */
+function shareGroups(ctx: Ctx, stations: StationAccess[]): void {
+  const groups = new Map<string, StationAccess[]>();
+  for (const sa of stations) {
+    const g = ctx.layout.stations.find((x) => x.id === sa.station)!.group;
+    if (g) (groups.get(g) ?? groups.set(g, []).get(g)!).push(sa);
+  }
+  for (const members of groups.values()) {
+    const own = members.map((m) => m.entrances.filter((e) => e.via !== "underpass"));
+    members.forEach((m, k) => {
+      const spec = ctx.layout.stations.find((x) => x.id === m.station)!;
+      const t = ctx.tracks.get(spec.track)!;
+      const sides: Array<1 | -1> = spec.side === "both" ? [1, -1] : [spec.side === "left" ? 1 : -1];
+      own.forEach((list, j) => {
+        if (j === k) return;
+        for (const e of list) {
+          const mouth = e.via === "building" ? e.door! : e.entry;
+          const s = nearestS(t, mouth, spec.at, spec.length - 12);
+          const at = sides.map((sd) => ({ sd, p: platformPoint(ctx, m.station, s, 0.5, sd) }))
+            .reduce((a, b) => (Math.hypot(a.p[0] - mouth[0], a.p[1] - mouth[1]) <= Math.hypot(b.p[0] - mouth[0], b.p[1] - mouth[1]) ? a : b));
+          m.entrances.push({
+            entry: at.p, entryS: s, side: at.sd, via: "underpass", door: mouth,
+            access: e.via === "building" ? e.access : { ...e.access, link: [e.entry, ...e.access.link.slice(1)] },
+          });
+        }
+      });
+    });
+  }
+}
 
 /** s of the track point nearest p, within a station's platform. */
 function nearestS(t: TrackGeom, p: P3, at: number, length: number): number {

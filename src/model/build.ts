@@ -15,9 +15,10 @@ import { type Town, buildTown } from "./town";
 import { type BusNet, buildBusStops, buildBusLines, emptyBusNet } from "./buses";
 import { type OffLayout, findExits, buildOffLayout } from "./exits";
 import { type FreightNet, buildFreight, emptyFreightNet } from "./freight";
+import { type WaterNet, buildWater, crossingFloor, crossingSurface, checkCrossings } from "./water";
 import {
-  type Issue, type Report, type TrackPoint, error, makeReport, zodIssues, checkReferences, checkJunctionPosition,
-  checkBounds, checkConflicts, checkStations, checkServices,
+  type Issue, type Report, type TrackPoint, type Diamond, error, makeReport, zodIssues, checkReferences, checkJunctionPosition,
+  checkBounds, checkConflicts, checkStations, checkServices, checkStabled,
 } from "./validate";
 import { pointAt, sampleS } from "./geometry";
 import { TRAIN_CATALOG, isTrainType, trainLength } from "./catalog";
@@ -34,10 +35,12 @@ export type World = {
   tracks: Map<string, TrackGeom>;
   order: string[];                    // dependency order, parents first
   junctions: Junction[];
+  diamonds: Diamond[];                // tracks crossing each other at grade
   graph: Graph;
   profiles: Map<string, Profile>;
   spans: Map<string, Span[]>;
   terrain: Terrain;
+  water: WaterNet;                    // rivers, streams, lakes and ponds (carved into the terrain)
   points: TrackPoint[];
   pointHash: SpatialHash<TrackPoint>;
   stations: StationGeom[];
@@ -71,6 +74,9 @@ export function buildWorld(json: unknown): { world: World | null; report: Report
 
   // Geometry and heights, parents first. A branch of a failed parent is skipped.
   const terrain = buildTerrain(layout);
+  const watered = buildWater(layout, terrain);
+  issues.push(...watered.issues);
+  const water = watered.net;
   const base = (x: number, y: number) => baseZ(terrain, x, y);
   const tracks = new Map<string, TrackGeom>();
   const profiles = new Map<string, Profile>();
@@ -92,10 +98,10 @@ export function buildWorld(json: unknown): { world: World | null; report: Report
       s: k === 0 && spec.from ? 0 : t.path.length,
       z: profileZ(profiles.get(e.track)!, e.at),
     }));
-    const { profile, issues: gradeIssues } = buildProfile(t, base, pins);
+    const { profile, issues: gradeIssues } = buildProfile(t, base, pins, { floor: crossingFloor(water) });
     for (const g of gradeIssues) issues.push(error("GRADE_EXCEEDED", g.message, `tracks[${index}]`, pointAt(t.path, g.s0)));
     profiles.set(id, profile);
-    spans.set(id, classify(t, profile, base));
+    spans.set(id, classify(t, profile, base, crossingSurface(water)));
   }
 
   // Dense points for bounds, conflicts, shaping and queries.
@@ -118,7 +124,7 @@ export function buildWorld(json: unknown): { world: World | null; report: Report
   const planned = layout.parking.length ? planLots(layout, roadGeometry(layout.roads)) : { lots: [], specs: [], issues: [] };
   issues.push(...planned.issues);
   const roadLayout = planned.specs.length ? { ...layout, roads: [...layout.roads, ...planned.specs] } : layout;
-  const built = buildRoads({ layout: roadLayout, tracks, trackProfiles: profiles, trackSpans: spans, junctions, terrain });
+  const built = buildRoads({ layout: roadLayout, tracks, trackProfiles: profiles, trackSpans: spans, junctions, terrain, water });
   issues.push(...built.issues.map((i) => lotIssue(i, layout, planned.lots)));
   const roads = built.net ?? emptyRoadNet();
   if (built.net && planned.lots.length) {
@@ -129,7 +135,7 @@ export function buildWorld(json: unknown): { world: World | null; report: Report
   const objects = objectCatalog(layout.objects, layout.style.season);
   const entries = stationEntries(layout, tracks, profiles, objects);
   const walked = built.net
-    ? buildWalks({ layout, stationEntries: entries, tracks, trackProfiles: profiles, trackSpans: spans, junctions, terrain, roads })
+    ? buildWalks({ layout, stationEntries: entries, tracks, trackProfiles: profiles, trackSpans: spans, junctions, terrain, roads, water })
     : null;
   if (walked) issues.push(...walked.issues);
   const walks = walked?.net ?? emptyWalkNet();
@@ -176,7 +182,24 @@ export function buildWorld(json: unknown): { world: World | null; report: Report
   const roadBed = shapeCorridor(terrain, roadShape, bed);
   for (let v = 0; v < bed.length; v++) roadBed[v] |= bed[v];
   shapeCorridor(terrain, walks.points.filter((p) => p.kind === "path").map((p) => ({ x: p.x, y: p.y, z: p.z, ground: p.ground, flat: p.width / 2 + (p.mouth ? 2 : 0.6), depth: PATH_BED })), roadBed);
-  issues.push(...checkConflicts(tracks, junctions, points));
+  const conflicts = checkConflicts(tracks, junctions, points);
+  issues.push(...conflicts.issues);
+  const diamonds = conflicts.diamonds;
+  if (water.bodies.length) {
+    const group = <T>(list: T[], key: (x: T) => string | null) => {
+      const m = new Map<string, T[]>();
+      for (const x of list) { const k = key(x); if (k !== null) (m.get(k) ?? m.set(k, []).get(k)!).push(x); }
+      return m;
+    };
+    const byTrack = group(points, (p) => p.track);
+    const byRoad = group(roads.points, (p) => p.road);
+    const byPath = group(walks.points, (p) => (p.kind === "path" ? p.owner : null));
+    issues.push(...checkCrossings(water, [
+      ...[...tracks.values()].map((t) => ({ noun: "track", id: t.id, path: `tracks[${t.index}]`, points: byTrack.get(t.id) ?? [] })),
+      ...layout.roads.map((r, i) => ({ noun: "road", id: r.id, path: `roads[${i}]`, points: byRoad.get(r.id) ?? [] })),
+      ...layout.paths.map((p, i) => ({ noun: "path", id: p.id, path: `paths[${i}]`, points: byPath.get(p.id) ?? [] })),
+    ]));
+  }
   issues.push(...checkStations(layout, tracks, spans));
 
   const stationById = new Map(layout.stations.map((s) => [s.id, s]));
@@ -188,9 +211,10 @@ export function buildWorld(json: unknown): { world: World | null; report: Report
     if (res.route) routes.set(svc.id, res.route);
   });
   issues.push(...checkServices(layout, routes));
+  issues.push(...checkStabled(layout, tracks, routes));
 
   const stations = buildStations(layout);
-  const placed = placeScenery({ layout, tracks, profiles, terrain, trackHash: pointHash, roadHash: roads.hash, walkHash: walks.hash, stations, objects });
+  const placed = placeScenery({ layout, tracks, profiles, terrain, water, trackHash: pointHash, roadHash: roads.hash, walkHash: walks.hash, stations, objects });
   issues.push(...placed.issues);
   if (hasErrors(issues)) return { world: null, report: makeReport(issues) };
   const town = buildTown({
@@ -207,7 +231,7 @@ export function buildWorld(json: unknown): { world: World | null; report: Report
     : { net: emptyFreightNet(), issues: [] };
   issues.push(...freighted.issues);
   const world: World = {
-    layout, tracks, order, junctions, graph, profiles, spans, terrain, points, pointHash, stations, routes, objects,
+    layout, tracks, order, junctions, diamonds, graph, profiles, spans, terrain, water, points, pointHash, stations, routes, objects,
     scenery: placed.placements, roads, walks, town: town.town, buses, offLayout, freight: freighted.net, stats: {},
   };
   world.stats = computeStats(world);
@@ -248,7 +272,7 @@ function computeStats(w: World): Record<string, number> {
     + w.roads.signals.reduce((a, s) => a + s.heads.length, 0) * 80;
   const r1 = (x: number) => Math.round(x);
   return {
-    trackLength: r1(trackLength), tracks: w.tracks.size, junctions: w.junctions.length,
+    trackLength: r1(trackLength), tracks: w.tracks.size, junctions: w.junctions.length, diamonds: w.diamonds.length,
     bridgeLength: r1(bridgeLength), tunnelLength: r1(tunnelLength), stations: w.stations.length,
     services: w.layout.services.length, trains, roadLength: r1(roadLength), roads: w.roads.roads.size,
     levelCrossings: w.roads.crossings.length, trafficLights: w.roads.signals.length,
@@ -259,7 +283,7 @@ function computeStats(w: World): Record<string, number> {
     exits: w.offLayout.exits.length, offLayoutPlaces: w.offLayout.places.length,
     freightYards: w.freight.yards.length, freightSites: w.freight.sites.filter((s) => s.kind !== "yard").length,
     deliveryVehicles: w.freight.fleet.reduce((a, f) => a + f.count, 0),
-    objects: w.scenery.length, trees, triangles,
+    objects: w.scenery.length, trees, triangles, waters: w.water.bodies.length, stabled: w.layout.stabled.length,
   };
 }
 

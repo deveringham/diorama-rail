@@ -14,6 +14,7 @@ import type { TrackGeom, Junction } from "./trackGraph";
 import { type Path, makePath, filletPolyline, pointAt, headingAt, sampleS } from "./geometry";
 import { type Profile, type Span, type Pin, buildProfile, classify, profileZ, structureAt, tunnelMouths, MOUTH } from "./heights";
 import { type Terrain, baseZ } from "./terrain";
+import { type WaterNet, crossingFloor, crossingSurface } from "./water";
 import {
   type RoadNet, type RoadGeom, type LevelCrossing, polyline, intersections, crossAngle, endAt, sidewalkWidth, roadReach, junctionStop,
   kerbOffset, legCorner, sortedLegs, SHALLOWEST_CROSSING,
@@ -106,6 +107,7 @@ type Ctx = {
   junctions: Junction[];
   terrain: Terrain;
   roads: RoadNet;
+  water?: WaterNet;
 };
 
 export type P3 = [number, number, number];
@@ -339,11 +341,11 @@ export function buildWalks(ctx: Ctx): { net: WalkNet | null; issues: Issue[] } {
       if (Number.isNaN(mine) || rank.get(other)! > rank.get(id)!) continue;
       flat(mine, paths.get(other)!.spec.width / 2, profileZ(profiles.get(other)!, otherS));
     }
-    const { profile, issues: grade } = buildProfile(p, dry, pins, { window: PATH_SMOOTH, noun: "path", follow: true });
+    const { profile, issues: grade } = buildProfile(p, dry, pins, { window: PATH_SMOOTH, noun: "path", follow: true, floor: crossingFloor(ctx.water) });
     for (const g of grade) issues.push(error("GRADE_EXCEEDED", g.message, `paths[${p.index}]`, pointAt(p.path, g.s0)));
     profiles.set(id, profile);
     // Over the sea a path stands on piles: a pier.
-    spans.set(id, classify(p, profile, sea === null ? base : (x, y) => (base(x, y) < sea ? -Infinity : base(x, y))));
+    spans.set(id, classify(p, profile, sea === null ? base : (x, y) => (base(x, y) < sea ? -Infinity : base(x, y)), crossingSurface(ctx.water)));
   }
   for (const x of separated) {
     const z = profileZ(profiles.get(x.path)!, x.s);
