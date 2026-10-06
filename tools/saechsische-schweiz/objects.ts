@@ -1,9 +1,14 @@
 // Custom scenery objects for the Sächsische Schweiz layout.
 import { moreObjects } from "./objects2";
+import { fortressWalls } from "./fortress";
 
 export function objects(): Record<string, unknown> {
+  const more = moreObjects();
   return {
-    ...moreObjects(),
+    ...more,
+    ...fortressWalls().objects,
+    // The garrison church on the fortress: the village church's shape, without a congregation to walk up.
+    "festung-kirche": { ...more["dorfkirche"], description: "The fortress's garrison church: a white nave and a west tower with a slate bell-cap", building: undefined },
     "bahnhof-gross": {
       description: "Main-line station building: two storeys of sandstone, a hipped slate roof, a clock gable over the entrance; door at the back",
       tint: ["#e6d7b8", "#dccaa6", "#e9dcc4"],
@@ -41,6 +46,7 @@ export function objects(): Record<string, unknown> {
       description: "Tram stop shelter: a little timber hut open toward the platform, a bench inside, a shingled roof",
       tint: ["#8a6a48", "#7d5e3f", "#94724e"],
       parts: [
+        { shape: "box", at: [0, 0, -2.6], size: [2.6, 5.2, 2.6], color: "stone" },
         { shape: "box", at: [-1.1, 0, -0.5], size: [0.2, 5, 2.9] },
         { shape: "box", at: [0, -2.4, -0.5], size: [2.4, 0.2, 2.9], grid: [1, 2, 1], step: [0, 4.8, 0] },
         { shape: "gable", at: [0, 0, 2.4], size: [3.2, 5.8, 1.1], rotate: [0, 0, 90], color: "roof-dark", winter: "snow" },

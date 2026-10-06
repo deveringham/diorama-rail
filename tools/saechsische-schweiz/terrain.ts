@@ -1,6 +1,8 @@
 // Terrain and water of the Sächsische Schweiz layout.
 import type { V2 } from "./lib";
 import { W, H, meander } from "./lib";
+import { FORT, FORT_LEVEL } from "./fortress";
+import { QUARRY, QUARRY_LEVEL, QUARRY_POND, SAWMILL_YARD, FORSTHAUS_PLOT, RESERVOIR_VALLEY, RESERVOIR, RESERVOIR_LEVEL, DAM_SHOULDERS, BASTEI_BRIDGE } from "./sites";
 
 /** The Elbe, west → east as drawn (it flows east → west). */
 export const ELBE: V2[] = [[0, 1100], [260, 1105], [520, 1125], [760, 1165], [960, 1215], [1110, 1262], [1390, 1292], [1500, 1210],
@@ -52,7 +54,8 @@ export function terrain() {
   const mesa = (at: V2, radius: number, height: number, plateau = 0.5, cliff = 0.75, rough = 0.5) =>
     f({ at, radius, height, shape: "mesa", plateau, cliff, rough });
   mesa([1790, 1010], 175, 70, 0.5, 0.75, 0.5);     // Lilienstein, in the Elbe's loop
-  mesa([1330, 925], 135, 60, 0.6, 0.85, 0.3);      // Königstein, the fortress rock
+  // Königstein, the fortress rock: its plateau the fortress's outline, raised to one level, sheer all round.
+  f({ area: FORT, radius: 48, level: FORT_LEVEL, direction: "up", shape: "mesa", cliff: 0.85, rough: 0.08 });
   mesa([560, 450], 120, 38, 0.5, 0.8, 0.6);        // Pfaffenstein
   mesa([1560, 180], 100, 30, 0.5, 0.75, 0.6);      // Gohrisch
   mesa([2100, 330], 110, 34, 0.5, 0.8, 0.5);       // Papststein
@@ -62,6 +65,8 @@ export function terrain() {
   for (const [at, r, h] of [[[880, 1400], 70, 22], [[975, 1385], 60, 27], [[1070, 1420], 62, 20], [[940, 1470], 80, 14], [[1150, 1450], 50, 16]] as Array<[V2, number, number]>) {
     mesa(at, r, h, 0.4, 0.9, 0.85);
   }
+  // The bridge's landings: the higher rock at its east end cut down to the deck, the same level as the west end.
+  f({ at: [BASTEI_BRIDGE.at[0] + 44, BASTEI_BRIDGE.at[1]], radius: 16, level: BASTEI_BRIDGE.deck, direction: "down", shape: "mesa", plateau: 0.55, cliff: 0.8 });
   // The Schrammsteine: a ragged ridge between the Elbe and the Kirnitzsch east of Bad Schandau.
   f({ points: [[2800, 1385], [2900, 1440], [2980, 1470], [3060, 1495]], radius: 65, height: 30, shape: "mesa", plateau: 0.3, cliff: 0.85, rough: 0.85 });
   // Rolling hills on the plateaus, and the Großer Winterberg at the back.
@@ -78,7 +83,14 @@ export function terrain() {
   mesa([1492, 1856], 38, 11, 0.55, 0.85, 0.5);
   // Level yards dug into the slopes: the colliery's sidings and the sawmill's timber yard.
   f({ area: [[975, 600], [1035, 600], [1060, 640], [1108, 660], [1110, 830], [995, 820], [985, 700]], radius: 20, level: 13.6, direction: "down", shape: "mesa", plateau: 0.5, cliff: 0.6 });
-  f({ area: [[1240, 240], [1470, 240], [1470, 385], [1240, 385]], radius: 30, level: 31, direction: "down", shape: "mesa", plateau: 0.5, cliff: 0.5 });
+  f({ area: SAWMILL_YARD, radius: 30, level: 31, direction: "down", shape: "mesa", plateau: 0.5, cliff: 0.5 });
+  f({ area: FORSTHAUS_PLOT, radius: 16, level: 31.2, direction: "down", shape: "mesa", cliff: 0.4 });
+  // The sandstone quarry: a pit with sheer faces, worked back into the plateau from the valley side.
+  f({ area: QUARRY, radius: 26, level: QUARRY_LEVEL, direction: "down", shape: "mesa", cliff: 0.9, rough: 0.3 });
+  // The Gottleuba's upper valley, drowned behind the dam, and its course below the dam down to the gorge;
+  // the ground raised either side of the dam first, so the valley is cut deep there and the dam's ends run into its sides.
+  f({ points: DAM_SHOULDERS, radius: 70, level: 38, direction: "up", shape: "bump" });
+  f({ points: RESERVOIR_VALLEY, radius: 60, shape: "mesa", plateau: 0.35, cliff: 0.35, rough: 0.4, direction: "down" });
   // Slopes graded for the roads: inclined planes under the hairpin climbs, shelves cut into valley sides.
   const ramp = (points: Array<[number, number, number]>, radius: number, plateau = 0.75, cliff = 0.3) =>
     f({ points, radius, shape: "mesa", plateau, cliff, rough: 0 });
@@ -113,7 +125,7 @@ export function waters() {
   let seed = 40;
   const stream = (id: string, name: string, points: Array<V2 | { at: V2; z?: number; width?: number }>, width = 6, extra: Record<string, unknown> = {}) =>
     water.push({ id, kind: "stream", name, width, points: points.every(Array.isArray) ? meander(points as V2[], width * 1.6, 70 + width * 6, seed++) : points, ...extra });
-  stream("gottleuba", "Gottleuba", [[705, 322], [800, 372], [868, 432], [943, 620], [983, 820], [988, 1010], [1022, 1090], [1040, 1160], [1048, 1245]], 7);
+  stream("gottleuba", "Gottleuba", [[708, 330], [713, 352], [775, 392], [850, 428], [905, 480], [943, 620], [983, 820], [988, 1010], [1022, 1090], [1040, 1160], [1048, 1245]], 7);
   stream("wesenitz", "Wesenitz", [[600, 2200], [622, 1900], [645, 1700], [664, 1500], [688, 1350], [708, 1165]], 6);
   stream("biela", "Biela", [[1060, 0], [1085, 300], [1115, 600], [1155, 860], [1180, 1080], [1190, 1240]], 6);
   stream("amselgrundbach", "Amselgrundbach", [[1235, 2200], [1195, 1950], [1160, 1790], [1120, 1650], [1085, 1530]], 4);
@@ -126,8 +138,8 @@ export function waters() {
   const lake = (id: string, kind: "lake" | "pond", name: string, points: V2[], extra: Record<string, unknown> = {}) =>
     water.push({ id, kind, name, points, ...extra });
   lake("amselsee", "lake", "Amselsee", [[1040, 1440], [1078, 1448], [1100, 1488], [1092, 1528], [1062, 1512], [1046, 1478]], { depth: 2.5 });
-  lake("gottleuba-talsperre", "lake", "Talsperre Gottleuba", [[600, 110], [700, 80], [770, 150], [745, 250], [690, 320], [620, 270], [585, 190]], { level: 27, depth: 6 });
-  lake("steinbruchsee", "lake", "Steinbruchsee", [[1300, 520], [1345, 505], [1380, 540], [1360, 585], [1310, 590], [1285, 555]], { depth: 8 });
+  lake("gottleuba-talsperre", "lake", "Talsperre Gottleuba", RESERVOIR, { level: RESERVOIR_LEVEL, depth: 6 });
+  lake("steinbruchsee", "lake", "Steinbruchsee", QUARRY_POND, { level: QUARRY_LEVEL - 0.6, depth: 5 });
   lake("waldbad", "lake", "Waldbad Gohrisch", [[1700, 215], [1780, 195], [1835, 235], [1825, 295], [1760, 315], [1705, 280]], { depth: 3 });
   lake("dorfteich-lohmen", "pond", "Dorfteich Lohmen", [[505, 1690], [532, 1688], [540, 1708], [518, 1720], [500, 1708]]);
   lake("dorfteich-papstdorf", "pond", "Dorfteich Papstdorf", [[2238, 515], [2262, 512], [2268, 534], [2246, 542], [2232, 530]]);

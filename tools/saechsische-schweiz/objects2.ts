@@ -129,7 +129,7 @@ export function moreObjects(): Record<string, O> {
       tint: PLASTER, smoke: 0.5,
       building: { functions: ["workplace", "landmark"], jobs: 4, titles: ["Landlord", "Cook", "Waitress", "Waiter"], kind: "Inn", demands: { food: 2, drinks: 3, mail: 0.4 } },
       parts: [
-        { shape: "box", at: [0, 0, -3], size: [10, 18, 9] },
+        { shape: "box", at: [0, 0, -5], size: [10, 18, 11] },
         { shape: "panel", at: [5.03, -8.9, 2.9], size: [0.06, 0.2, 3.1], color: "timber", grid: [1, 9, 1], step: [0, 2.22, 0], mirror: "x" },
         { shape: "panel", at: [5.03, 0, 2.8], size: [0.06, 18, 0.2], color: "timber", grid: [1, 1, 2], step: [0, 0, 3.0], mirror: "x" },
         { shape: "gable", at: [0, 0, 6], size: [18.8, 10.8, 5.2], rotate: [0, 0, 90], color: "roof", winter: "snow" },
@@ -252,20 +252,12 @@ export function moreObjects(): Record<string, O> {
       description: "Fortress round tower or bastion pavilion with a slate cap (Friedrichsburg)",
       tint: SANDSTONE,
       parts: [
-        { shape: "cylinder", at: [0, 0, -4], size: [12, 12, 15], sides: 12 },
+        { shape: "cylinder", at: [0, 0, -20], size: [12, 12, 31], sides: 12 },
         { shape: "cylinder", at: [0, 0, 11], size: [12.6, 12.6, 0.8], sides: 12, color: "#a8946c" },
         { shape: "cone", at: [0, 0, 11.8], size: [12.4, 12.4, 7], sides: 12, color: "roof-slate", winter: "snow" },
         { shape: "cylinder", at: [0, 0, 18.4], size: [1.6, 1.6, 2.4], sides: 8, color: "#e8dcc0" },
         { shape: "cone", at: [0, 0, 20.8], size: [2, 2, 2.6], sides: 8, color: "roof-slate" },
         { shape: "panel", at: [6.03, 0, 3], size: [0.1, 1.4, 2.2], color: "window", grid: [1, 1, 2], step: [0, 0, 3.6] },
-      ],
-    },
-    "festungsmauer": {
-      description: "20 m of fortress rampart: a sandstone wall with a parapet, built on the cliff edge; runs along y",
-      tint: SANDSTONE, maxSlope: 60,
-      parts: [
-        { shape: "box", at: [0, 0, -8], size: [3.4, 20.2, 15], taper: [0.75, 1] },
-        { shape: "box", at: [0.9, -9.4, 7], size: [1.2, 1.4, 1.2], grid: [1, 8, 1], step: [0, 2.7, 0], color: "#a8946c" },
       ],
     },
     "burg": {
@@ -287,9 +279,10 @@ export function moreObjects(): Record<string, O> {
       ],
     },
     "felsturm": {
-      description: "Sandstone rock tower (a climbing summit): stacked, weathered blocks rising from the forest",
-      tint: ["#c4ad86", "#b9a27a", "#cbb892", "#a99472"], maxSlope: 75,
+      description: "Sandstone rock tower (a climbing summit): stacked, weathered blocks rising from the forest, its foot buried deep enough to stand on a cliff",
+      tint: ["#c4ad86", "#b9a27a", "#cbb892", "#a99472"], maxSlope: 65,
       parts: [
+        { shape: "box", at: [0, 0, -28], size: [12, 10, 23] },
         { shape: "box", at: [0, 0, -6], size: [12, 10, 14], taper: [0.85, 0.8] },
         { shape: "box", at: [0.6, -0.4, 7.6], size: [9.4, 7.6, 8], rotate: [0, 0, 8], taper: [0.88, 0.9] },
         { shape: "box", at: [-0.2, 0.3, 15.4], size: [8, 6.4, 7], rotate: [0, 0, -6], taper: [0.8, 0.85] },
@@ -299,9 +292,10 @@ export function moreObjects(): Record<string, O> {
       ],
     },
     "felsriff": {
-      description: "Sandstone rock wall: a long weathered ridge of blocks, 30 m long along y",
-      tint: ["#c4ad86", "#b9a27a", "#cbb892"], maxSlope: 75,
+      description: "Sandstone rock wall: a long weathered ridge of blocks, 30 m long along y, its foot buried deep enough to stand on a cliff",
+      tint: ["#c4ad86", "#b9a27a", "#cbb892"], maxSlope: 55,
       parts: [
+        { shape: "box", at: [0, 0, -28], size: [9, 30, 23] },
         { shape: "box", at: [0, 0, -6], size: [9, 30, 13], taper: [0.8, 0.95] },
         { shape: "box", at: [0, -8, 7], size: [6, 10, 6], rotate: [0, 0, 6], taper: [0.8, 0.8] },
         { shape: "box", at: [0.5, 6, 7], size: [6.4, 12, 9], rotate: [0, 0, -5], taper: [0.75, 0.8] },
@@ -315,8 +309,8 @@ export function moreObjects(): Record<string, O> {
         { shape: "box", at: [0, -33, -20], size: [6, 4, 35], grid: [1, 7, 1], step: [0, 11, 0], taper: [0.8, 0.8] },
         { shape: "box", at: [0, 0, 15], size: [5, 78, 2.2] },
         { shape: "box", at: [2.3, 0, 17.2], size: [0.4, 78, 1.0], mirror: "x", color: "#a99472" },
-        { shape: "box", at: [0, -38, -20], size: [14, 12, 40], taper: [0.7, 0.75], color: "#bfa77c" },
-        { shape: "box", at: [0, 38, -20], size: [12, 12, 40], taper: [0.7, 0.75], color: "#bfa77c" },
+        { shape: "box", at: [0, -38, -25], size: [14, 12, 40], taper: [0.7, 0.75], color: "#bfa77c" },
+        { shape: "box", at: [0, 38, -25], size: [12, 12, 40], taper: [0.7, 0.75], color: "#bfa77c" },
       ],
     },
     "obelisk": {
@@ -344,6 +338,7 @@ export function moreObjects(): Record<string, O> {
       description: "Hikers' shelter: an open log hut with a bench, by the path",
       tint: ["#7a5a3e", "#6e5240"],
       parts: [
+        { shape: "box", at: [0, 0, -2.4], size: [3.2, 4.2, 2.5], color: "stone" },
         { shape: "box", at: [-1.4, 0, 0], size: [0.3, 4, 2.2] },
         { shape: "box", at: [0, 1.85, 0], size: [3.1, 0.3, 2.2], mirror: "y" },
         { shape: "gable", at: [0, 0, 2.2], size: [4.6, 4.0, 1.4], rotate: [0, 0, 90], color: "roof-dark", winter: "snow" },
@@ -428,8 +423,22 @@ export function moreObjects(): Record<string, O> {
       description: "Colliery spoil tip: a tall cone of dark grey waste rock, 40 m across",
       tint: ["#4a4642", "#55504a"], maxSlope: 40,
       parts: [
-        { shape: "cone", at: [0, 0, -2], size: [40, 36, 22], sides: 10 },
+        { shape: "cone", at: [0, 0, -12], size: [48, 44, 32], sides: 10 },
         { shape: "box", at: [-12, 0, 0], size: [26, 1.2, 1.2], rotate: [0, -38, 0], color: "dark" },
+      ],
+    },
+    "staumauer": {
+      description: "Dam of the Gottleuba reservoir: a 100 m masonry gravity wall along y, battered on both faces, its crest walk 5 m above the base point; downstream is +x, the valve tower stands in the water on the -x side",
+      tint: ["#b8ac94", "#aea38c"], maxSlope: 80,
+      parts: [
+        { shape: "box", at: [0, 0, -10], size: [11, 100, 15], taper: [0.5, 1] },
+        { shape: "box", at: [0, 0, 5], size: [6, 100, 0.4], color: "#9a958c" },
+        { shape: "box", at: [2.85, 0, 5.4], size: [0.3, 100, 1.0], color: "#a8a08c", mirror: "x" },
+        { shape: "box", at: [0, -30, 5.4], size: [4, 5, 3] },
+        { shape: "gable", at: [0, -30, 8.4], size: [5.6, 4.6, 1.6], color: "roof-slate", winter: "snow" },
+        { shape: "box", at: [-8, 22, -10], size: [5, 5, 18] },
+        { shape: "pyramid", at: [-8, 22, 8], size: [6, 6, 3], color: "roof-slate", winter: "snow" },
+        { shape: "box", at: [-4.1, 22, 5], size: [2.8, 1.4, 0.3], color: "#9a958c" },
       ],
     },
     "baumstumpf": {
@@ -459,6 +468,7 @@ export function moreObjects(): Record<string, O> {
       description: "Pile of logs (Polter) waiting at the sawmill or a forest road, 9 m logs lying along y",
       tint: ["#9b7651", "#8a6a48", "#a5825c"],
       parts: [
+        { shape: "box", at: [0, 0, -0.7], size: [4.6, 8.4, 0.7], color: "#6e5a44" },
         { shape: "cylinder", at: [-2.2, 4.5, 0.3], size: [0.62, 0.62, 9], rotate: [90, 0, 0], sides: 6, grid: [8, 1, 1], step: [0.62, 0, 0] },
         { shape: "cylinder", at: [-1.9, 4.5, 0.83], size: [0.6, 0.6, 9], rotate: [90, 0, 0], sides: 6, grid: [7, 1, 1], step: [0.62, 0, 0] },
         { shape: "cylinder", at: [-1.6, 4.5, 1.35], size: [0.58, 0.58, 9], rotate: [90, 0, 0], sides: 6, grid: [6, 1, 1], step: [0.62, 0, 0] },
@@ -593,8 +603,9 @@ export function moreObjects(): Record<string, O> {
     },
     "wohnwagen": {
       description: "Caravan with an awning, 6 m long",
-      tint: ["#f2efe8", "#e9e4d8"], maxSlope: 10,
+      tint: ["#f2efe8", "#e9e4d8"], maxSlope: 6,
       parts: [
+        { shape: "box", at: [0, 0, -0.4], size: [4.4, 1.9, 0.8], color: "dark" },
         { shape: "box", at: [0, 0, 0.35], size: [5.6, 2.3, 2.2] },
         { shape: "panel", at: [0, 1.18, 1.6], size: [0.1, 5.4, 0.25], rotate: [0, 0, 90], color: "#4f6f9a" },
         { shape: "panel", at: [1.4, 1.18, 1.1], size: [0.1, 1.2, 0.7], rotate: [0, 0, 90], color: "window", grid: [2, 1, 1], step: [-2.6, 0, 0] },

@@ -5,6 +5,8 @@ import type { V2 } from "./lib";
 import { rng, chaikin, r1, insidePoly, blob } from "./lib";
 import { type World, pointAt, headingAt, groundZ, slopeAt } from "./world";
 import type { Space, Entry } from "./place";
+import { fortressRocks } from "./fortress";
+import { QUARRY, SAWMILL_YARD } from "./sites";
 
 export const natureLog: string[] = [];
 
@@ -236,11 +238,11 @@ export function nature(sp: Space): { areas: unknown[]; scenery: Entry[] } {
   town([[1150, 1040], [1420, 1080], [1480, 1000], [1500, 1130], [1180, 1140]]);             // Königstein
   town([[2160, 1250], [2700, 1262], [2700, 1340], [2380, 1330], [2290, 1380], [2160, 1300]]);  // Bad Schandau
   town([[2330, 1010], [2650, 1050], [2660, 1100], [2340, 1080]]);                           // Bad Schandau station side
-  town([[0, 930], [520, 920], [520, 1000], [0, 1000]], "yard");                            // Pirna goods yard and depot
+  town([[0, 962], [45, 950], [70, 939], [330, 941], [380, 932], [450, 922], [520, 918], [520, 1000], [0, 1000]], "yard");  // Pirna goods yard and depot
   town([[975, 600], [1110, 640], [1112, 830], [990, 830]], "yard");                         // colliery
-  town([[1240, 240], [1470, 240], [1470, 385], [1240, 385]], "yard");                       // sawmill
+  town(SAWMILL_YARD, "yard");                                                               // sawmill
   town([[1050, 560], [1110, 540], [1130, 600], [1060, 640]], "spoil");                      // spoil tip
-  town([[1280, 490], [1400, 495], [1405, 600], [1280, 610]], "rock");                       // the quarry
+  town(QUARRY, "rock");                                                                     // the quarry floor
   // The clearing where the woodcutters work.
   const clearing = blob([1165, 145], 55, 40, 10, 7, 0.25);
   areas.push({ cover: "heath", points: clearing }); open.push(clearing);
@@ -274,7 +276,7 @@ export function nature(sp: Space): { areas: unknown[]; scenery: Entry[] } {
   areas.push({ cover: "park", points: kurpark }); open.push(kurpark);
 
   // --- Forest everywhere else.
-  const buildings = sp.entries.filter((e) => typeof e.object === "string" && !["felsturm", "festungsmauer", "obelisk", "aussichtsturm", "schutzhuette", "wegweiser"].includes(e.object as string))
+  const buildings = sp.entries.filter((e) => typeof e.object === "string" && !["felsturm", "obelisk", "aussichtsturm", "schutzhuette", "wegweiser"].includes(e.object as string) && !(e.object as string).startsWith("festungswall"))
     .map((e) => e.at as V2);
   const bgrid = new Map<string, V2[]>();
   for (const b of buildings) { const k = `${Math.floor(b[0] / 50)},${Math.floor(b[1] / 50)}`; (bgrid.get(k) ?? bgrid.set(k, []).get(k)!).push(b); }
@@ -348,6 +350,6 @@ export function nature(sp: Space): { areas: unknown[]; scenery: Entry[] } {
   rim([560, 450], 68, 9, 20, 28);
   rim([2100, 330], 62, 8, 18, 28);
   rim([1560, 180], 56, 7, 18, 26);
-  rim([1330, 930], 92, 12, 16, 36);
+  for (const at of fortressRocks(26)) rocks(at, 14, 30);
   return { areas: [...under, ...areas], scenery };
 }

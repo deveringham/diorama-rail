@@ -106,6 +106,8 @@ import { pointAt as pointOn, headingAt as headingOn } from "./world";
 
 import { groundZ } from "./world";
 import { r1 } from "./lib";
+import { fortressWalls, fortressBuildings } from "./fortress";
+import { DAM, BASTEI_BRIDGE, BASTEI_DECK_TOP } from "./sites";
 
 /** Industry, landmarks on the rocks, the farm, the depot, boats on the river. */
 export function landmarks(sp: Space): void {
@@ -136,27 +138,18 @@ export function landmarks(sp: Space): void {
   near("harvester", [1185, 115], 35, {}, 15, 4);
 
   // --- The sandstone quarry by the Steinbruchsee.
-  near("steinbruch-kran", [1395, 560], 200, {}, 15, 5);
-  near("steinbruch-kran", [1290, 610], -30, {}, 15, 5);
+  near("steinbruch-kran", [1392, 568], 200, {}, 15, 3);
+  near("steinbruch-kran", [1372, 598], -30, {}, 15, 3);
+  // --- The Gottleuba reservoir's dam.
+  fixed("staumauer", DAM.at, DAM.rotation, DAM.z, { name: "Talsperre Gottleuba" });
 
-  // --- Königstein fortress: ramparts round the rim of the rock, barracks and towers on top.
-  const fc: V2 = [1330, 930];
-  const top = gz(fc[0], fc[1]);
-  for (let k = 0; k < 28; k++) {
-    const a = (k / 28) * Math.PI * 2;
-    let r = 20;
-    while (r < 110 && gz(fc[0] + Math.cos(a) * r, fc[1] + Math.sin(a) * r) > top - 2) r += 1;
-    const R = r - 3;
-    fixed("festungsmauer", [fc[0] + Math.cos(a) * R, fc[1] + Math.sin(a) * R], (a * 180) / Math.PI, top - 1, { scale: 0.85 });
+  // --- Königstein fortress: ramparts along the rim of the rock, barracks and bastions on the flat top.
+  for (const p of [...fortressWalls().placed, ...fortressBuildings()]) {
+    fixed(p.object, p.at, p.rotation, p.z, { ...(p.name ? { name: p.name } : {}), ...(p.scale ? { scale: p.scale } : {}) });
   }
-  fixed("festung-bau", [1300, 960], 15, top, { name: "Georgenburg" });
-  fixed("festung-bau", [1345, 885], -20, top, { name: "Magdalenenburg" });
-  fixed("festung-bau", [1372, 945], 80, top, { name: "Zeughaus", scale: 0.8 });
-  fixed("festung-turm", [1388, 985], 0, top, { name: "Friedrichsburg" });
-  fixed("festung-turm", [1275, 900], 0, top, { scale: 0.7 });
 
   // --- The Bastei: the bridge between the rocks, the Berghotel at the end of the road.
-  fixed("basteibruecke", [923, 1392], -90, 49);
+  fixed("basteibruecke", BASTEI_BRIDGE.at, BASTEI_BRIDGE.rotation, BASTEI_BRIDGE.deck - BASTEI_DECK_TOP);
   near("hotel", [925, 1535], 0, { name: "Berghotel Bastei" }, 20, 4);
   // --- Burg Hohnstein on its rock.
   fixed("burg", [1492, 1856], 10, gz(1492, 1856) - 1, { name: "Burg Hohnstein" });

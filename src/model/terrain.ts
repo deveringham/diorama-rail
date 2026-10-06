@@ -13,6 +13,7 @@ const BED_DEPTH = 0.4;          // ground sits this far below the rail-level tra
 const FLAT_HALF_WIDTH = 4;      // m either side of the track that are fully flattened
 const SIDE_SLOPE = 1.5;         // horizontal metres per metre of height difference (1:1.5)
 const MAX_REACH = 40;           // m, cap on how far shaping can reach
+const MAX_CUT = 16;             // m: a cutting's side slope rises at most this high; steeper ground above stays as rock
 
 export type Terrain = {
   width: number;
@@ -212,6 +213,9 @@ export function shapeCorridor(t: Terrain, points: ShapePoint[], keep?: Uint8Arra
     const reach = flat + SIDE_SLOPE * Math.abs(from - target);
     const d = bestD[v];
     if (d >= reach) continue;
+    // Where the side slope would have to climb a cliff, leave the cliff: the cutting ends in a rock face
+    // instead of carving on to MAX_REACH and stopping there in a step (a tunnel mouth under a crag).
+    if (d > flat && from - target > MAX_CUT) continue;
     const weight = d <= flat ? 1 : 1 - (d - flat) / (reach - flat);
     t.shaped[v] = lerp(from, target, weight);
     if (d <= flat) flattened[v] = 1;

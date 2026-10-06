@@ -64,6 +64,8 @@ export function trails(w: World): PathSpec[] {
   path("kurpark-steg", [z([2680, 1398], 8.8), z([2665, 1397], 8.8)], { from: road("kirnitzschtalstrasse", [2696, 1396]), to: { station: "tram-kurpark-b" }, ...LANE, name: "Kurparksteg" });
   // The Waldbad Gohrisch and its campsite.
   path("waldbad-weg", [[1845, 300], [1855, 250], [1830, 190], [1790, 165], [1730, 160]], { from: road("saegewerkstrasse", [1805, 326]), ...LANE, surface: "gravel", name: "Am Waldbad" });
+  // The quarry lane, up from the B172 onto the quarry floor.
+  path("steinbruchweg", [[1522, 690], [1484, 662], [1450, 636], [1424, 614]], { from: road("b172-bend", [1551, 703]), ...LANE, surface: "gravel", name: "Steinbruchweg" });
   return out;
 }
 

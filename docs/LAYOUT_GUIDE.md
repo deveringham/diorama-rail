@@ -52,7 +52,10 @@ The full machine-readable schema is in [`schema.json`](schema.json)
   heights are hard constraints.
 - Where the track is more than 5 m above the original ground it becomes a
   **bridge**; more than 7 m below, a **tunnel**. Elsewhere the ground is shaped
-  into embankments and cuttings (about 1:1.5). The cutting runs 8 m on into each
+  into embankments and cuttings (about 1:1.5). A cutting's side slope climbs at
+  most 16 m: where the ground above rises higher (a crag over a tunnel mouth, a
+  mesa's cliff) the cutting ends in a rock face and the rock above is left as it
+  is, rather than carved back to a step. The cutting runs 8 m on into each
   tunnel, where a stone portal and a short box section meet the hill, so the
   mouth stays open; trees grow on the hill above the tunnel.
 
