@@ -34,7 +34,9 @@ npm run dev                      # http://localhost:5173/?layout=valley-loop
 ```
 
 Open `?layout=harbour-town` for the second example (an unknown name lists the
-available layouts and suggests the closest one). Edit a file in `layouts/` while
+available layouts and suggests the closest one), `?layout=spreeviertel` for a
+dense city and `?layout=saechsische-schweiz` for a large landscape after the Elbe
+Sandstone Mountains (below). Edit a file in `layouts/` while
 `npm run dev` is running and the page rebuilds the world in place (camera kept).
 Layout errors appear in a red panel.
 
@@ -121,6 +123,7 @@ npm run screenshot -- layouts/valley-loop.json --object all --season winter     
 npm run screenshot -- layouts/spreeviertel.json --quality low                       # a graphics preset (default high)
 npm run bench -- layouts/spreeviertel.json                  # ms per frame, draw calls, triangles at each preset
 npm run schema                                              # writes docs/schema.json
+npx tsx tools/saechsische-schweiz/generate.ts               # regenerates layouts/saechsische-schweiz.json
 npm test                                                    # vitest: geometry, validation, sim invariants
 npm run typecheck
 ```
@@ -171,7 +174,9 @@ the only place they meet three.js's y-up frame.
 ```
 
 Use it as a service's `train`. Meshes come from `shape` (`multiple-unit`,
-`loco-hauled`, `tram`, `freight`); `locoLength` sets a different first vehicle.
+`loco-hauled`, `double-deck`, `tram`, `freight`, whose wagons take their look
+from `wagon`: `open`, `hopper`, `flat`, `tank`, `box`, `container`);
+`locoLength` sets a different first vehicle.
 Run `npm run schema` so the schema description lists it.
 
 **A new building, tree or other object** — describe it as parts in the layout's
@@ -424,6 +429,40 @@ Crates on the docks (and outside buildings with goods ready to go) and heaps in
 the wagons show the goods in their colours; the inspect panel describes a van's
 job and load, a freight train's goods, a yard's dock, and what a building sends,
 needs and has on its way. `simulate` prints a freight line.
+
+### Landscapes: rock, water and ground cover
+
+![](docs/saechsische-schweiz.png)
+
+`layouts/saechsische-schweiz.json` is a 3 × 2.2 km piece of Saxon Switzerland
+between Pirna and Schmilka: the Elbe winding through its sandstone canyon round
+the Lilienstein, the fortress on the Königstein, the Bastei's rock towers, the
+Schrammsteine, villages on the plateaus with their fields in long strips, forest
+everywhere else. A four-track main line follows the river (S-Bahn, EuroCity,
+InterCity and freight side by side), a ring line climbs over the plateau and
+crosses the river twice, an industrial line serves a colliery and a sawmill, a
+tram runs up the Kirnitzsch valley, and the Malerweg footpath goes round the
+board. It is too big to write by hand, so `tools/saechsische-schweiz/` generates
+it (stage by stage, building and validating the world as it goes); change the
+script and rerun it rather than editing the JSON.
+
+What it needs from the format, and every layout can use:
+- **Terrain features** of any shape: round, along a line (ridges, valleys,
+  gorges) or filling a polygon (plateaus); added (`height`) or pulled to a level
+  (`level`, only down or only up), or ramped along a line by levels on its
+  points; smooth bumps or `mesa`s with a flat top, a cliff and talus, with
+  ragged (`rough`) outlines; a `rock` colour for cliffs.
+- **Water** (`water`): rivers and streams flowing down their valleys and lakes
+  and ponds, carved into the terrain with banks and shores, crossed by bridges
+  that must clear them; streams foam where they fall steeply.
+- **Ground cover** (`terrain.areas`): fields in stripes, vineyards, meadows,
+  forest floor, yards, towns.
+- **Scatter** over polygons and in rows (vines, orchards, tents).
+- **Stations of several platforms** (`group`), sharing their entrances through
+  an underpass, with island platforms; **diamond crossings**; **stabled trains**
+  standing in yards and depots; more train types (railcars, double-deck S-Bahn
+  and InterCity, EuroCity, coal, timber, tank, container and box freight, a
+  shunter).
 
 ### Interpretations and limitations
 - **Fixed routes.** A service follows one path through the graph. Two shuttles

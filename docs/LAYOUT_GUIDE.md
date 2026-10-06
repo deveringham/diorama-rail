@@ -57,25 +57,83 @@ The full machine-readable schema is in [`schema.json`](schema.json)
   mouth stays open; trees grow on the hill above the tunnel.
 
 ### Terrain
-- `features`: smooth bumps (`height > 0`) or basins (`height < 0`); about 5% of
-  the height remains at `radius`, so a hill's flank at 0.45·radius sits at
-  roughly half its height.
+- `features` shape the ground, one after another (later ones act on the result):
+  - **Where:** `at` (round), `points` (along a polyline — a ridge, valley or
+    gorge, `radius` its half-width) or `area` (a polygon — a plateau or basin,
+    `radius` the width of the slope beyond its rim).
+  - **How high:** `height` metres added at the top (negative: a basin or
+    valley); *or* `level`, the absolute height the ground is pulled to (a flat
+    valley floor, a terrace, a levelled yard), with `direction: "down"` to only
+    lower the ground (gorges, cuttings) or `"up"` to only raise it (plateaus);
+    *or* a level on every point of a line, `[x, y, z]`: an inclined ramp or a
+    shelf cut into a valley side, interpolated along the line — the way to give
+    a hairpin road or a steep path a slope it can climb.
+  - **Shape:** `bump` (default) is a smooth Gaussian rise; about 5% of the
+    height remains at `radius`, so a hill's flank at 0.45·radius sits at roughly
+    half its height. `mesa` is a table mountain: a flat top (`plateau`, the share
+    of the radius that is flat, or the whole `area`), a sheer cliff (`cliff`,
+    the share of the height it takes) and a talus slope easing out to the foot.
+  - `rough` (0–1) makes the outline ragged, like weathered sandstone.
+
+  A typical sandstone landscape: raise the plateaus as `area` mesas with
+  `level` + `direction: "up"`, cut the gorges into them as `points` mesas with
+  levels falling toward the river and `direction: "down"`, then add the table
+  mountains (`at`, `shape: "mesa"`) and gentle hills (`bump`).
 - `noise.amplitude` metres of gentle relief at `noise.scale` metres.
+- `rock`: the colour of bare rock on steep ground (default grey; e.g.
+  `"#b9a582"` for sandstone). Cliffs show it in bedding-plane bands.
+- `areas`: ground cover painted inside polygons — `meadow`, `pasture`, `field`,
+  `vineyard`, `orchard`, `garden`, `park`, `forest`, `heath`, `marsh`, `sand`,
+  `gravel`, `rock`, `spoil`, `yard` or `town`, each with seasonal colours
+  (`color` overrides). `rows` (degrees counter-clockwise from east) draws the
+  cover in stripes `rowWidth` m wide: furrows, crop strips, vine rows. Later
+  areas lie on top of earlier ones. Cover does not keep scattered trees out:
+  give a forest's scatter its own polygon beside the fields.
 - `seaLevel`: a water plane at this z; anything below is sea. Keep track z above
   it (use waypoint `z`) — crossing water automatically makes a bridge or causeway.
+
+### Water
+- `water[]` holds rivers and streams (`kind: "river" | "stream"`: lines that
+  flow from their first point to their last, `width` m wide — default 40 / 5)
+  and lakes and ponds (`"lake" | "pond"`: closed shores with a surface `level`,
+  by default just below the lowest ground on the shore). Courses and shores are
+  smoothed into curves; a point may be `{ at, z?, width? }` to pin the surface
+  height or change the width there.
+- Water is carved into the terrain: a bed `depth` m deep at the middle (river 3,
+  stream 0.8, lake 5, pond 1.5) with banks sloping out over `bank` m. Without
+  `z` a river's surface follows its valley down; with `z`, heights must fall
+  (or stay level) along the course (`WATER_FLOW`). Streams falling steeply foam.
+- Tracks, roads and paths over water are lifted onto bridges that clear the
+  surface by `clearance` m (river 5, stream 1.2, lake 2, pond 1). A waypoint `z`
+  can pin one lower; less than 1 m above the water is an error
+  (`WATER_CLEARANCE`, which gives the `z` needed). A river may run off the
+  board's edge.
+- A placed object in the water warns (`SCENERY_IN_WATER`) unless it has a `z`:
+  boats float with `z` at the surface height (the warning gives it).
+  Scattered items keep out of water.
+
+### Diamond crossings
+- Two tracks may cross at grade if they meet at 12° or more: a diamond
+  crossing, fouled as one block so trains on the two tracks take turns.
+  Shallower crossings are a `TRACK_CONFLICT` — separate them by 6 m in height.
 
 ## 2. Schema summary
 
 ```text
 version: 1, name, seed (int, default 1)
-terrain: { size [w,h], cell 4, baseHeight 0, seaLevel null, features [{at,radius,height}], noise {amplitude 2, scale 120} }
+terrain: { size [w,h], cell 4, baseHeight 0, seaLevel null, noise {amplitude 2, scale 120}, rock?,
+           features [{ at | points [[x,y] | [x,y,z]] | area, radius, height | level, direction "both"|"down"|"up",
+                       shape "bump"|"mesa", plateau 0.5, cliff 0.6, rough 0 }],
+           areas [{ cover, points, color?, rows?, rowWidth 10 }] }                               (§1 Terrain)
+water[]: { id, kind "river"|"stream"|"lake"|"pond", name?, points [[x,y] | {at, z?, width?}], width?, level?, depth?, bank?, clearance? }
 tracks[]: { id /^[a-z][a-z0-9-]*$/, kind "loop"|"line", points [[x,y] | {at,z?,radius?}], minRadius 40, maxGrade 0.035,
             from? {track, at, heading "forward"|"backward"}, to? {…} }      loop ≥ 3 points; line ≥ 2 (≥ 1 with from/to)
 stations[]: { id, name, kind "passenger"|"freight", track, at (s of platform centre), length 120,
               side "left"|"right"|"both" (relative to +s; a freight yard one side), road? (freight: the road along the dock),
-              building "station-building" / freight "goods-shed" (object id, or null for none) }   (freight §8)
-services[]: { id, train "regional-3"|"express-6"|"freight-4"|"freight-10"|"tram-2", color? "#rrggbb", route [track ids],
+              building "station-building" / freight "goods-shed" (object id, or null for none), group? }   (freight §8)
+services[]: { id, train (a type below), color? "#rrggbb", route [track ids],
               mode "loop"|"shuttle", stops [station or off-layout ids], dwell 25, count 1 }
+stabled[]: { track, at (s of the middle), train, cars?, loco true, color?, load?, reverse false }   trains standing for show
 roads[]: { id, kind "line"|"loop", points [[x,y] | {at,z?,radius?}], lanes 1, width 6·lanes, minRadius 10, maxGrade 0.08, speed 13,
            sidewalks "none"|"both"|"left"|"right", sidewalkWidth 2, parking "none"|"both"|"left"|"right",
            parkingStyle "parallel"|"perpendicular", name?, from? {road, at (s) | "start" | "end"}, to? {…} }   (§3, §4)
@@ -92,13 +150,33 @@ people: { count? (default: as many as the homes hold, ≤ 600), cars 0.45, vehic
 traffic: { cars? (through traffic; default ≈ 1 per 200 m of road, ≤ 30), vehicles ["car","car","van","truck"] }
 objects: { <id>: { description?, building?, parts [part…], tint "walls", smoke 0, maxSlope 30 } }   custom objects (§10)
 scenery[]: { object, at [x,y], rotation 0 | face "track"|"road"|[x,y], scale 1, z?, color?, smoke?, name?, building? }
-         | { scatter [ids], spacing, at? [x,y], radius?, scale [0.8, 1.2] }                     many, randomly
+         | { scatter [ids], spacing, at? [x,y], radius? | area? [[x,y]…], rows? {angle, spacing}, scale [0.8, 1.2] }   many
 building: { functions ["accommodation"|"workplace"|"landmark"], residents 3, jobs 3, titles ["Employee"], kind?, door? [x,y],
             supplies? { goods: loads/h }, demands? { goods: loads/h } }
 style: { season "summer"|"autumn"|"winter", timeOfDay 15, dayLengthSeconds null }
 ```
 
-Train lengths: `regional-3` 66 m, `express-6` 145 m, `freight-4` 74 m, `freight-10` 158 m, `tram-2` 28 m.
+Train types and lengths: `regional-3` 66 m, `express-6` 145 m, `freight-4` 74 m, `freight-10` 158 m,
+`tram-2` 28 m, `railcar-1` 25 m, `railcar-2` 44 m (diesel railcars), `s-bahn-dd` 99 m (a locomotive and
+double-deck coaches), `intercity-dd` 153 m, `eurocity-7` 204 m, `freight-coal` 119 m (hoppers),
+`freight-timber` 146 m (flats with stakes), `freight-tank` 145 m, `freight-container` 139 m,
+`freight-box` 154 m (vans), `shunter` 11 m.
+
+### Stations of several platforms
+- Give the platforms of one station on several tracks — both tracks of a
+  double-track line, the four of a main-line station, a passing loop's two —
+  the same `group`. They share their ways in (a path or sidewalk reaching one
+  reaches all; an underpass joins them) and people change trains between them.
+- Two platforms facing each other across the 7.4 m between parallel tracks
+  form one island platform, drawn once: give the outer track `side: "both"`
+  (with the building) and the inner one the side toward the island.
+
+### Stabled trains
+- `stabled[]` stands trains on sidings for show: a rake of wagons waiting in a
+  yard (`loco: false`, `load` heaps goods in open and hopper wagons), a
+  locomotive on shed. Put them on tracks no service runs over
+  (`STABLED_ON_ROUTE`), wholly on the track (`STABLED_RANGE`), apart
+  (`STABLED_OVERLAP`).
 
 ### Services and routes
 - `route` lists tracks in travel order; consecutive tracks must share a junction,
@@ -606,7 +684,10 @@ placed through `scenery`.
   `at` is on a platform). `face: "road"` faces the nearest road (§3).
 - **Scatter:** `scatter` lists object ids picked at random (repeat an id to make
   it more common), `spacing` is the minimum distance between items, and `at` +
-  `radius` limit it to a circle with a ragged edge. Scattered items skip water,
+  `radius` limit it to a circle with a ragged edge, or `area` to a polygon.
+  `rows: { angle, spacing }` sets the items out in straight rows `rows.spacing`
+  apart, `spacing` apart along each, facing along the rows: vines, orchards,
+  tents. Scattered items skip water,
   ground steeper than the object's `maxSlope`, the track corridor (6 m+, but not
   over a tunnel more than 9 m down), roads
   (3 m+ beyond the carriageway), paths and sidewalks (1.5 m+) and the footprints
@@ -780,7 +861,7 @@ lights the part warmly at night; `smoke: true` marks a chimney, and the object's
 | `JUNCTION_UNREACHABLE` | error | Move the branch's first (or last, for `to`) waypoint further from the junction, or flip `heading`. |
 | `JUNCTION_POSITION` | error | Put `at` inside the parent (not at a line end) and on a straight or a curve ≥ 150 m. Roads and paths: `at` within the parent (or `"start"`/`"end"`), and road junctions ≥ 25 m apart. |
 | `GRADE_EXCEEDED` | error | Lengthen the climb, change the `z` targets, or raise `maxGrade` (message gives the length needed). Also for roads and paths. |
-| `TRACK_CONFLICT` | error | Separate the tracks by ≥ 5 m in plan or ≥ 6 m in height, or join them with a junction. |
+| `TRACK_CONFLICT` | error | Separate the tracks by ≥ 5 m in plan or ≥ 6 m in height, join them with a junction, or let them cross at 12° or more (a diamond crossing). |
 | `STATION_RANGE` | error | Move `at` so `at ± length/2` lies within the track. |
 | `STATION_CURVE` | warning | Move the platform onto a straight (curves tighter than 300 m). |
 | `STATION_STRUCTURE` | warning | Move the platform off the bridge/tunnel, onto level ground. |
@@ -813,6 +894,12 @@ lights the part warmly at night; `smoke: true` marks a chimney, and the object's
 | `FREIGHT_UNREACHABLE` | warning | A building that sends goods (or needs them and is not just a home) has no road within 40 m of its door where a lorry could stop: run a road past it or turn its door toward one. |
 | `FREIGHT_UNMATCHED` | warning | Goods are sent out but needed nowhere, or needed but sent from nowhere: add a building or off-layout place with the matching `demands` or `supplies`. |
 | `EXIT_REF` | error | An off-layout place's `via` names a line that does not leave the board (end its first or last waypoint on the edge), or one that leaves at both ends without `end`. |
+| `WATER_CLEARANCE` | error | A waypoint `z` pins a track, road or path less than 1 m above water: raise it (the message gives the height for full clearance) or move the waypoint. |
+| `WATER_FLOW` | warning | A river's or stream's `z` rises along its course: water flows from the first point to the last, so make the heights fall. |
+| `SCENERY_IN_WATER` | warning | A placed object stands in water: move it onto the bank, or give it a `z` (a boat floats at the surface height given). |
+| `STABLED_RANGE` | error | A stabled train runs off its track: move `at` or give it fewer `cars`. |
+| `STABLED_ON_ROUTE` | error | A service runs over a stabled train: stable it on a siding no service uses. |
+| `STABLED_OVERLAP` | warning | Two stabled trains overlap on one track: move one along it. |
 | `DEADLOCK` | error | (`simulate` only) Trains wait on each other: add a passing loop, fewer trains, or different routes. |
 
 Every issue has `path` (JSON path such as `tracks[1].points[2]`), a one-sentence
@@ -846,8 +933,9 @@ Every issue has `path` (JSON path such as `tracks[1].points[2]`), a one-sentence
 
 ## 14. Examples
 
-Both examples are in `layouts/`. Their tracks and services are short; most of
-each file is the scenery list, one placement per line.
+The examples are in `layouts/`. In the first two the tracks and services are
+short and most of each file is the scenery list, one placement per line;
+`saechsische-schweiz` is generated by a script (below).
 
 ### `layouts/valley-loop.json`
 - Terrain: a big wooded hill (north-east, 55 m), a smaller hill (north-west) and
@@ -953,3 +1041,23 @@ each file is the scenery list, one placement per line.
 - Custom objects: `lighthouse` (stacked red and white cylinders using `grid`
   steps, a glowing `lamp` lantern) and `fishing-boat` (an upside-down tapered
   box as the hull, a cabin, a mast; tinted per boat).
+
+### `layouts/saechsische-schweiz.json`
+A 3 × 2.2 km slice of the Elbe Sandstone Mountains between Pirna and Schmilka,
+written by `tools/saechsische-schweiz/generate.ts` (`npx tsx
+tools/saechsische-schweiz/generate.ts` rewrites the file; change the script, not
+the JSON). It shows the newer parts of the format at scale:
+- Terrain: plateaus raised as `area` mesas, gorges cut into them along `points`
+  with falling levels, table mountains (`shape: "mesa"`, `rough`), sandstone
+  `rock`, ramps (`points` with levels) under every hairpin road and steep path,
+  levelled yards; `areas` paint fields in strips, vineyards, meadows, towns and
+  forest floor; the Elbe, eight streams, four lakes and five ponds in `water`.
+- Railway: a four-track corridor along the Elbe (S-Bahn pair, fast pair for
+  EuroCity, InterCity and freight), a ring line over the plateau and back over
+  the river with passing-loop stations, an industrial line to a colliery and a
+  sawmill, a yard with a ladder of sidings and an engine depot (with `stabled`
+  wagons and locomotives), a tram up a valley; stations of several platforms in
+  `group`s.
+- Roads with hairpin climbs, a Malerweg of footpaths round the board joined up
+  by village sidewalks, six bus lines, places off the board by rail and road,
+  freight between colliery, sawmill, farms, inns and the goods yard.
